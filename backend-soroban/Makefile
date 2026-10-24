@@ -16,7 +16,8 @@ build:
 	stellar contract build
 	@ls -l target/wasm32v1-none/release/*.wasm
 
-test:
+# Builds first: the cost tests register the contract from its Wasm (TESTING.md, "Costs").
+test: build
 	cargo test --workspace --locked
 
 # Informational for now; TESTING.md says when to turn on --fail-under-lines 95.

@@ -5,6 +5,9 @@
 //!
 //! A bank's candidates are its queued payments in `≺` order: urgent before normal, then
 //! by id (§4.5). v1 has no linked groups, so F5 and S16 do not arise.
+//!
+//! Where the model differs: A3's guard `phase = Open`, and its eligibility condition
+//! `v(o) = day`, do not apply, since there is no business day (ADR-0013).
 use soroban_sdk::vec;
 
 use crate::tests::support::Setup;

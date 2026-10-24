@@ -3,9 +3,16 @@
 //! replaces A18's conversion to overnight credit and is repaid as A20 is.
 //!
 //! Collateral is a value the central bank sets, after haircuts, as in A14; there is no
-//! collateral token. `Credit::ovn` holds penalty repos. Where the model differs: A18
-//! converted every repo at the close; with no close (ADR-0013), each repo converts once
-//! its own term has passed, when anyone calls `convert_overdue`.
+//! collateral token. `Credit::ovn` holds penalty repos.
+//!
+//! Where the model differs:
+//! - A12's guard `phase = Open` does not apply, since there is no business day
+//!   (ADR-0013); credit can be opened at any time.
+//! - A18 converted every repo at the close. With no close (ADR-0013), each repo converts
+//!   once its own term has passed, when anyone calls `convert_overdue` (ADR-0014).
+//! - The penalty rate is recorded on the repo but not charged: decided with the user on
+//!   2026-10-24 (status and rate only, no interest accrual). Conversion therefore mints
+//!   and burns nothing.
 use crate::tests::support::{default_config, Setup};
 use crate::*;
 
@@ -47,12 +54,14 @@ fn collateral_can_be_zero_but_not_negative() {
     c.set_collateral(s.bank(0), &100);
     c.set_collateral(s.bank(0), &0);
     assert_eq!(c.credit(s.bank(0)).coll, 0);
+    c.set_collateral(s.bank(0), &70);
     for value in [-1, i128::MIN] {
         assert_eq!(
             c.try_set_collateral(s.bank(0), &value),
             Err(Ok(Error::InvalidAmount))
         );
     }
+    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 70));
 }
 
 /// SC-A14-03. A14 under collat, S21: collateral cannot fall below the credit it backs,
@@ -138,10 +147,15 @@ fn credit_may_reach_but_not_exceed_the_collateral() {
 #[test]
 fn a_bank_with_no_collateral_gets_no_credit() {
     let s = Setup::new(1, 0);
+    let c = s.client();
     assert_eq!(
-        s.client().try_open_repo(s.bank(0), &1),
+        c.try_open_repo(s.bank(0), &1),
         Err(Ok(Error::CreditExceedsCollateral))
     );
+    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 0));
+    assert_eq!(c.balance(s.bank(0)), 0);
+    assert_eq!(s.token().balance(&s.contract), 0);
+    assert_eq!(c.repo(&0), None);
 }
 
 /// SC-A12-04. A12's guard `x > 0`: a zero or negative repo is `InvalidAmount`.
@@ -341,6 +355,10 @@ fn a_zero_or_negative_repayment_is_refused() {
             Err(Ok(Error::InvalidAmount))
         );
     }
+    assert_eq!(c.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 100));
+    assert_eq!(c.balance(s.bank(0)), 60);
+    assert_eq!(s.token().balance(&s.contract), 60);
 }
 
 /// SC-A13-08. A repo id that was never issued is `UnknownRepo`.

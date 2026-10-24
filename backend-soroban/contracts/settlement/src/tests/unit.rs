@@ -6,3 +6,4 @@ mod funding;
 mod lsm;
 mod payments;
 mod queue_management;
+mod storage;

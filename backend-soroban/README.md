@@ -32,8 +32,8 @@ Prerequisites:
 
 | Path | Contents |
 |---|---|
-| `contracts/settlement/` | The settlement contract: one contract holds the cash token and keeps every bank's balance (ADR-0004). `src/test.rs` holds its unit tests |
-| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Empty for now |
+| `contracts/settlement/` | The settlement contract: one contract holds the cash token and keeps every bank's balance (ADR-0004). `src/tests/` holds its unit and auth tests, and `tests/SCENARIOS.md` maps each scenario to them |
+| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Its rules (cover and the greatest feasible prefix) are stubs whose unit tests are red |
 | `devnet/` | `up.sh`, `smoke.sh` and `down.sh` for the local network. Containers are named `impl-*`, and stellar-cli's identities go in `.devnet/` |
 | `scripts/check-env.sh` | The pins check |
 | `.github/workflows/ci.yml` | CI, which mirrors `make lint test build`. It has not run on GitHub, because this repo is not pushed |

@@ -2,29 +2,35 @@
 
 Every behaviour the system must show, with the tests that run it (TESTING.md, "Scenario catalogue"). Scenarios are numbered by the model action they exercise (`../stellar-research/definition/rtgs-definition.md` §4.6), so a family with no rows is an action with no test.
 
-- `SC-F` is funding (deposit and withdraw), which is not a model action.
+- Deposit and withdraw are A11 (definition §5.5): a transfer between a bank's trustline holding of the cash token and its settlement balance in the contract.
+- `storage::` rows (SC-ST) are about the ledger, not the model: storage lifetime and transaction cost.
 - Test paths are relative to the `settlement` crate: `unit::…` stands for `tests::unit::…`, and `auth::…` for `tests::auth::…`.
 - `core::…` stands for `rtgs_core::tests::…`.
 
-**Status, 2026-10-24.** The tests are written, and every row's tests are red. Only `deposit` and `balance` have code, so the tests that need the new interface fail against `todo!()` stubs. The contract's behaviour is still to be implemented, test first.
+**Status, 2026-10-24.** The tests are written and red. Only `deposit` and `balance` have code: the tests that exercise only them pass (SC-A11-01, SC-A11-02, SC-A11-14, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02). Every other test fails against `todo!()` stubs, or against `deposit`'s missing checks, until it is implemented test first.
 
-## Funding
+## A11 `LiquidityTransfer`: deposit and withdraw
+
+A11's guard `phase = Open` does not apply, since there is no business day (ADR-0013).
 
 | ID | Given | When | Then | Model IDs | ADR | Test |
 |---|---|---|---|---|---|---|
-| SC-F-01 | B holds 1,000 cash tokens | B deposits 600 | B holds 400, the contract 600; `balance(B)` = 600; one `Deposited` event | S1, S4 | 0003, 0004 | `unit::funding::deposit_moves_tokens_into_the_contract_and_credits_the_bank` |
-| SC-F-02 | B holds 1,000 | B deposits 400, then 600 | balance 1,000, B holds 0 | S1 | 0004 | `unit::funding::deposit_of_exactly_the_banks_holding_succeeds_and_deposits_add_up` |
-| SC-F-03 | B holds 1,000 | B deposits 0, −1 or `i128::MIN` | `InvalidAmount`; nothing moves | S1 | 0004 | `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` |
-| SC-F-04 | B holds 1,000 | B deposits 1,001 | `TokenTransferFailed`; nothing moves | S1 | 0003 | `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` |
-| SC-F-05 | the contract holds `i128::MAX` | another bank deposits 1 | the SAC refuses: `TokenTransferFailed` | S1 | 0003 | `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` |
-| SC-F-06 | B's balance is 1,000 | B withdraws 300 | balance 700; B holds 300; one `Withdrawn` event | S1, S4 | 0004 | `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` |
-| SC-F-07 | B's balance is `i128::MAX` | B withdraws all of it | balance 0 | S1 | 0004 | `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` |
-| SC-F-08 | B's balance is 1,000 | B withdraws 1,001 | `InsufficientFunds`; nothing moves | S2 | 0011 | `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` |
-| SC-F-09 | B's balance is 1,000 | B withdraws 0, −1 or `i128::MIN` | `InvalidAmount` | S1 | 0004 | `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` |
-| SC-F-10 | B never deposited | B withdraws 1 | `InsufficientFunds` | S2 | 0004 | `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` |
-| SC-F-11 | B has 50 and queues 60, then 10 behind it | B withdraws 45 and revokes the 60 | the 10 stays queued, uncovered: nothing is reserved | S2 | 0018 | `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` |
-| SC-F-12 | any setup | deposit or withdraw with and without the bank's authorization | the bank authorizes the call (and, for deposit, the transfer); without it the call fails | S6 | 0004 | `auth::deposit_is_authorized_by_the_bank_for_itself_and_the_transfer`, `auth::deposit_without_the_banks_authorization_fails`, `auth::withdraw_is_authorized_by_the_bank_alone`, `auth::withdraw_without_the_banks_authorization_fails` |
-| SC-F-13 | a contract constructed with a config and a central bank | read them back | the same values | — | 0014, 0015 | `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` |
+| SC-A11-01 | B holds 1,000 cash tokens | B deposits 600 | B holds 400, the contract 600; `balance(B)` = 600; one `Deposited` event | A11, S1, S4 | 0003, 0004 | `unit::funding::deposit_moves_tokens_into_the_contract_and_credits_the_bank` |
+| SC-A11-02 | A and B hold 1,000 each | A deposits 400 then 600; B deposits 250 then 50 | balances 1,000 and 300; the contract holds 1,300 | A11, S1 | 0004 | `unit::funding::deposit_of_exactly_the_banks_holding_succeeds_and_deposits_add_up` |
+| SC-A11-03 | B holds 1,000 | B deposits 0, −1 or `i128::MIN` | `InvalidAmount`; nothing moves | A11, S1 | 0004 | `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` |
+| SC-A11-04 | B holds 1,000 | B deposits 1,001 | `TokenTransferFailed`; nothing moves | A11, S1 | 0003 | `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` |
+| SC-A11-05 | the contract holds `i128::MAX` | another bank deposits 1 | the SAC refuses: `TokenTransferFailed` | A11, S1 | 0003 | `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` |
+| SC-A11-06 | B's balance is 1,000 | B withdraws 300 | balance 700; B holds 300; one `Withdrawn` event | A11, S1, S4 | 0004 | `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` |
+| SC-A11-07 | B's balance is `i128::MAX` | B withdraws all of it | balance 0 | A11, S1 | 0004 | `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` |
+| SC-A11-08 | B's balance is 1,000 | B withdraws 1,001 | `InsufficientFunds`; nothing moves | A11, S2 | 0011 | `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` |
+| SC-A11-09 | B's balance is 1,000 | B withdraws 0, −1 or `i128::MIN` | `InvalidAmount` | A11, S1 | 0004 | `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` |
+| SC-A11-10 | B never deposited | B withdraws 1 | `InsufficientFunds` | A11, S2 | 0004 | `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` |
+| SC-A11-11 | B has 50 and queues 60, then 10 behind it | B withdraws 45 and revokes the 60 | the 10 stays queued, uncovered: nothing is reserved | A11, S2 | 0018 | `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` |
+| SC-A11-12 | any setup | deposit or withdraw with and without the bank's authorization | the bank authorizes the call (and, for deposit, the transfer); without it the call fails with `Error(Context, InvalidAction)` and nothing moves, and with exactly the bank's tree it succeeds | A11, S6 | 0004 | `auth::deposit_is_authorized_by_the_bank_for_itself_and_the_transfer`, `auth::deposit_without_the_banks_authorization_fails`, `auth::withdraw_is_authorized_by_the_bank_alone`, `auth::withdraw_without_the_banks_authorization_fails` |
+| SC-A11-13 | a contract constructed with a config and a central bank | read them back | the same values | S6 | 0010, 0011, 0014, 0015 | `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` |
+| SC-A11-14 | B never deposited | read `balance(B)` | 0 | §4.4 initial state | 0004 | `unit::funding::balance_of_an_unknown_bank_is_zero` |
+| SC-A11-15 | the issuer deauthorized B | B deposits 600 | `TokenTransferFailed`; nothing moves | A11, S1 | 0003 | `unit::funding::a_deauthorized_bank_cannot_deposit` |
+| SC-A11-16 | B's balance is 1,000; the issuer deauthorized B | B withdraws 300 | `TokenTransferFailed`; the balance is unchanged | A11, S1, S2 | 0003 | `unit::funding::a_withdrawal_to_a_deauthorized_bank_is_refused` |
 
 ## A1 `Submit`
 
@@ -130,15 +136,17 @@ The payment keeps its sequence number, which is the model's toEnd = false. This 
 | SC-A08-07 | — | an unknown id | `UnknownPayment` | — | 0009 | `unit::queue_management::reprioritising_an_unknown_payment_is_refused` |
 | SC-A08-08 | a queued payment | reprioritise by the sender, the receiver, no one | the sender's tree; the others fail | S6 | 0009 | `auth::reprioritise_is_authorized_by_the_sender`, `auth::only_the_sender_can_reprioritise` |
 
-## A9 `Retime`, A10 reserves and limits, A11 `LiquidityTransfer`
+## A9 `Retime`, A10 reserves and limits
 
 - **A9:** not in v1. There are no timed orders (ADR-0017).
 - **A10:** not in v1. There are no reservations or limits (ADR-0018), so S14 and S15 hold vacuously.
-- **A11:** not applicable. Each bank has one account.
+- **A11:** see "A11 `LiquidityTransfer`" above. A bank's two accounts are its trustline holding and its settlement balance.
 
 ## A12 `Credit` (Repo), A14 `SetCollateral`
 
-Collateral is a value the CB sets, as in A14, with no collateral token. This was decided with the user on 2026-10-24.
+Collateral is a value the CB sets, as in A14, with no collateral token. This was decided with the user on 2026-10-24. A12's guard `phase = Open` does not apply (ADR-0013).
+
+The CB's own account is the SAC admin, so it authorizes the mint inside `open_repo`. That is provisional: as admin, it could also claw back from, or deauthorize, the contract outside the contract's recorded paths (review finding H1). Whether an issuance controller contract should hold the admin role instead is open for the user.
 
 | ID | Given | When | Then | Model IDs | ADR | Test |
 |---|---|---|---|---|---|---|
@@ -166,11 +174,11 @@ Collateral is a value the CB sets, as in A14, with no collateral token. This was
 | SC-A13-06 | repo 60, then 50 paid away | repay 11; repay 10 | `InsufficientFunds`; then allowed | A13, S2 | 0011 | `unit::credit::a_bank_cannot_repay_more_than_its_balance` |
 | SC-A13-07 | a repo | repay 0 or less | `InvalidAmount` | A13 | 0011 | `unit::credit::a_zero_or_negative_repayment_is_refused` |
 | SC-A13-08 | — | repay an unknown repo | `UnknownRepo` | — | 0011 | `unit::credit::repaying_an_unknown_repo_is_refused` |
-| SC-A13-09 | a repo | repay by the actor; with no authorization | the actor's tree only, the burn self-authorized; otherwise it fails and nothing is burned | S6 | 0011 | `auth::repay_is_authorized_by_the_actor_alone`, `auth::repay_without_the_actors_authorization_fails` |
+| SC-A13-09 | a repo | repay by the bank, by the CB; with no or the wrong authorization | the actor's tree only, the burn self-authorized; otherwise it fails and nothing is burned | S6 | 0011 | `auth::repay_is_authorized_by_the_actor_alone`, `auth::repay_by_the_central_bank_is_authorized_by_the_central_bank_alone`, `auth::repay_without_the_actors_authorization_fails` |
 
 ## A15 `Mint`, A16 `Burn`
 
-Covered through the SAC. The issuer's mint happens inside `open_repo` (SC-A12-01, SC-A12-07), and the contract's burn inside `repay` (SC-A13-01, SC-A20-07). Deposit and withdraw move existing money in and out (SC-F). Clawback never undoes a final payment (ADR-0006). It is an issuer power outside the contract, and the integration layer tests it.
+Covered through the SAC. The issuer's mint happens inside `open_repo` (SC-A12-01, SC-A12-07), and the contract's burn inside `repay` (SC-A13-01, SC-A20-07). Deposit and withdraw move existing money between a bank's two accounts (A11, SC-A11), so they are neither. Clawback never undoes a final payment (ADR-0006). It is an issuer power outside the contract, and the integration layer tests it.
 
 ## A17 `Open`, A18 `Close`
 
@@ -181,6 +189,8 @@ Not applicable: there is no business day (ADR-0013). A18's rejection of unsettle
 This is the ledger's close time, set in tests with `env.ledger().set_timestamp`. The expiry and term tests (SC-A05, SC-A20) use it.
 
 ## A20 `RepayOvernight`: the penalty repo (ADR-0014)
+
+The penalty rate is recorded but not charged, so conversion mints and burns nothing. This was decided with the user on 2026-10-24.
 
 | ID | Given | When | Then | Model IDs | ADR | Test |
 |---|---|---|---|---|---|---|
@@ -193,6 +203,17 @@ This is the ledger's close time, set in tests with `env.ledger().set_timestamp`.
 | SC-A20-07 | a penalty repo of 60 | repay 25, then 35 | ovn 35, then 0; `Repaid`; burned | A20, S1, S4 | 0014 | `unit::credit::a_penalty_repo_is_repaid_by_a_burn` |
 | SC-A20-08 | ovn 60, collateral 100 | repo 41, repo 40, collateral 99 | refused, allowed, refused | S21 | 0014 | `unit::credit::penalty_repos_stay_collateralised` |
 | SC-A20-09 | no authorization | convert after the term | succeeds; no auths recorded | S6 | 0014 | `auth::convert_overdue_needs_no_authorization` |
+
+## Storage lifetime and cost
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-ST-01 | ledger 1,000 | a deposit | the instance and the balance live until 1,000 + `BUMP_AMOUNT` (about 30 days) | — | 0004 | `unit::storage::a_deposit_extends_the_instance_and_the_balance_to_thirty_days` |
+| SC-ST-02 | a deposit at ledger 1,000 | deposits at 1,001, then once the TTL is below `BUMP_THRESHOLD` | unchanged, then extended from the later ledger | — | 0004 | `unit::storage::an_entry_is_extended_again_only_below_the_threshold` |
+| SC-ST-03 | one ledger | every state-changing entry point | every entry the contract owns lives `BUMP_AMOUNT` ledgers | — | 0004 | `unit::storage::every_entry_point_extends_every_entry_it_writes` |
+| SC-ST-04 | the contract from Wasm, `queue_cap` = 64, a ring of 64 banks, all queued, bank 0 short 1 | bank 0 deposits 1 | one offset settles all 64 within Mainnet's per-transaction limits | A3, S23 | 0010 | `unit::storage::an_offset_over_a_full_queue_fits_in_one_transaction` |
+
+The 64 of SC-ST-04 is provisional. ADR-0010 sizes the cap from ADR-0007's target (OQ-29, OQ-30), and C-SC-204 puts the ceiling at about 66.
 
 ## Linked groups (F5, S16, S19)
 

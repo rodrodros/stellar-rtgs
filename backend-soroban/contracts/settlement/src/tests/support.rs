@@ -2,7 +2,7 @@
 use std::vec::Vec as StdVec;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger as _},
+    testutils::{Address as _, Events as _, IssuerFlags, Ledger as _},
     token::{StellarAssetClient, TokenClient},
     xdr, Address, Env, Event,
 };
@@ -20,14 +20,34 @@ pub fn default_config() -> Config {
     }
 }
 
-/// A cash token (a SAC whose issuer, and so admin, is the central bank), the settlement
-/// contract and `n` banks that each hold `funding` cash tokens outside the contract.
+/// A cash token, the settlement contract and `n` banks that each hold `funding` cash
+/// tokens outside the contract.
+///
+/// The token is set up as ADR-0003 ratifies it: a classic asset whose issuer has
+/// AUTH_REQUIRED, AUTH_REVOCABLE and clawback, used through its SAC. The flags are set
+/// before any balance exists, since clawback reaches only balances created after it
+/// (C-HB-164). Every bank and the contract are then authorized to hold the token.
+///
+/// The central bank's own account is the issuer and so the SAC admin; it authorizes the
+/// mint inside `open_repo` (ADR-0011). That is provisional: as admin, the same account
+/// could also claw back from, or deauthorize, the contract outside the contract's
+/// recorded paths, which would break S1 or freeze the RTGS (review finding H1). Whether
+/// an issuance controller contract should hold the admin role instead is a decision
+/// still open for the user, and these tests change with it.
 pub struct Setup {
     pub env: Env,
     pub cb: Address,
     pub token: Address,
     pub contract: Address,
     pub banks: StdVec<Address>,
+}
+
+/// How a test registers the settlement contract.
+enum Code<'a> {
+    /// Natively: fast, but it skips VM metering (C-HB-042).
+    Native,
+    /// From its Wasm, so costs are metered as on the network.
+    Wasm(&'a [u8]),
 }
 
 impl Setup {
@@ -37,29 +57,49 @@ impl Setup {
     }
 
     pub fn with_config(n: usize, funding: i128, config: Config) -> Self {
-        let s = Self::strict_with_config(n, funding, config);
+        let s = Self::build(n, funding, config, Code::Native);
         s.env.mock_all_auths();
         s
     }
 
     /// Mocks no authorization: each test decides which auths the call under test gets.
     pub fn strict(n: usize, funding: i128) -> Self {
-        Self::strict_with_config(n, funding, default_config())
+        Self::build(n, funding, default_config(), Code::Native)
     }
 
-    fn strict_with_config(n: usize, funding: i128, config: Config) -> Self {
+    /// Like [`Setup::with_config`], with the contract registered from `wasm`, the output
+    /// of `make build`. For cost tests (TESTING.md, "Costs").
+    pub fn from_wasm(wasm: &[u8], n: usize, config: Config) -> Self {
+        let s = Self::build(n, 0, config, Code::Wasm(wasm));
+        s.env.mock_all_auths();
+        s
+    }
+
+    fn build(n: usize, funding: i128, config: Config, code: Code) -> Self {
         let env = Env::default();
         let cb = Address::generate(&env);
-        let token = env.register_stellar_asset_contract_v2(cb.clone()).address();
-        let contract = env.register(
-            Settlement,
-            SettlementArgs::__constructor(&token, &cb, &config),
-        );
+        let sac = env.register_stellar_asset_contract_v2(cb.clone());
+        for flag in [
+            IssuerFlags::RequiredFlag,
+            IssuerFlags::RevocableFlag,
+            IssuerFlags::ClawbackEnabledFlag,
+        ] {
+            sac.issuer().set_flag(flag);
+        }
+        let token = sac.address();
+        let args = SettlementArgs::__constructor(&token, &cb, &config);
+        let contract = match code {
+            Code::Native => env.register(Settlement, args),
+            Code::Wasm(wasm) => env.register(wasm, args),
+        };
         let banks: StdVec<Address> = (0..n).map(|_| Address::generate(&env)).collect();
         env.mock_all_auths();
+        let admin = StellarAssetClient::new(&env, &token);
+        admin.set_authorized(&contract, &true);
         for b in &banks {
+            admin.set_authorized(b, &true);
             if funding > 0 {
-                StellarAssetClient::new(&env, &token).mint(b, &funding);
+                admin.mint(b, &funding);
             }
         }
         env.set_auths(&[]);
@@ -97,10 +137,14 @@ impl Setup {
     }
 
     /// Mints cash tokens to `to` outside the contract, with the issuer's authorization.
+    /// For tests that mock every authorization.
     pub fn mint(&self, to: &Address, amount: i128) {
+        StellarAssetClient::new(&self.env, &self.token).mint(to, &amount);
+    }
+
+    /// The issuer's SAC admin functions (ADR-0003), with the issuer's authorization.
+    pub fn admin(&self) -> StellarAssetClient<'_> {
         StellarAssetClient::new(&self.env, &self.token)
-            .mock_all_auths()
-            .mint(to, &amount);
     }
 
     /// Every bank's settlement balance, in bank order.

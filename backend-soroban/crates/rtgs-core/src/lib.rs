@@ -28,7 +28,11 @@ pub fn covers(_balance: i128, _amount: i128) -> bool {
 /// `balances[a]` is account `a`'s balance and `queues[a]` its candidates in `≺` order.
 /// Returns `k`, where `k[a]` is how many of `a`'s first candidates the offset settles. A
 /// prefix vector is feasible if every account ends non-negative (F1 with `lim` = 0).
-/// A sum that overflows `i128` makes its prefix infeasible.
+///
+/// Overflow: an account's outgoing sum that overflows `i128` makes its prefix infeasible.
+/// An incoming sum that overflows saturates at `i128::MAX`, which is feasible, so an
+/// incoming overflow never rules a prefix out. In the contract neither can be reached
+/// with real balances, since S1 bounds every sum by the tokens it holds.
 pub fn greatest_feasible_prefix(_balances: &[i128], _queues: &[Vec<Candidate>]) -> Vec<usize> {
     todo!()
 }
@@ -42,8 +46,8 @@ mod tests {
         Candidate { to, amount }
     }
 
-    /// §4.5 `cov`: exactly the balance is covered, one more is not, and an amount above
-    /// a negative or zero balance never is.
+    /// §4.5 `cov` with `lim` = 0 and no reserves (ADR-0011, ADR-0018): exactly the
+    /// balance is covered, one more is not, and an amount above a zero balance never is.
     #[test]
     fn covers_is_balance_minus_amount_at_least_zero() {
         assert!(covers(100, 100));
@@ -53,7 +57,8 @@ mod tests {
         assert!(covers(i128::MAX, i128::MAX));
     }
 
-    /// k* over no accounts, or over accounts with empty queues, is all zeros.
+    /// Spec O (ADR-0010): k* over no accounts, or over accounts with empty queues, is all
+    /// zeros.
     #[test]
     fn the_prefix_of_empty_queues_is_zero() {
         assert_eq!(greatest_feasible_prefix(&[], &[]), Vec::<usize>::new());
@@ -63,15 +68,15 @@ mod tests {
         );
     }
 
-    /// When every candidate fits, k* takes every queue whole.
+    /// R4, Spec O (ADR-0010): when every candidate fits, k* takes every queue whole.
     #[test]
     fn when_everything_fits_the_prefix_is_every_candidate() {
         let k = greatest_feasible_prefix(&[100, 0], &[vec![to(1, 40), to(1, 60)], vec![]]);
         assert_eq!(k, vec![2, 0]);
     }
 
-    /// R7's witness (§4.10): the cycle A→B 15, B→C 20, C→A 25 with every balance 10.
-    /// No single payment is covered, yet k* = (1, 1, 1).
+    /// R7's witness (§4.10; ADR-0010): the cycle A→B 15, B→C 20, C→A 25 with every
+    /// balance 10. No single payment is covered, yet k* = (1, 1, 1).
     #[test]
     fn r7_cycle_has_prefix_one_one_one() {
         let k = greatest_feasible_prefix(
@@ -81,9 +86,9 @@ mod tests {
         assert_eq!(k, vec![1, 1, 1]);
     }
 
-    /// CPSS Box 4 with no counterparty (C-RT-045): after the 40 settles, balance 60 and
-    /// the queue 70, 20, 30, 10. The 70 does not fit, and the prefix must start with it,
-    /// so k* = 0.
+    /// F2 (ADR-0008, ADR-0010), on CPSS Box 4 with no counterparty (C-RT-045): after the
+    /// 40 settles, balance 60 and the queue 70, 20, 30, 10. The 70 does not fit, and the
+    /// prefix must start with it, so k* = 0.
     #[test]
     fn an_uncovered_first_candidate_blocks_the_whole_queue() {
         let k = greatest_feasible_prefix(
@@ -93,7 +98,7 @@ mod tests {
         assert_eq!(k, vec![0, 0]);
     }
 
-    /// R4's descent: A's whole queue does not fit, so its last candidate is dropped, and
+    /// R4's descent (ADR-0010): A's whole queue does not fit, so its last candidate is dropped, and
     /// the offset with B then fits: k* = (1, 1).
     #[test]
     fn the_descent_drops_the_last_candidate_of_a_violating_account() {
@@ -101,7 +106,7 @@ mod tests {
         assert_eq!(k, vec![1, 1]);
     }
 
-    /// The descent cascades: dropping A's candidate takes B's inflow away, so B must
+    /// R4's descent cascades (ADR-0010): dropping A's candidate takes B's inflow away, so B must
     /// drop too, and then C. Nothing is feasible.
     #[test]
     fn dropping_one_candidate_can_make_others_infeasible() {
@@ -112,7 +117,7 @@ mod tests {
         assert_eq!(k, vec![0, 0, 0]);
     }
 
-    /// R4: k* is the join of the feasible prefixes, so it does not depend on the account
+    /// R4 (ADR-0010): k* is the join of the feasible prefixes, so it does not depend on the account
     /// order. Relabelling the accounts of a two-cycle with a dependent tail gives the
     /// same prefix lengths, relabelled.
     #[test]
@@ -130,7 +135,7 @@ mod tests {
         assert_eq!(swapped, vec![0, 2, 1]);
     }
 
-    /// F2: the prefix never skips a candidate. B→A 50 would fit with A's second
+    /// F2 and F6 (ADR-0008, ADR-0010): the prefix never skips a candidate. B→A 50 would fit with A's second
     /// payment, but A's first, 100, does not fit, so k* = (0, 0).
     #[test]
     fn the_prefix_never_skips_an_earlier_candidate() {
@@ -138,8 +143,10 @@ mod tests {
         assert_eq!(k, vec![0, 0]);
     }
 
-    /// Sums at the `i128` limit: B's two candidates of `i128::MAX` overflow, so that
-    /// prefix is infeasible rather than a panic, and k* = (1, 1).
+    /// F1 and R4 at the `i128` limit (ADR-0010): B's two candidates of `i128::MAX`
+    /// overflow B's outgoing sum, so that prefix is infeasible rather than a panic. A's
+    /// incoming sum, two `i128::MAX`, saturates instead, so A's prefix stays feasible
+    /// while B's is cut back, and k* = (1, 1).
     #[test]
     fn an_overflowing_sum_is_infeasible() {
         let k = greatest_feasible_prefix(
