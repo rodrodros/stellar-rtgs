@@ -1,0 +1,199 @@
+# Scenario catalogue
+
+Every behaviour the system must show, with the tests that run it (TESTING.md, "Scenario catalogue"). Scenarios are numbered by the model action they exercise (`../stellar-research/definition/rtgs-definition.md` §4.6), so a family with no rows is an action with no test.
+
+- `SC-F` is funding (deposit and withdraw), which is not a model action.
+- Test paths are relative to the `settlement` crate: `unit::…` stands for `tests::unit::…`, and `auth::…` for `tests::auth::…`.
+- `core::…` stands for `rtgs_core::tests::…`.
+
+**Status, 2026-10-24.** The tests are written, and every row's tests are red. Only `deposit` and `balance` have code, so the tests that need the new interface fail against `todo!()` stubs. The contract's behaviour is still to be implemented, test first.
+
+## Funding
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-F-01 | B holds 1,000 cash tokens | B deposits 600 | B holds 400, the contract 600; `balance(B)` = 600; one `Deposited` event | S1, S4 | 0003, 0004 | `unit::funding::deposit_moves_tokens_into_the_contract_and_credits_the_bank` |
+| SC-F-02 | B holds 1,000 | B deposits 400, then 600 | balance 1,000, B holds 0 | S1 | 0004 | `unit::funding::deposit_of_exactly_the_banks_holding_succeeds_and_deposits_add_up` |
+| SC-F-03 | B holds 1,000 | B deposits 0, −1 or `i128::MIN` | `InvalidAmount`; nothing moves | S1 | 0004 | `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` |
+| SC-F-04 | B holds 1,000 | B deposits 1,001 | `TokenTransferFailed`; nothing moves | S1 | 0003 | `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` |
+| SC-F-05 | the contract holds `i128::MAX` | another bank deposits 1 | the SAC refuses: `TokenTransferFailed` | S1 | 0003 | `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` |
+| SC-F-06 | B's balance is 1,000 | B withdraws 300 | balance 700; B holds 300; one `Withdrawn` event | S1, S4 | 0004 | `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` |
+| SC-F-07 | B's balance is `i128::MAX` | B withdraws all of it | balance 0 | S1 | 0004 | `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` |
+| SC-F-08 | B's balance is 1,000 | B withdraws 1,001 | `InsufficientFunds`; nothing moves | S2 | 0011 | `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` |
+| SC-F-09 | B's balance is 1,000 | B withdraws 0, −1 or `i128::MIN` | `InvalidAmount` | S1 | 0004 | `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` |
+| SC-F-10 | B never deposited | B withdraws 1 | `InsufficientFunds` | S2 | 0004 | `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` |
+| SC-F-11 | B has 50 and queues 60, then 10 behind it | B withdraws 45 and revokes the 60 | the 10 stays queued, uncovered: nothing is reserved | S2 | 0018 | `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` |
+| SC-F-12 | any setup | deposit or withdraw with and without the bank's authorization | the bank authorizes the call (and, for deposit, the transfer); without it the call fails | S6 | 0004 | `auth::deposit_is_authorized_by_the_bank_for_itself_and_the_transfer`, `auth::deposit_without_the_banks_authorization_fails`, `auth::withdraw_is_authorized_by_the_bank_alone`, `auth::withdraw_without_the_banks_authorization_fails` |
+| SC-F-13 | a contract constructed with a config and a central bank | read them back | the same values | — | 0014, 0015 | `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` |
+
+## A1 `Submit`
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A01-01 | A has 100 | A pays B 40 | settles at once, id 0; `Submitted` then `Settled`; A 60, B 40 | A1, A2, S4, S11, L1 | 0005, 0008 | `unit::payments::a_covered_payment_settles_at_once` |
+| SC-A01-02 | A has 100 | A pays B 100 | settles; A 0 | S2 | 0011 | `unit::payments::a_payment_of_exactly_the_balance_settles` |
+| SC-A01-03 | A has 100 | A pays B 101 | queued in A's normal queue; nothing moves | A1, S2 | 0008 | `unit::payments::a_payment_of_one_more_than_the_balance_is_queued` |
+| SC-A01-04 | A never deposited | A pays B 1 | queued | A1 | 0008 | `unit::payments::a_bank_with_no_balance_can_queue_a_payment` |
+| SC-A01-05 | A has 100 | A pays 0, −1 or `i128::MIN` | `InvalidAmount`; no id used | A1, S11 | — | `unit::payments::a_zero_or_negative_payment_is_refused` |
+| SC-A01-06 | A has 100 | A pays itself | `SameAccount` | A1, S11 | — | `unit::payments::a_payment_to_oneself_is_refused` |
+| SC-A01-07 | — | payments of `i128::MAX`, uncovered and covered | queues, or settles with no overflow | S1, S11 | — | `unit::payments::a_payment_of_i128_max_queues_or_settles_without_overflow` |
+| SC-A01-08 | — | four payments across banks and priorities | ids 0, 1, 2, 3 | S11 | 0008 | `unit::payments::ids_are_increasing_sequence_numbers` |
+| SC-A01-09 | `queue_cap` = 2, two payments queued | another uncovered payment; a covered one | `QueueFull`; the covered one settles | A1 | 0010 | `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` |
+| SC-A01-10 | `queue_cap` = 2, one queued | a second uncovered payment | queued | A1 | 0010 | `unit::payments::one_below_the_queue_cap_a_payment_still_queues` |
+| SC-A01-11 | A has 50, queues normal 60 | A pays normal 10 | the 10 queues behind the 60 | S7(b) | 0008 | `unit::payments::a_covered_payment_waits_behind_an_uncovered_one_of_the_same_priority` |
+| SC-A01-12 | A has 50, queues urgent 60 | A pays normal 10 | the 10 queues | S7(a) | 0009 | `unit::payments::a_queued_urgent_payment_blocks_the_banks_normal_payments` |
+| SC-A01-13 | A has 50, queues normal 60 | A pays urgent 10 | the 10 settles at once | S7(a) | 0009 | `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` |
+| SC-A01-14 | A's queue blocked; B has 50 | B pays 50 | settles | §4.5 `≺` | 0008 | `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` |
+| SC-A01-15 | CPSS Box 4: A has 100 | A queues 40, 70, 20, 30, 10 | only the 40 settles | S7, §4.11 | 0008 | `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` |
+| SC-A01-16 | any | submit by the sender, by no one, by the receiver | the sender's tree only; the others fail | S6 | — | `auth::submit_is_authorized_by_the_sender_alone`, `auth::submit_without_the_senders_authorization_fails`, `auth::the_receiver_cannot_submit_a_payment_from_the_sender` |
+
+## A2 `Settle`: the eager closure
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A02-01 | A queued 30 with 0 | A deposits 30 | settles in the same call; `Deposited`, then `Settled` | A2, S9, L1 (δ = 0) | 0010 | `unit::payments::a_deposit_that_covers_the_head_settles_it_in_the_same_call` |
+| SC-A02-02 | A queued 30, 20, 50 | A deposits 60 | the 30 and the 20 settle; the 50 waits | S7, S9 | 0008 | `unit::payments::new_liquidity_settles_the_queue_in_order_up_to_the_first_uncovered_payment` |
+| SC-A02-03 | A queued normal 20, urgent 20 | A deposits 30 | the urgent settles; the normal waits | S7(a) | 0009 | `unit::payments::new_liquidity_settles_urgent_payments_before_normal_ones` |
+| SC-A02-04 | A→B 30 and B→C 30 queued | A deposits 30 | both settle | S9 | 0010 | `unit::payments::a_settlement_cascades_through_the_receivers_queue` |
+| SC-A02-05 | B→C 30 queued | A (with 30) pays B 30 | both settle in the submit, the new one first | S9 | 0010 | `unit::payments::a_submission_that_settles_releases_the_receivers_queue` |
+| SC-A02-06 | A queued 60 | A withdraws 10 | only `Withdrawn` | S9 | 0018 | `unit::payments::a_withdrawal_settles_nothing` |
+| SC-A02-07 | a settled payment | time passes, more payments and a withdrawal | its record is unchanged | S3, S5 | 0005, 0006 | `unit::payments::a_settled_payment_never_changes` |
+
+## A3 `Offset` (Spec O, eager)
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A03-01 | R7: balances 10 each; A→B 15, B→C 20 queued | C pays A 25 | `Offset` [0, 1, 2], three `Settled`; balances 20, 5, 5 | A3, S10, S23, R7, L2 | 0010 | `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible`, `core::r7_cycle_has_prefix_one_one_one` |
+| SC-A03-02 | A and B have 0 | A→B 50, then B→A 50 | both settle | A3, F1 | 0010 | `unit::lsm::two_opposite_payments_offset_with_no_liquidity` |
+| SC-A03-03 | A queued 50, 30 to B | B pays A 50 | offset of A's 50 and B's 50; A's 30 waits | R4, Spec O | 0010 | `unit::lsm::the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest`, `core::the_descent_drops_the_last_candidate_of_a_violating_account` |
+| SC-A03-04 | A queued 100, 50 to B | B pays A 50 | nothing settles: no overtaking | F2, F6, S7 | 0008, 0010 | `unit::lsm::the_offset_never_overtakes_an_older_payment`, `core::the_prefix_never_skips_an_earlier_candidate` |
+| SC-A03-05 | A queued normal 50, then urgent 100 | B pays A 50 | nothing settles: urgent first in `≺` | §4.5, F2 | 0009, 0010 | `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` |
+| SC-A03-06 | A→B 60, B→A 50 queued | A deposits 10 | both settle by offset | A3, S23 | 0010 | `unit::lsm::a_deposit_can_make_an_offset_feasible` |
+| SC-A03-07 | B queued two `i128::MAX` to A | A pays B `i128::MAX` | offset of one each; no panic | R4, F1 | 0010 | `unit::lsm::an_outflow_that_overflows_i128_is_infeasible_not_a_panic`, `core::an_overflowing_sum_is_infeasible` |
+| SC-A03-08 | after an offset | a submission that adds nothing feasible | nothing more settles | R5, S23 | 0010 | `unit::lsm::after_an_offset_the_queues_are_at_rest` |
+| SC-A03-09 | the prefix rule alone | empty queues; all fit; an uncovered first candidate; a cascade of drops; relabelled accounts | k* as stated | R4, R9 | 0010 | `core::the_prefix_of_empty_queues_is_zero`, `core::when_everything_fits_the_prefix_is_every_candidate`, `core::an_uncovered_first_candidate_blocks_the_whole_queue`, `core::dropping_one_candidate_can_make_others_infeasible`, `core::the_prefix_does_not_depend_on_the_account_order` |
+| SC-A03-10 | the cover rule alone | balances and amounts at the boundaries | `bal − a ≥ 0` | §4.5 `cov` | 0011 | `core::covers_is_balance_minus_amount_at_least_zero` |
+
+## A4 `Lock` and `Unlock`
+
+Not applicable: the LSM is one-phase (ADR-0010), so there are no locks and S18 and S22 hold vacuously.
+
+## A5 `Reject`: expiry
+
+Expiry counted from submission replaces the model's τ_qc (ADR-0013, ADR-0015).
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A05-01 | a payment queued at t | expire at t + expiry + 1 | `Expired`; out of the queue | A5 | 0015 | `unit::queue_management::a_payment_past_its_expiry_can_be_expired` |
+| SC-A05-02 | queued at t | expire at t and at t + expiry | `NotExpired` | A5 | 0015 | `unit::queue_management::a_payment_exactly_at_its_expiry_has_not_expired` |
+| SC-A05-03 | `expiry_secs` = 10 | at +10 and +11 | `NotExpired`, then expired | A5 | 0015 | `unit::queue_management::the_expiry_is_configurable` |
+| SC-A05-04 | A has 50; queued 60, then 10 | the 60 expires | the 10 settles in the same call | A5, S9 | 0010, 0015 | `unit::queue_management::expiring_the_head_releases_the_payment_behind_it` |
+| SC-A05-05 | two payments queued 100 s apart | the first's expiry passes | the first expires; the second is `NotExpired` | A5 | 0015 | `unit::queue_management::each_payment_expires_from_its_own_submission` |
+| SC-A05-06 | a settled payment | expire it | `NotQueued` | S3, S5 | 0015 | `unit::queue_management::a_settled_payment_cannot_be_expired` |
+| SC-A05-07 | a revoked payment | expire it | `NotQueued` | S3 | 0015 | `unit::queue_management::a_revoked_payment_cannot_be_expired` |
+| SC-A05-08 | — | expire an unknown id | `UnknownPayment` | — | 0015 | `unit::queue_management::expiring_an_unknown_payment_is_refused` |
+| SC-A05-09 | no authorization at all | expire | succeeds; no auths recorded | S6, M1 | 0015 | `auth::expire_needs_no_authorization` |
+
+## A6 `Revoke`
+
+Revocation is allowed until settlement, with no cut-off τ_rc (ADR-0016), so S20 holds trivially.
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A06-01 | a queued payment | the sender revokes | `Revoked`; out of the queue | A6, S13 | 0016 | `unit::queue_management::a_queued_payment_can_be_revoked` |
+| SC-A06-02 | queued long past its expiry time | revoke | revoked: no cut-off | A6 | 0016 | `unit::queue_management::revocation_has_no_cut_off` |
+| SC-A06-03 | a settled payment | revoke | `NotQueued`; nothing changes | S3, S5, M5 | 0005, 0006 | `unit::queue_management::a_settled_payment_cannot_be_revoked` |
+| SC-A06-04 | a revoked payment | revoke again | `NotQueued` | S3 | 0016 | `unit::queue_management::a_revoked_payment_cannot_be_revoked_again` |
+| SC-A06-05 | an expired payment | revoke | `NotQueued` | S3 | 0015 | `unit::queue_management::an_expired_payment_cannot_be_revoked` |
+| SC-A06-06 | — | revoke an unknown id | `UnknownPayment` | — | — | `unit::queue_management::revoking_an_unknown_payment_is_refused` |
+| SC-A06-07 | A has 50; queued 60, then 10 | revoke the 60 | the 10 settles in the same call | A6, S9 | 0016 | `unit::queue_management::revoking_the_head_releases_the_payment_behind_it` |
+| SC-A06-08 | A has 50; queued urgent 60, normal 10 | revoke the urgent | the normal settles | S7(a) | 0009, 0016 | `unit::queue_management::revoking_the_urgent_head_releases_normal_payments` |
+| SC-A06-09 | three queued | revoke the middle one | the others keep their order | S7 | 0008 | `unit::queue_management::revoking_from_the_middle_keeps_the_queue_order` |
+| SC-A06-10 | a queued payment | revoke by the sender, by the receiver, by no one | the sender's tree; the others fail | S6, S13 | 0016 | `auth::revoke_is_authorized_by_the_sender`, `auth::only_the_sender_can_revoke` |
+
+## A7 `Hold`
+
+Not in v1: κ-proto's `mgmt` is Repri only (ADR-0009).
+
+## A8 `Reprioritise`
+
+The payment keeps its sequence number, which is the model's toEnd = false. This was decided with the user on 2026-10-24.
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A08-01 | urgent 0, normal 1, urgent 2 | promote 1 | urgent queue [0, 1, 2]; `Reprioritised` | A8 | 0009 | `unit::queue_management::a_promoted_payment_keeps_its_place_by_age` |
+| SC-A08-02 | normal 0, urgent 1, normal 2 | demote 1 | normal queue [0, 1, 2] | A8 | 0009 | `unit::queue_management::a_demoted_payment_keeps_its_place_by_age` |
+| SC-A08-03 | A has 50; normal 60, then 10 | promote the 10 | it settles in the same call | A8, S9 | 0009, 0010 | `unit::queue_management::promoting_a_blocked_covered_payment_settles_it` |
+| SC-A08-04 | A has 10; normal 10, then urgent 60 | demote the 60 | the 10 settles | A8, S7(a) | 0009 | `unit::queue_management::demoting_an_uncovered_urgent_payment_releases_older_normal_ones` |
+| SC-A08-05 | a queued normal payment | reprioritise to normal | `SamePriority` | A8 | 0009 | `unit::queue_management::reprioritising_to_the_same_priority_is_refused` |
+| SC-A08-06 | a settled payment | reprioritise | `NotQueued` | S3, S5 | 0009 | `unit::queue_management::a_settled_payment_cannot_be_reprioritised` |
+| SC-A08-07 | — | an unknown id | `UnknownPayment` | — | 0009 | `unit::queue_management::reprioritising_an_unknown_payment_is_refused` |
+| SC-A08-08 | a queued payment | reprioritise by the sender, the receiver, no one | the sender's tree; the others fail | S6 | 0009 | `auth::reprioritise_is_authorized_by_the_sender`, `auth::only_the_sender_can_reprioritise` |
+
+## A9 `Retime`, A10 reserves and limits, A11 `LiquidityTransfer`
+
+- **A9:** not in v1. There are no timed orders (ADR-0017).
+- **A10:** not in v1. There are no reservations or limits (ADR-0018), so S14 and S15 hold vacuously.
+- **A11:** not applicable. Each bank has one account.
+
+## A12 `Credit` (Repo), A14 `SetCollateral`
+
+Collateral is a value the CB sets, as in A14, with no collateral token. This was decided with the user on 2026-10-24.
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A14-01 | — | the CB sets B's collateral to 100 | `credit(B)` = (0, 0, 100); `CollateralSet` | A14 | 0011 | `unit::credit::the_central_bank_sets_a_banks_collateral` |
+| SC-A14-02 | collateral 100 | set to 0; set to −1 | 0 allowed; `InvalidAmount` | A14 | 0011 | `unit::credit::collateral_can_be_zero_but_not_negative` |
+| SC-A14-03 | cr = 60 | set collateral to 59, then 60 | `CollateralBelowCredit`, then allowed | A14, S17, S21 | 0011 | `unit::credit::collateral_cannot_fall_below_the_credit_it_backs` |
+| SC-A14-04 | — | set_collateral by the CB, by the bank, by no one | the CB's tree; the others fail | S6 | 0011 | `auth::set_collateral_is_authorized_by_the_central_bank`, `auth::only_the_central_bank_can_set_collateral` |
+| SC-A12-01 | collateral 100 | the CB opens a repo of 60 | 60 minted into the contract; B's balance 60; cr 60; repo recorded; `RepoOpened` | A12, S1, S4 | 0011 | `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` |
+| SC-A12-02 | collateral 100 | repos of 60 and 40, then 1 | allowed, then `CreditExceedsCollateral` | A12, S17 | 0011 | `unit::credit::credit_may_reach_but_not_exceed_the_collateral` |
+| SC-A12-03 | no collateral | a repo of 1 | `CreditExceedsCollateral` | S17 | 0011 | `unit::credit::a_bank_with_no_collateral_gets_no_credit` |
+| SC-A12-04 | collateral 100 | a repo of 0 or less | `InvalidAmount` | A12 | 0011 | `unit::credit::a_zero_or_negative_repo_is_refused` |
+| SC-A12-05 | collateral `i128::MAX` | repo `i128::MAX`, then 1 | allowed, then refused, with no overflow | S17 | 0011 | `unit::credit::credit_at_i128_max_is_checked_without_overflow` |
+| SC-A12-06 | B queued 50 with 0 | a repo of 50 | the payment settles in the same call | A12, S9, L1 | 0010, 0011 | `unit::credit::a_repo_releases_the_banks_queue` |
+| SC-A12-07 | — | open_repo by the CB, by the bank, by no one | the CB's tree with the SAC `mint`; the others fail and nothing is minted | S6, D1 | 0011 | `auth::open_repo_is_authorized_by_the_central_bank_with_the_mint`, `auth::only_the_central_bank_can_open_a_repo` |
+
+## A13 `Repay`
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A13-01 | a repo of 60 | B repays 20 | balance 40; 20 burned; cr 40; `RepoRepaid` | A13, S1, S4 | 0011 | `unit::credit::a_partial_repayment_burns_cash_and_lowers_the_credit` |
+| SC-A13-02 | a repo of 60 | B repays 60 | `Repaid`; cr 0; collateral freed | A13, S17 | 0011 | `unit::credit::a_full_repayment_closes_the_repo_and_frees_the_collateral` |
+| SC-A13-03 | a repo of 60 | the CB repays 60 | the bank is debited | A13, S6 | 0011 | `unit::credit::the_central_bank_may_repay_on_the_banks_behalf` |
+| SC-A13-04 | a repo of 60 | another bank repays | `NotAuthorized` | S6 | 0011 | `unit::credit::a_third_party_cannot_repay`, `auth::an_authorized_third_party_is_still_not_authorized_to_repay` |
+| SC-A13-05 | outstanding 60 | repay 61; after repaying, repay 1 | `RepayExceedsRepo` | A13 | 0011 | `unit::credit::repaying_more_than_is_outstanding_is_refused` |
+| SC-A13-06 | repo 60, then 50 paid away | repay 11; repay 10 | `InsufficientFunds`; then allowed | A13, S2 | 0011 | `unit::credit::a_bank_cannot_repay_more_than_its_balance` |
+| SC-A13-07 | a repo | repay 0 or less | `InvalidAmount` | A13 | 0011 | `unit::credit::a_zero_or_negative_repayment_is_refused` |
+| SC-A13-08 | — | repay an unknown repo | `UnknownRepo` | — | 0011 | `unit::credit::repaying_an_unknown_repo_is_refused` |
+| SC-A13-09 | a repo | repay by the actor; with no authorization | the actor's tree only, the burn self-authorized; otherwise it fails and nothing is burned | S6 | 0011 | `auth::repay_is_authorized_by_the_actor_alone`, `auth::repay_without_the_actors_authorization_fails` |
+
+## A15 `Mint`, A16 `Burn`
+
+Covered through the SAC. The issuer's mint happens inside `open_repo` (SC-A12-01, SC-A12-07), and the contract's burn inside `repay` (SC-A13-01, SC-A20-07). Deposit and withdraw move existing money in and out (SC-F). Clawback never undoes a final payment (ADR-0006). It is an issuer power outside the contract, and the integration layer tests it.
+
+## A17 `Open`, A18 `Close`
+
+Not applicable: there is no business day (ADR-0013). A18's rejection of unsettled payments becomes expiry (A5, ADR-0015). Its conversion of unpaid credit becomes the per-repo penalty step (below, ADR-0014).
+
+## A19 `Tick`
+
+This is the ledger's close time, set in tests with `env.ledger().set_timestamp`. The expiry and term tests (SC-A05, SC-A20) use it.
+
+## A20 `RepayOvernight`: the penalty repo (ADR-0014)
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-A20-01 | a repo opened at t, 20 repaid | convert at t + term + 1 | `Penalty`, rate 500 bps; cr 0, ovn 40; nothing minted or burned; `RepoPenalised` | S21 | 0014 | `unit::credit::an_overdue_repo_becomes_a_penalty_repo` |
+| SC-A20-02 | a repo opened at t | convert at t and at t + term | `NotOverdue` | — | 0014 | `unit::credit::a_repo_exactly_at_its_term_is_not_overdue` |
+| SC-A20-03 | term 10 s, rate 1,234 bps | convert at +11 | rate 1,234 recorded | — | 0014 | `unit::credit::the_term_and_the_penalty_rate_are_configurable` |
+| SC-A20-04 | a penalty repo | convert again | `AlreadyPenalty` | — | 0014 | `unit::credit::a_penalty_repo_cannot_be_converted_again` |
+| SC-A20-05 | a repaid repo | convert after its term | `NotOverdue` | — | 0014 | `unit::credit::a_repaid_repo_is_never_overdue` |
+| SC-A20-06 | — | convert an unknown repo | `UnknownRepo` | — | 0014 | `unit::credit::converting_an_unknown_repo_is_refused` |
+| SC-A20-07 | a penalty repo of 60 | repay 25, then 35 | ovn 35, then 0; `Repaid`; burned | A20, S1, S4 | 0014 | `unit::credit::a_penalty_repo_is_repaid_by_a_burn` |
+| SC-A20-08 | ovn 60, collateral 100 | repo 41, repo 40, collateral 99 | refused, allowed, refused | S21 | 0014 | `unit::credit::penalty_repos_stay_collateralised` |
+| SC-A20-09 | no authorization | convert after the term | succeeds; no auths recorded | S6 | 0014 | `auth::convert_overdue_needs_no_authorization` |
+
+## Linked groups (F5, S16, S19)
+
+Not in v1: κ-proto has no groups. ADR-0010's eager group settlement waits for the definition's revision.
