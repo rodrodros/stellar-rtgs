@@ -2,10 +2,10 @@
 //! bank's settlement balance (ADR-0004).
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
-//! covered payment at once and queues any other) and the `balance`, `payment`, `queue`,
-//! `queued_count`, `config` and `central_bank` views. The other entry points are stubs
-//! whose unit tests (`src/tests/`) are written and red; they are implemented test first
-//! (TESTING.md).
+//! covered payment at once unless the sender has one queued ahead of it, and queues any
+//! other) and the `balance`, `payment`, `queue`, `queued_count`, `config` and
+//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
+//! are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -326,6 +326,15 @@ fn enqueue(env: &Env, payment: &Payment) {
     put(env, &DataKey::QueuedCount, &count);
 }
 
+/// S7 (ADR-0008, ADR-0009): whether `bank` has a payment queued ahead of a new one at
+/// `priority`. An urgent payment queues behind the bank's urgent ones only; a normal one
+/// behind every queued payment of the bank, since a queued urgent payment blocks its
+/// normal ones.
+fn queued_ahead(env: &Env, bank: &Address, priority: Priority) -> bool {
+    let queued = |p| !Settlement::queue(env.clone(), bank.clone(), p).is_empty();
+    queued(Priority::Urgent) || (priority == Priority::Normal && queued(Priority::Normal))
+}
+
 #[contract]
 pub struct Settlement;
 
@@ -383,10 +392,9 @@ impl Settlement {
     ///
     /// The sender authorizes it alone (S6). An amount of 0 or less is refused with
     /// `InvalidAmount`, and a payment to oneself with `SameAccount`, before an id is used.
-    /// The id is the next sequence number (S11). A covered payment settles at once (A2);
-    /// any other waits at the tail of the sender's queue for its priority. Queue discipline
-    /// (S7, ADR-0008, ADR-0009) is not enforced yet: a covered payment settles even behind
-    /// a queued head.
+    /// The id is the next sequence number (S11). A covered payment settles at once (A2) if
+    /// nothing of the sender's is queued ahead of it (S7, ADR-0008, ADR-0009); any other
+    /// waits at the tail of the sender's queue for its priority.
     pub fn submit(
         env: Env,
         from: Address,
@@ -429,7 +437,7 @@ impl Settlement {
         }
         .publish(&env);
         let balance = Self::balance(env.clone(), payment.from.clone());
-        if rtgs_core::covers(balance, amount) {
+        if !queued_ahead(&env, &payment.from, priority) && rtgs_core::covers(balance, amount) {
             settle(&env, &mut payment, balance);
         } else {
             enqueue(&env, &payment);

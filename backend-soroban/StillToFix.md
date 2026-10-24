@@ -105,15 +105,16 @@ Build on Flow 4. `submit` needs:
 
 `submit` settles a covered payment at once whatever is queued ahead of it, until Flow 6. Seven tests of later flows pass with this flow, but stay unticked until their own flow re-checks them: each guards against, or depends on, a behaviour that doesn't exist yet. They are SC-A01-13 and SC-A01-14 (Flow 6, queue discipline), SC-A01-10 (Flow 7, the cap), SC-A02-06 and SC-A02-07 (Flow 8, the closure), and SC-A03-04 and SC-A03-05 (Flow 13, the offset). Each one's line says what to check before ticking it.
 
-## Flow 6: queue discipline at submission (5)
+## Flow 6: queue discipline at submission (6)
 
 Within a priority, payments are strictly first in, first out. While a bank has an urgent payment queued, none of its normal payments settles (S7; ADR-0008, ADR-0009). So a new payment settles at once only if nothing is queued ahead of it.
 
-- [ ] `unit::payments::a_covered_payment_waits_behind_an_uncovered_one_of_the_same_priority` (SC-A01-11)
-- [ ] `unit::payments::a_queued_urgent_payment_blocks_the_banks_normal_payments` (SC-A01-12)
-- [ ] `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` (SC-A01-13). Passes since Flow 5, because there is no queue discipline yet. Check that it still passes once the discipline exists, then tick it.
-- [ ] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). Passes since Flow 5, since cover is checked against the sender's balance alone. Check that it still passes once the discipline exists, then tick it.
-- [ ] `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` (SC-A01-15)
+- [x] `unit::payments::a_covered_payment_waits_behind_an_uncovered_one_of_the_same_priority` (SC-A01-11)
+- [x] `unit::payments::a_queued_urgent_payment_blocks_the_banks_normal_payments` (SC-A01-12)
+- [x] `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` (SC-A01-13). Passed since Flow 5, and still passes with the discipline.
+- [x] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). Passed since Flow 5, and still passes with the discipline, which looks at the sender's queues alone.
+- [x] `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` (SC-A01-15)
+- [x] `unit::payments::a_covered_urgent_payment_waits_behind_an_uncovered_urgent_one` (SC-A01-17). Added in Flow 6, since no other test checks FIFO within the urgent priority; it fails if an urgent payment ignores the bank's queued urgent ones.
 
 ## Flow 7: the queue cap, ADR-0010 (2)
 
@@ -342,6 +343,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 5) | 37 |
-| Still to fix (Flows 6 to 21) | 112 |
-| All | 149 |
+| Already green (Flows 0 to 6) | 43 |
+| Still to fix (Flows 7 to 21) | 107 |
+| All | 150 |
+
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17.
