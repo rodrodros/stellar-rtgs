@@ -1,0 +1,15 @@
+# Rust's output directory
+target
+
+# Soroban test snapshots: regenerated on every test run, never reviewed
+**/test_snapshots/
+
+# Local settings and network config written by stellar-cli
+.soroban
+.stellar
+
+# Quint regeneration output (committed traces live in quint/traces/)
+quint-regen/
+
+node_modules/
+.DS_Store

@@ -1,0 +1,5 @@
+# Pinned by the research handbook (stellar-research/handbook/01-toolchain.md).
+[toolchain]
+channel = "1.99.1"
+targets = ["wasm32v1-none"]
+components = ["rustfmt", "clippy"]
