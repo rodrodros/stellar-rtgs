@@ -4,8 +4,8 @@
 #   1. Simulation shows whose authorization the call needs: the bank's, and only the bank's.
 #   2. Another account signs and submits deposit(bank, 1) itself. The network refuses it at
 #      the bank's require_auth (Error(Auth, InvalidAction)) and nothing moves. Unlike the
-#      checks in deposit-failures.sh this one is submitted, so the sender pays the fee and
-#      uses its sequence number (C-HB-162, C-HB-163).
+#      checks in pending/deposit-failures.sh this one is submitted, so the sender pays the
+#      fee and uses its sequence number (C-HB-162, C-HB-163).
 # ADR-0013: no business day, so A11's phase=Open guard has no counterpart here.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -16,7 +16,7 @@ bank="$(addr it-auth-bank)"
 other="$(addr it-auth-other)"
 sac="$(issue_cash_token "$issuer")"
 open_bank "$issuer" it-auth-bank 1000
-contract="$(deploy_settlement it-auth-other "$sac")"
+contract="$(deploy_settlement it-auth-other "$sac" "$(addr "$issuer")")"
 authorize_holder "$issuer" "$sac" "$contract" true
 
 # 1. Simulation records every require_auth. A simulation that fails also yields no auth

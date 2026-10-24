@@ -15,7 +15,7 @@ b2="$(addr it-dep-bank2)"
 sac="$(issue_cash_token "$issuer")"
 open_bank "$issuer" it-dep-bank1 1000
 open_bank "$issuer" it-dep-bank2 1000
-contract="$(deploy_settlement it-dep-bank1 "$sac")"
+contract="$(deploy_settlement it-dep-bank1 "$sac" "$(addr "$issuer")")"
 authorize_holder "$issuer" "$sac" "$contract" true
 log "cash token $sac, settlement $contract"
 start="$(latest_ledger)"

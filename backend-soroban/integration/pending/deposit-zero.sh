@@ -8,9 +8,9 @@
 # Today a zero deposit succeeds and publishes `deposited` with amount 0, and a negative one
 # fails only inside the SAC's transfer. The checks read the RPC's simulateTransaction, not
 # the CLI's wording: the diagnostic events must hold an error raised by the settlement
-# contract and no event at all from the SAC, which proves the SAC was never called. When the
-# contract's #[contracterror] lands, also check its code here, then move this file up into
-# integration/.
+# contract, InvalidAmount (Error(Contract, #1), SC-A11-03), and no event at all from the SAC,
+# which proves the SAC was never called. When deposit checks its amount, this passes: move it
+# up into integration/.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
 
@@ -19,7 +19,7 @@ issuer=it-zero-issuer
 bank="$(addr it-zero-bank)"
 sac="$(issue_cash_token "$issuer")"
 open_bank "$issuer" it-zero-bank 1000
-contract="$(deploy_settlement it-zero-bank "$sac")"
+contract="$(deploy_settlement it-zero-bank "$sac" "$(addr "$issuer")")"
 authorize_holder "$issuer" "$sac" "$contract" true
 start="$(latest_ledger)"
 
@@ -28,6 +28,8 @@ for amount in 0 -5; do
     deposit --bank "$bank" --amount "$amount")"
   sim="$(rpc simulateTransaction "{\"transaction\":\"$tx\",\"xdrFormat\":\"json\"}")"
   [ "$(jq -r '.result.error // empty' <<<"$sim")" ] || die "deposit($amount) simulates successfully; it should be refused"
+  check "deposit($amount): the error (InvalidAmount)" \
+    "$(jq -r .result.error <<<"$sim" | grep -Eo 'Error\(Contract, #[0-9]+\)' | head -1)" "Error(Contract, #1)"
   check "deposit($amount): diagnostic events from the SAC" \
     "$(jq --arg sac "$sac" '[.result.eventsJson[]? | select(.event.contract_id == $sac)] | length' <<<"$sim")" 0
   check "deposit($amount): a contract error raised by the settlement contract" \

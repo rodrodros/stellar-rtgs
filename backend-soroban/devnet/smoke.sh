@@ -24,7 +24,10 @@ stellar tx new payment --source-account impl-issuer --destination "$bank" --asse
 sac="$(stellar contract asset deploy --asset "$asset" --source-account impl-issuer)"
 log "cash token SAC $sac"
 
-contract="$(stellar contract deploy --wasm "$wasm" --source-account impl-bank -- --token "$sac")"
+# The constructor takes the cash token, the central bank (the token's issuer, ADR-0011) and
+# the Config; these values are the unit tests' default_config().
+contract="$(stellar contract deploy --wasm "$wasm" --source-account impl-bank -- --token "$sac" --cb "$issuer" \
+  --config '{"queue_cap":16,"expiry_secs":86400,"repo_term_secs":86400,"penalty_rate_bps":500}')"
 log "settlement contract $contract"
 
 stellar contract invoke --id "$contract" --source-account impl-bank -- deposit --bank "$bank" --amount 600 >/dev/null

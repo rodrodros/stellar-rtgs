@@ -20,7 +20,7 @@ issuer=it-ref-issuer
 bank="$(addr it-ref-bank)"
 sac="$(issue_cash_token "$issuer")"
 open_bank "$issuer" it-ref-bank 1000
-contract="$(deploy_settlement it-ref-bank "$sac")"
+contract="$(deploy_settlement it-ref-bank "$sac" "$(addr "$issuer")")"
 authorize_holder "$issuer" "$sac" "$contract" true
 deposit it-ref-bank "$contract" 600 >/dev/null
 

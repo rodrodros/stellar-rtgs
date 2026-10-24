@@ -15,6 +15,10 @@ die() { log "ERROR: $*"; exit 1; }
 WASM="$repo/target/wasm32v1-none/release/settlement.wasm"
 # What deposit's extend_ttl sets: 30 days of 5-second ledgers (contracts/settlement/src/lib.rs).
 BUMP_AMOUNT=518400
+# The constructor's Config, the same as the unit tests' default_config()
+# (contracts/settlement/src/tests/support.rs): room for 16 queued payments, a one-day expiry
+# (ADR-0015) and a one-day repo term with a 5% penalty rate (ADR-0014).
+CONFIG='{"queue_cap":16,"expiry_secs":86400,"repo_term_secs":86400,"penalty_rate_bps":500}'
 
 [ -f "$WASM" ] || die "no $WASM; run make build"
 rpc_healthy >/dev/null 2>&1 || die "RPC at $IMPL_URL/rpc is not healthy; run make devnet-up (IMPL_NAME=$IMPL_NAME IMPL_PORT=$IMPL_PORT)"
@@ -96,11 +100,13 @@ open_bank() {
     --asset "$asset" --amount "$3" >/dev/null
 }
 
-# deploy_settlement <deployer> <sac>: deploys the settlement contract with the SAC as its
-# cash token (ADR-0004). Prints its contract ID. The contract can't hold USD until
+# deploy_settlement <deployer> <sac> <cb>: deploys the settlement contract with the SAC as its
+# cash token (ADR-0004), <cb> (a G-address) as the central bank, the token's issuer
+# (ADR-0011), and $CONFIG. Prints its contract ID. The contract can't hold USD until
 # authorize_holder runs.
 deploy_settlement() {
-  stellar contract deploy -q --source-account "$1" --wasm "$WASM" -- --token "$2"
+  stellar contract deploy -q --source-account "$1" --wasm "$WASM" -- \
+    --token "$2" --cb "$3" --config "$CONFIG"
 }
 
 # authorize_holder <issuer> <sac> <contract> <true|false>: the SAC admin sets whether the

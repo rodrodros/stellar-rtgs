@@ -23,7 +23,7 @@ issuer=it-haz-issuer
 bank="$(addr it-haz-bank)"
 sac="$(issue_cash_token "$issuer")"
 open_bank "$issuer" it-haz-bank 1000
-contract="$(deploy_settlement it-haz-bank "$sac")"
+contract="$(deploy_settlement it-haz-bank "$sac" "$(addr "$issuer")")"
 authorize_holder "$issuer" "$sac" "$contract" true
 deposit it-haz-bank "$contract" 600 >/dev/null
 check "S1 before: USD held by the contract = balance(bank)" "$(view it-haz-bank "$sac" balance --id "$contract")" 600
@@ -36,7 +36,8 @@ check "balance(bank) after a direct clawback" "$recorded" 600
 check "HAZARD: S1 broken (held - sum of balances)" "$((held - recorded))" -100
 
 authorize_holder "$issuer" "$sac" "$contract" false
-expect_fail "HAZARD: deposit into a frozen contract" 'Error\(Contract, #11\)' \
+# The SAC's #11 comes through today; #2 (TokenTransferFailed) once deposit maps it.
+expect_fail "HAZARD: deposit into a frozen contract" 'Error\(Contract, #(2|11)\)' \
   stellar contract invoke --source-account it-haz-bank --id "$contract" -- deposit --bank "$bank" --amount 100
 
 log "PASS issuer-powers-hazard (the hazard is still there)"
