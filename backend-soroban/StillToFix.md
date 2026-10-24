@@ -46,12 +46,12 @@ Store `config` and `cb` in `__constructor`, and implement the `config()` and `ce
 
 Refuse `amount <= 0` with `InvalidAmount` before calling the SAC. Move the money with `try_transfer`, and report a refused transfer as `TokenTransferFailed`.
 
-- [ ] `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` (SC-A11-03)
-- [ ] `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` (SC-A11-04)
-- [ ] `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` (SC-A11-05)
-- [ ] `unit::funding::a_deauthorized_bank_cannot_deposit` (SC-A11-15)
+- [x] `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` (SC-A11-03)
+- [x] `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` (SC-A11-04)
+- [x] `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` (SC-A11-05)
+- [x] `unit::funding::a_deauthorized_bank_cannot_deposit` (SC-A11-15)
 
-After this flow, `integration/pending/deposit-failures.sh` and `integration/pending/deposit-zero.sh` may report `NOW PASSES`. If they do, move them up into `integration/` (TESTING.md §4).
+After this flow, `integration/pending/deposit-failures.sh` and `integration/pending/deposit-zero.sh` reported `NOW PASSES`, so they moved up into `integration/` (TESTING.md §4).
 
 ## Flow 3: withdraw, A11 out of the contract (8)
 

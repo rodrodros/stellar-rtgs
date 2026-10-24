@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
-# PENDING (red until the contract guards its amounts). A11's guard requires x > 0 (definition
-# §4; S4: a balance changes only by a real action). The settlement contract must refuse a
-# deposit of 0 or less itself, with its own error, before it calls the SAC: nothing moves and
-# no `deposited` event is published.
+# A11's guard requires x > 0 (definition §4; S4: a balance changes only by a real action), on
+# the local devnet (SC-IT-06 in tests/SCENARIOS.md; ADR-0004). The settlement contract
+# refuses a deposit of 0 or less itself, with its own error, before it calls the SAC: nothing
+# moves and no `deposited` event is published.
 # ADR-0013: no business day, so A11's phase=Open guard has no counterpart here; x > 0 stays.
 #
-# Today a zero deposit succeeds and publishes `deposited` with amount 0, and a negative one
-# fails only inside the SAC's transfer. The checks read the RPC's simulateTransaction, not
-# the CLI's wording: the diagnostic events must hold an error raised by the settlement
-# contract, InvalidAmount (Error(Contract, #1), SC-A11-03), and no event at all from the SAC,
-# which proves the SAC was never called. When deposit checks its amount, this passes: move it
-# up into integration/.
+# The checks read the RPC's simulateTransaction, not the CLI's wording: the diagnostic events
+# must hold an error raised by the settlement contract, InvalidAmount (Error(Contract, #1),
+# SC-A11-03), and no event at all from the SAC, which proves the SAC was never called.
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 new_ids it-zero-issuer it-zero-bank
 issuer=it-zero-issuer

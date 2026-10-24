@@ -36,8 +36,8 @@ check "balance(bank) after a direct clawback" "$recorded" 600
 check "HAZARD: S1 broken (held - sum of balances)" "$((held - recorded))" -100
 
 authorize_holder "$issuer" "$sac" "$contract" false
-# The SAC's #11 comes through today; #2 (TokenTransferFailed) once deposit maps it.
-expect_fail "HAZARD: deposit into a frozen contract" 'Error\(Contract, #(2|11)\)' \
+# The SAC refuses the transfer, and deposit reports it as TokenTransferFailed (#2).
+expect_fail "HAZARD: deposit into a frozen contract" 'Error\(Contract, #2\)' \
   stellar contract invoke --source-account it-haz-bank --id "$contract" -- deposit --bank "$bank" --amount 100
 
 log "PASS issuer-powers-hazard (the hazard is still there)"

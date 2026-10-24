@@ -9,6 +9,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - a local devnet with a smoke test;
 - CI;
 - the contract's constructor and `deposit`, with their unit tests, and the `balance`, `config` and `central_bank` views;
+- `deposit`'s guards: it refuses an amount of 0 or less with `InvalidAmount`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
 Payments, queues, offsetting and credit come next, test first.

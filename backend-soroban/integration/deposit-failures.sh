@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
-# PENDING (red until deposit maps a refused transfer to its own error). A11's failures on the
-# local devnet, under ADR-0003's issuer flags. The SAC refuses the transfer in each case, and
-# the settlement contract must report that as TokenTransferFailed, Error(Contract, #2)
-# (SC-A11-04, SC-A11-15 in tests/SCENARIOS.md):
+# A11's failures on the local devnet, under ADR-0003's issuer flags (SC-IT-03 to SC-IT-05 in
+# tests/SCENARIOS.md). The SAC refuses the transfer in each case, and the settlement contract
+# reports that as its own TokenTransferFailed, Error(Contract, #2), as in SC-A11-04 and
+# SC-A11-15, not as the SAC's #11 (not authorized) or #10 (balance too low):
 #   - a contract the issuer has not yet authorized as a holder;
 #   - an overdraw;
 #   - a frozen bank (trustline deauthorized by the issuer).
 # Each one fails in simulation, so the CLI never submits it: no fee is charged and the
 # sequence number is not used (C-HB-162, C-HB-163), and S1 and S4 hold because nothing moves.
-# Today the SAC's own errors come through instead: #11 (not authorized) and #10 (balance
-# too low). When deposit maps them, this passes: move it up into integration/.
 # ADR-0013: no business day, so A11's phase=Open guard has no counterpart here.
 set -euo pipefail
-source "$(dirname "${BASH_SOURCE[0]}")/../lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 new_ids it-fail-issuer it-fail-bank it-fail-frozen
 issuer=it-fail-issuer

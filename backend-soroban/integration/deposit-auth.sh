@@ -4,7 +4,7 @@
 #   1. Simulation shows whose authorization the call needs: the bank's, and only the bank's.
 #   2. Another account signs and submits deposit(bank, 1) itself. The network refuses it at
 #      the bank's require_auth (Error(Auth, InvalidAction)) and nothing moves. Unlike the
-#      checks in pending/deposit-failures.sh this one is submitted, so the sender pays the
+#      checks in deposit-failures.sh this one is submitted, so the sender pays the
 #      fee and uses its sequence number (C-HB-162, C-HB-163).
 # ADR-0013: no business day, so A11's phase=Open guard has no counterpart here.
 set -euo pipefail

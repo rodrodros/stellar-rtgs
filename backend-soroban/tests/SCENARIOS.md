@@ -9,7 +9,7 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - `integration/…` rows (SC-IT, SC-H) run on the local devnet (TESTING.md §4). They cover what the test host can't show: issuer flags, trustlines, real signatures, RPC and on-chain TTL.
 - `itf_replay::…` stands for `tests::itf_replay::…`, and `qnt::…` for a `run` in `quint/settlement_test.qnt`.
 
-**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01, SC-A11-02, SC-A11-13, SC-A11-14, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02). Every other test fails against `todo!()` stubs, or against `deposit`'s missing checks, until it is implemented test first.
+**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-05, SC-A11-13 to SC-A11-15, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). Every other test fails against `todo!()` stubs until it is implemented test first.
 
 ## A11 `LiquidityTransfer`: deposit and withdraw
 
@@ -241,10 +241,10 @@ Each row runs under ADR-0003's issuer flags, with the bank trustlines and the co
 |---|---|---|---|---|---|---|
 | SC-IT-01 | banks B1 and B2 hold 1,000 each; the contract is an authorized holder | B1 deposits 100, then 200; B2 deposits 50 | each transaction is final (`SUCCESS`); `balance` = 300 and 50; the trustlines hold 700 and 950; the contract holds 350 = Σ balances; `deposited` events B1:100, B1:200, B2:50 in that order; stored `Balance(B1)` = 300; the TTL of `Balance(B1)` and of the instance is `BUMP_AMOUNT` from the first deposit | A11, S1, S4, S6 | 0003, 0004, 0005 | `integration/deposit.sh` |
 | SC-IT-02 | B holds 1,000; another account A holds only its own key | A signs and submits `deposit(B, 1)` | simulation succeeds and needs B's authorization, and only B's; the network refuses the submitted transaction at B's `require_auth` (`Error(Auth, InvalidAction)`); nothing moves; A pays the fee and uses its sequence number | A11, S6 | 0004 | `integration/deposit-auth.sh` |
-| SC-IT-03 | the issuer hasn't yet authorized the contract as a holder | B deposits 100 | `TokenTransferFailed` (`Error(Contract, #2)`); nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/pending/deposit-failures.sh` (**pending**: today the SAC's #11 comes through) |
-| SC-IT-04 | B's trustline holds 600 | B deposits 601 | `TokenTransferFailed` (`Error(Contract, #2)`), as in SC-A11-04; nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/pending/deposit-failures.sh` (**pending**: today the SAC's #10 comes through) |
-| SC-IT-05 | the issuer has frozen B's trustline | B deposits 100 | `TokenTransferFailed` (`Error(Contract, #2)`), as in SC-A11-15; `balance(B)` = 0 and S1 holds | A11, S1, S6 | 0003 | `integration/pending/deposit-failures.sh` (**pending**: today the SAC's #11 comes through) |
-| SC-IT-06 | B holds 1,000 | B deposits 0, or −5 | `InvalidAmount` (`Error(Contract, #1)`), as in SC-A11-03, raised before the contract calls the SAC (simulation has no diagnostic event from the SAC); nothing moves; no `deposited` event | A11 (guard x > 0), S4 | 0004 | `integration/pending/deposit-zero.sh` (**pending**) |
+| SC-IT-03 | the issuer hasn't yet authorized the contract as a holder | B deposits 100 | `TokenTransferFailed` (`Error(Contract, #2)`); nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-04 | B's trustline holds 600 | B deposits 601 | `TokenTransferFailed` (`Error(Contract, #2)`), as in SC-A11-04; nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-05 | the issuer has frozen B's trustline | B deposits 100 | `TokenTransferFailed` (`Error(Contract, #2)`), as in SC-A11-15; `balance(B)` = 0 and S1 holds | A11, S1, S6 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-06 | B holds 1,000 | B deposits 0, or −5 | `InvalidAmount` (`Error(Contract, #1)`), as in SC-A11-03, raised before the contract calls the SAC (simulation has no diagnostic event from the SAC); nothing moves; no `deposited` event | A11 (guard x > 0), S4 | 0004 | `integration/deposit-zero.sh` |
 
 ## Known hazards
 

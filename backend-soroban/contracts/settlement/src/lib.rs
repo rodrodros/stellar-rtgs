@@ -270,13 +270,26 @@ impl Settlement {
     }
 
     /// Moves `amount` of the cash token from `bank` into this contract and credits the
-    /// bank's settlement balance.
+    /// bank's settlement balance. An amount of 0 or less is refused with `InvalidAmount`
+    /// before the SAC is called. Whatever the SAC refuses (too low a holding, a holder not
+    /// authorized, an overflow, a transfer the bank did not authorize) is reported as
+    /// `TokenTransferFailed`.
     pub fn deposit(env: Env, bank: Address, amount: i128) -> Result<(), Error> {
         bank.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
         let instance = env.storage().instance();
         instance.extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
         let token: Address = instance.get(&DataKey::Token).unwrap();
-        token::Client::new(&env, &token).transfer(&bank, env.current_contract_address(), &amount);
+        let moved = token::Client::new(&env, &token).try_transfer(
+            &bank,
+            env.current_contract_address(),
+            &amount,
+        );
+        if !matches!(moved, Ok(Ok(()))) {
+            return Err(Error::TokenTransferFailed);
+        }
         let key = DataKey::Balance(bank.clone());
         let balance = Self::balance(env.clone(), bank.clone()) + amount;
         let persistent = env.storage().persistent();
