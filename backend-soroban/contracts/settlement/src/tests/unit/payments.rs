@@ -298,6 +298,19 @@ fn cpss_box_4_strict_fifo_settles_only_the_first_payment() {
     s.assert_conserved();
 }
 
+/// SC-A01-17. S7(b), ADR-0008, ADR-0009: FIFO holds within the urgent priority too. A
+/// covered urgent payment queues behind an uncovered older urgent one.
+#[test]
+fn a_covered_urgent_payment_waits_behind_an_uncovered_urgent_one() {
+    let s = Setup::funded(&[50, 0]);
+    let c = s.client();
+    let head = c.submit(s.bank(0), s.bank(1), &60, &U);
+    let behind = c.submit(s.bank(0), s.bank(1), &10, &U);
+    assert_eq!(s.queue(0, U), std::vec![head, behind]);
+    assert_eq!(c.payment(&behind).unwrap().status, Status::Queued);
+    assert_eq!(s.balances(), std::vec![50, 0]);
+}
+
 // ---------------------------------------------------------------------------------------
 // The eager closure: every covered head settles in the transaction that covers it
 

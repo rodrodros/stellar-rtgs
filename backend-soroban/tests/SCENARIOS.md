@@ -55,6 +55,7 @@ A11's guard `phase = Open` does not apply, since there is no business day (ADR-0
 | SC-A01-13 | A has 50, queues normal 60 | A pays urgent 10 | the 10 settles at once | S7(a) | 0009 | `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` |
 | SC-A01-14 | A's queue blocked; B has 50 | B pays 50 | settles | §4.5 `≺` | 0008 | `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` |
 | SC-A01-15 | CPSS Box 4: A has 100 | A queues 40, 70, 20, 30, 10 | only the 40 settles | S7, §4.11 | 0008 | `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` |
+| SC-A01-17 | A has 50, queues urgent 60 | A pays urgent 10 | the 10 queues behind the 60 | S7(b) | 0008, 0009 | `unit::payments::a_covered_urgent_payment_waits_behind_an_uncovered_urgent_one` |
 | SC-A01-16 | any | submit by the sender, by no one, by the receiver | the sender's tree only; the others fail | S6 | — | `auth::submit_is_authorized_by_the_sender_alone`, `auth::submit_without_the_senders_authorization_fails`, `auth::the_receiver_cannot_submit_a_payment_from_the_sender` |
 
 ## A2 `Settle`: the eager closure
