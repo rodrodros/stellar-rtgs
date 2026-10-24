@@ -62,14 +62,14 @@ After this flow, `integration/pending/deposit-failures.sh` and `integration/pend
 - a `try_transfer` out, where a refusal is `TokenTransferFailed`;
 - the `Withdrawn` event.
 
-- [ ] `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` (SC-A11-06)
-- [ ] `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` (SC-A11-07)
-- [ ] `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` (SC-A11-08)
-- [ ] `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` (SC-A11-09)
-- [ ] `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` (SC-A11-10)
-- [ ] `unit::funding::a_withdrawal_to_a_deauthorized_bank_is_refused` (SC-A11-16)
-- [ ] `auth::withdraw_is_authorized_by_the_bank_alone` (SC-A11-12)
-- [ ] `auth::withdraw_without_the_banks_authorization_fails` (SC-A11-12)
+- [x] `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` (SC-A11-06)
+- [x] `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` (SC-A11-07)
+- [x] `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` (SC-A11-08)
+- [x] `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` (SC-A11-09)
+- [x] `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` (SC-A11-10)
+- [x] `unit::funding::a_withdrawal_to_a_deauthorized_bank_is_refused` (SC-A11-16)
+- [x] `auth::withdraw_is_authorized_by_the_bank_alone` (SC-A11-12)
+- [x] `auth::withdraw_without_the_banks_authorization_fails` (SC-A11-12)
 
 ## Flow 4: the kernel's `covers` (1)
 

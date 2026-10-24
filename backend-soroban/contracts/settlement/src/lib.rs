@@ -1,9 +1,9 @@
 //! The RTGS settlement contract: one contract holds the cash token and keeps every
 //! bank's settlement balance (ADR-0004).
 //!
-//! Only the constructor, `deposit` and the `balance`, `config` and `central_bank` views
-//! are implemented. The other entry points are stubs whose unit tests (`src/tests/`) are
-//! written and red; they are implemented test first (TESTING.md).
+//! Only the constructor, `deposit`, `withdraw` and the `balance`, `config` and
+//! `central_bank` views are implemented. The other entry points are stubs whose unit
+//! tests (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -253,6 +253,28 @@ pub struct RepoPenalised {
     pub rate_bps: u32,
 }
 
+/// Moves `amount` of the cash token from `from` to `to` through its SAC (ADR-0003), and
+/// extends the instance that records the token. Whatever the SAC refuses is reported as
+/// `TokenTransferFailed`.
+fn transfer(env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(), Error> {
+    let instance = env.storage().instance();
+    instance.extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+
+    let token: Address = instance.get(&DataKey::Token).unwrap();
+    match token::Client::new(env, &token).try_transfer(from, to, &amount) {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(Error::TokenTransferFailed),
+    }
+}
+
+/// Records the bank's settlement balance and extends its entry.
+fn set_balance(env: &Env, bank: &Address, balance: i128) {
+    let key = DataKey::Balance(bank.clone());
+    let persistent = env.storage().persistent();
+    persistent.set(&key, &balance);
+    persistent.extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+}
+
 #[contract]
 pub struct Settlement;
 
@@ -279,29 +301,31 @@ impl Settlement {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        let instance = env.storage().instance();
-        instance.extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
-        let token: Address = instance.get(&DataKey::Token).unwrap();
-        let moved = token::Client::new(&env, &token).try_transfer(
-            &bank,
-            env.current_contract_address(),
-            &amount,
-        );
-        if !matches!(moved, Ok(Ok(()))) {
-            return Err(Error::TokenTransferFailed);
-        }
-        let key = DataKey::Balance(bank.clone());
+        transfer(&env, &bank, &env.current_contract_address(), amount)?;
         let balance = Self::balance(env.clone(), bank.clone()) + amount;
-        let persistent = env.storage().persistent();
-        persistent.set(&key, &balance);
-        persistent.extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        set_balance(&env, &bank, balance);
         Deposited { bank, amount }.publish(&env);
         Ok(())
     }
 
-    /// Debits the bank's settlement balance and pays `amount` out in the cash token.
-    pub fn withdraw(_env: Env, _bank: Address, _amount: i128) -> Result<(), Error> {
-        todo!()
+    /// Debits the bank's settlement balance and pays `amount` out in the cash token. An
+    /// amount of 0 or less is refused with `InvalidAmount`, and one above the balance with
+    /// `InsufficientFunds`, before the SAC is called. A transfer the SAC refuses (a bank
+    /// not authorized to hold the token) is reported as `TokenTransferFailed`, and the
+    /// debit is rolled back with it.
+    pub fn withdraw(env: Env, bank: Address, amount: i128) -> Result<(), Error> {
+        bank.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let balance = Self::balance(env.clone(), bank.clone());
+        if balance < amount {
+            return Err(Error::InsufficientFunds);
+        }
+        set_balance(&env, &bank, balance - amount);
+        transfer(&env, &env.current_contract_address(), &bank, amount)?;
+        Withdrawn { bank, amount }.publish(&env);
+        Ok(())
     }
 
     /// A1: submits a payment and returns its id, then settles eagerly (A2, A3).

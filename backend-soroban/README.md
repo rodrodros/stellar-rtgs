@@ -4,12 +4,13 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - **The research foundation:** `../stellar-research/`. Start with its `README.md`.
 - **The decisions:** `../docs/adr/`.
 
-**Status, 2026-10-24.** Only the environment exists so far:
+**Status, 2026-10-24.** What exists so far:
 - the workspace, with toolchain pins;
 - a local devnet with a smoke test;
 - CI;
-- the contract's constructor and `deposit`, with their unit tests, and the `balance`, `config` and `central_bank` views;
+- the contract's constructor, `deposit` and `withdraw`, with the unit tests that exercise only them, and the `balance`, `config` and `central_bank` views;
 - `deposit`'s guards: it refuses an amount of 0 or less with `InvalidAmount`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
+- `withdraw`'s guards: it refuses an amount of 0 or less with `InvalidAmount` and one above the balance with `InsufficientFunds`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
 Payments, queues, offsetting and credit come next, test first.
@@ -48,11 +49,12 @@ Prerequisites:
 | `AGENTS.md` | Rules for agents working here |
 | `TESTING.md` | How to add each kind of test |
 
-## To do: decisions to make
+## To do
 
-Behaviours the ADRs leave open. Each needs a decision from the user, then a test that pins it.
+Two kinds of item. A behaviour the ADRs leave open needs a decision from the user, then a test that pins it. A test still to write needs only the test.
 
 - [ ] **Decide whether an expired payment can still settle.** ADR-0015 says a keeper rejects a payment once its expiry has passed. Until that happens, can the payment still settle if an incoming payment or a deposit covers it? Today no test decides this.
 - [x] **The penalty rate is recorded but not charged (ADR-0014).** Decided with the user on 2026-10-24: a penalty repo carries only its status and its rate, and no interest accrues. Conversion mints and burns nothing. This is recorded in the header of `contracts/settlement/src/tests/unit/credit.rs`.
 - [ ] **Decide what the queue cap does to an offset (ADR-0010).** The queue is full, and a new payment is not covered alone but would settle at once in an offset that includes it. Is it refused with `QueueFull`, or does it settle? `the_queue_cap_refuses_only_payments_that_would_queue` only tests a payment covered on its own.
 - [ ] **Decide who holds the cash token's SAC admin role.** In the tests, the central bank's own account is the issuer and so the admin, and it authorizes the mint inside `open_repo`. As admin, that account can also claw back from or deauthorize the settlement contract outside the contract's recorded A16 path, which breaks S1 or freezes the RTGS (review finding H1, ADR-0006). The alternative is an issuance controller contract that holds the admin role. The `Setup` doc comment and SCENARIOS.md (the A12 section) mark the current choice as provisional.
+- [ ] **Add a devnet scenario for `withdraw`.** `integration/` covers only `deposit`. An `integration/withdraw.sh` (TESTING.md §4) would check on the network what the test host can't: that the bank's own signature is the only one `withdraw` needs (SC-A11-12), that a withdrawal to a trustline the issuer has frozen is refused with `TokenTransferFailed` and leaves the balance unchanged (SC-A11-16), the `withdrawn` event, and the TTL of `Balance(B)` after the withdrawal.

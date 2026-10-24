@@ -9,7 +9,7 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - `integration/…` rows (SC-IT, SC-H) run on the local devnet (TESTING.md §4). They cover what the test host can't show: issuer flags, trustlines, real signatures, RPC and on-chain TTL.
 - `itf_replay::…` stands for `tests::itf_replay::…`, and `qnt::…` for a `run` in `quint/settlement_test.qnt`.
 
-**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-05, SC-A11-13 to SC-A11-15, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). Every other test fails against `todo!()` stubs until it is implemented test first.
+**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards, `withdraw` and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-10, SC-A11-12 to SC-A11-16, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). Every other test fails against `todo!()` stubs until it is implemented test first.
 
 ## A11 `LiquidityTransfer`: deposit and withdraw
 
