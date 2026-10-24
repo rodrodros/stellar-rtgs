@@ -39,3 +39,12 @@ Prerequisites:
 | `.github/workflows/ci.yml` | CI, which mirrors `make lint test build`. It has not run on GitHub, because this repo is not pushed |
 | `AGENTS.md` | Rules for agents working here |
 | `TESTING.md` | How to add each kind of test |
+
+## To do: decisions to make
+
+Behaviours the ADRs leave open. Each needs a decision from the user, then a test that pins it.
+
+- [ ] **Decide whether an expired payment can still settle.** ADR-0015 says a keeper rejects a payment once its expiry has passed. Until that happens, can the payment still settle if an incoming payment or a deposit covers it? Today no test decides this.
+- [x] **The penalty rate is recorded but not charged (ADR-0014).** Decided with the user on 2026-10-24: a penalty repo carries only its status and its rate, and no interest accrues. Conversion mints and burns nothing. This is recorded in the header of `contracts/settlement/src/tests/unit/credit.rs`.
+- [ ] **Decide what the queue cap does to an offset (ADR-0010).** The queue is full, and a new payment is not covered alone but would settle at once in an offset that includes it. Is it refused with `QueueFull`, or does it settle? `the_queue_cap_refuses_only_payments_that_would_queue` only tests a payment covered on its own.
+- [ ] **Decide who holds the cash token's SAC admin role.** In the tests, the central bank's own account is the issuer and so the admin, and it authorizes the mint inside `open_repo`. As admin, that account can also claw back from or deauthorize the settlement contract outside the contract's recorded A16 path, which breaks S1 or freezes the RTGS (review finding H1, ADR-0006). The alternative is an issuance controller contract that holds the admin role. The `Setup` doc comment and SCENARIOS.md (the A12 section) mark the current choice as provisional.
