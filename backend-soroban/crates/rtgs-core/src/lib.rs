@@ -3,7 +3,7 @@
 //! This crate has no soroban-sdk dependency and no `Env`, so its rules can be tested
 //! natively, property-tested and proved with Kani, which cannot compile the soroban-sdk
 //! test host (C-ST-059). The settlement contract calls it. Its rules are stubs whose
-//! unit tests (below) are written and red; see TESTING.md, "Property tests".
+//! unit tests (below) are written and red; see TESTING.md, "Property and state-machine tests".
 #![no_std]
 
 extern crate alloc;
@@ -36,6 +36,9 @@ pub fn covers(_balance: i128, _amount: i128) -> bool {
 pub fn greatest_feasible_prefix(_balances: &[i128], _queues: &[Vec<Candidate>]) -> Vec<usize> {
     todo!()
 }
+
+#[cfg(test)]
+mod props;
 
 #[cfg(test)]
 mod tests {

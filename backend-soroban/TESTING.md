@@ -1,6 +1,6 @@
 # Testing guide
 
-How to add each kind of test. Three layers exist today: unit and auth tests (§1), model-based tests (§3) and integration tests on the devnet (§4). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
+How to add each kind of test. Four layers exist today: unit and auth tests (§1), property and state-machine tests (§2), model-based tests (§3) and integration tests on the devnet (§4). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
 
 All commands come from the research handbook, which ran each of them on this machine: `../stellar-research/handbook/04-testing.md`. A worked example of every layer is in `../stellar-research/stellar/testing/lab/`. Copy from it, but keep this repo's names.
 
@@ -68,7 +68,7 @@ All commands come from the research handbook, which ran each of them on this mac
 **Traps:**
 - **Shrinking is degraded through `SorobanArbitrary`.** Generate plain Rust values, such as indexes into a bank list, and build the soroban values from them.
 - **Keep the cases small.** Each one builds a whole `Env`.
-- **Pin a seed for CI.** Let a nightly job explore more.
+- **Pin a seed for CI.** `make test` runs every property with the fixed seed and case count in its `config()`. To explore further, set `PROPTEST_RNG_SEED` and `PROPTEST_CASES`, which override both: `PROPTEST_RNG_SEED=12345 PROPTEST_CASES=1000 cargo test -p settlement state_machine`. No scheduled job does this yet.
 
 ## 3. Model-based tests: Quint traces replayed against the contract
 

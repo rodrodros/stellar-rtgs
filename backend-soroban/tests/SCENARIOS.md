@@ -5,9 +5,10 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - Deposit and withdraw are A11 (definition §5.5): a transfer between a bank's trustline holding of the cash token and its settlement balance in the contract.
 - `storage::` rows (SC-ST) are about the ledger, not the model: storage lifetime and transaction cost.
 - Test paths are relative to the `settlement` crate: `unit::…` stands for `tests::unit::…`, and `auth::…` for `tests::auth::…`.
-- `core::…` stands for `rtgs_core::tests::…`.
+- `core::…` stands for `rtgs_core::tests::…`, and `core::props::…` for `rtgs_core::props::…`.
 - `integration/…` rows (SC-IT, SC-H) run on the local devnet (TESTING.md §4). They cover what the test host can't show: issuer flags, trustlines, real signatures, RPC and on-chain TTL.
 - `itf_replay::…` stands for `tests::itf_replay::…`, and `qnt::…` for a `run` in `quint/settlement_test.qnt`.
+- `props::…`, `state_machine::…` stand for `tests::props::…`, `tests::state_machine::…`.
 
 **Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards, `withdraw` and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-10, SC-A11-12 to SC-A11-16, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). Every other test fails against `todo!()` stubs until it is implemented test first.
 
@@ -220,6 +221,31 @@ The 64 of SC-ST-04 is provisional. ADR-0010 sizes the cap from ADR-0007's target
 ## Linked groups (F5, S16, S19)
 
 Not in v1: κ-proto has no groups. ADR-0010's eager group settlement waits for the definition's revision.
+
+## Properties over many inputs
+
+The property tests check a rule over generated inputs rather than one example (TESTING.md, layer 2). CI runs them with a pinned seed; set `PROPTEST_RNG_SEED` and `PROPTEST_CASES` to explore further.
+
+The state machine `state_machine::the_contract_refines_the_reference_model` replays random sequences of every entry point against a reference model of §4 under the ADRs, comparing each outcome and the whole state. It covers the state changes and error outcomes of the SC-A01 to SC-A08 and SC-A11 to SC-A20 rows, for positive amounts of 1 to 300 and the exact or one-over holdings, balances and repo amounts. It does not cover:
+- events;
+- authorization: every auth is mocked, so the `auth::` tests alone cover S6;
+- zero, negative or `i128`-extreme amounts, which SC-P-01 sends;
+- the queue cap, which SC-P-01 covers.
+
+**Expiry without lazy rejection (ADR-0015, provisional).** The ADR lets any call that meets an expired head reject it. v1 does not: a payment past its expiry stays queued, keeps blocking its queue, and can still settle or be revoked until `expire` is called (SC-A05-04, SC-A06-02). The model and SC-P-01's at-rest check assume this. It departs from S12, whose τ_rej forbids settling after the expiry. If ratification changes it, change the model's `settle` and `expire`.
+
+**Two requirements only SC-P-01 states.** Settling debits before it credits, or books net amounts: crediting first overflows on opposite `i128::MAX` payments. A refused SAC call, such as an `open_repo` mint that would overflow the contract's holding, comes back as a contract error, not a host abort.
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-P-01 | 3 banks, `queue_cap` 6, expiry and term 100 s | any sequence of calls, with zero, negative, exact, one-over and `i128` extreme amounts, unknown ids and time steps | every failure is a contract error; after each call: tokens held = Σ balances = net deposits + repos − repayments; no negative balance; final payments unchanged; settled payments precede, in `≺`, every payment their sender still queues; payments valid; queue views match statuses, under the cap; k* = 0; `cr + ovn ≤ coll` and they match the repos | S1, S2, S3, S5, S7, S9, S11, S17, S21, S23 | 0004, 0005, 0008–0011, 0014–0016, 0018 | `props::the_safety_invariants_hold_for_any_call_sequence` |
+| SC-P-02 | 3 banks | random call sequences | the contract matches the reference model call by call: outcome, balances, reserves, queues, payments, repos, credit | A1–A3, A5, A6, A8, A11–A14, A19, A20; S1–S5, S7, S9–S11, S13, S17, S21, S23; R4, R6 | 0004, 0005, 0008–0011, 0013–0018 | `state_machine::the_contract_refines_the_reference_model` |
+| SC-P-03 | any balance and amount in `i128` | `covers` | true exactly when balance ≥ amount, with no overflow | §4.5 `cov` | 0011, 0018 | `core::props::covers_is_exactly_balance_at_least_amount` |
+| SC-P-04 | 2–4 accounts, up to 3 candidates each | the prefix rule | k* is within every queue, feasible (F1), and the join of every feasible prefix vector, found by enumeration | R4, R9, S10 | 0010 | `core::props::the_prefix_is_within_every_queue`, `core::props::the_prefix_is_feasible`, `core::props::the_prefix_is_the_greatest_feasible_one` |
+| SC-P-05 | the same | relabel the accounts; raise a balance | k* relabels the same way; k* never shrinks | R4 | 0010 | `core::props::the_prefix_does_not_depend_on_the_account_order`, `core::props::more_liquidity_never_shrinks_the_prefix` |
+| SC-P-06 | the same | FIFO gross processing alone; the offset of k*, then the rule again | `k_seq ≤ k*`; nothing more is feasible | R5, R6, S23 | 0010 | `core::props::gross_processing_never_beats_the_offset`, `core::props::after_the_offset_nothing_more_is_feasible` |
+| SC-P-07 | a head larger than its bank's balance plus every inflow | the prefix rule | that bank's prefix is 0: no overtaking | F2, S7 | 0008, 0010 | `core::props::a_candidate_no_inflow_can_cover_blocks_its_queue` |
+| SC-P-08 | amounts at the `i128` limit | the prefix rule | no panic; an overflowing outflow is infeasible, an overflowing inflow covers any outflow; k* is still the greatest feasible prefix | R4, S2, S10 | 0010 | `core::props::overflowing_sums_are_infeasible_not_a_panic` |
 
 ## Model-based: Quint traces replayed (TESTING.md §3)
 
