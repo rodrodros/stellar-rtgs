@@ -1,9 +1,9 @@
 //! The RTGS settlement contract: one contract holds the cash token and keeps every
 //! bank's settlement balance (ADR-0004).
 //!
-//! Only `deposit` and `balance` are implemented. The other entry points are stubs whose
-//! unit tests (`src/tests/`) are written and red; they are implemented test first
-//! (TESTING.md).
+//! Only the constructor, `deposit` and the `balance`, `config` and `central_bank` views
+//! are implemented. The other entry points are stubs whose unit tests (`src/tests/`) are
+//! written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -14,7 +14,8 @@ use soroban_sdk::{
 };
 
 const DAY_IN_LEDGERS: u32 = 17_280;
-/// Every write extends the entry's TTL to about 30 days (handbook 06: extend every entry).
+/// Every entry point extends each entry it writes to about 30 days (handbook 06: extend
+/// every entry).
 const BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 const BUMP_THRESHOLD: u32 = BUMP_AMOUNT - DAY_IN_LEDGERS;
 
@@ -142,6 +143,8 @@ pub struct Repo {
 #[derive(Clone)]
 enum DataKey {
     Token,
+    CentralBank,
+    Config,
     /// One key per bank, so payments between different banks don't share a hot key
     /// (handbook 09 §3).
     Balance(Address),
@@ -257,8 +260,13 @@ pub struct Settlement;
 impl Settlement {
     /// `token` is the cash token's Stellar Asset Contract (ADR-0003), and `cb` the central
     /// bank: the token's issuer and the authority for credit (ADR-0011).
-    pub fn __constructor(env: Env, token: Address, _cb: Address, _config: Config) {
-        env.storage().instance().set(&DataKey::Token, &token);
+    pub fn __constructor(env: Env, token: Address, cb: Address, config: Config) {
+        // Not extended here: a new instance starts at the network's minimum persistent TTL
+        // (C-SC-045), and every entry point that writes extends it.
+        let instance = env.storage().instance();
+        instance.set(&DataKey::Token, &token);
+        instance.set(&DataKey::CentralBank, &cb);
+        instance.set(&DataKey::Config, &config);
     }
 
     /// Moves `amount` of the cash token from `bank` into this contract and credits the
@@ -360,12 +368,12 @@ impl Settlement {
         todo!()
     }
 
-    pub fn config(_env: Env) -> Config {
-        todo!()
+    pub fn config(env: Env) -> Config {
+        env.storage().instance().get(&DataKey::Config).unwrap()
     }
 
-    pub fn central_bank(_env: Env) -> Address {
-        todo!()
+    pub fn central_bank(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::CentralBank).unwrap()
     }
 }
 

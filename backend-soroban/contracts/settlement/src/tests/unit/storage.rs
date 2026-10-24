@@ -1,7 +1,9 @@
 //! Storage lifetime and cost: what the ledger charges and keeps, not what the model sees.
 //!
-//! - **TTL.** Every entry the contract writes is extended to about 30 days, so nothing it
-//!   needs is archived while the RTGS runs (handbook 06: extend every entry). The tests
+//! - **TTL.** Every entry point extends each entry it writes to about 30 days, so nothing
+//!   the contract needs is archived while the RTGS runs (handbook 06: extend every entry).
+//!   The constructor doesn't: a new instance starts at the network's minimum persistent
+//!   TTL (C-SC-045), and the first entry point that writes extends it. The tests
 //!   read the live-until ledger of every entry the contract owns from a ledger snapshot,
 //!   whatever its key, so an entry added while implementing is held to the rule without
 //!   a test naming it. The test host restores archived entries by itself (C-HB-131), so

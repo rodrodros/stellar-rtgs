@@ -8,7 +8,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - the workspace, with toolchain pins;
 - a local devnet with a smoke test;
 - CI;
-- one contract entry point, `deposit`, with its unit tests;
+- the contract's constructor and `deposit`, with their unit tests, and the `balance`, `config` and `central_bank` views;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
 Payments, queues, offsetting and credit come next, test first.

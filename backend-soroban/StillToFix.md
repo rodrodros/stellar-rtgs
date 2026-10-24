@@ -18,6 +18,8 @@ The ID in brackets is the test's row in `tests/SCENARIOS.md`.
 - **Run one flow** with `cargo test -p settlement <test name or module>`, or `cargo test -p rtgs-core` for the kernel flows.
 - **Gate.** Run `make lint test build` before handing a flow back. Every test green so far must stay green.
 - **TTL.** Extend every entry as you write it (`BUMP_THRESHOLD`, `BUMP_AMOUNT`). Flow 0's storage tests check every entry the contract owns, and Flow 20 runs every entry point.
+  - The constructor is the exception. A new instance starts at the network's minimum persistent TTL, about 120 days on Mainnet (C-SC-045), and the first entry point that writes extends it.
+  - Extending in the constructor would also turn SC-ST-01 and SC-ST-02 red. The test host constructs at ledger 0, so at their deposit on ledger 1,000 the instance is still above the threshold and is not extended again.
 - **When a test goes green,** tick its box. When a flow is done, update the status lines in `tests/SCENARIOS.md` and `README.md`.
 
 ## Flow 0: already green (9)
@@ -38,7 +40,7 @@ Keep these green.
 
 Store `config` and `cb` in `__constructor`, and implement the `config()` and `central_bank()` views.
 
-- [ ] `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` (SC-A11-13)
+- [x] `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` (SC-A11-13)
 
 ## Flow 2: deposit's guards (4)
 
