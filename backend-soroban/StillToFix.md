@@ -1,0 +1,318 @@
+# Still to fix
+
+This file lists every unit, auth, kernel and replay test, grouped into **execution flows**. A flow is one code path or one rule, and implementing it turns a set of tests green together. The flows are in order: each one needs only what the flows before it built.
+
+**Baseline, 2026-10-24.** There are 132 tests: 9 pass and 123 fail, against the `todo!()` stubs in `contracts/settlement/src/lib.rs` and `crates/rtgs-core/src/lib.rs`, and against `deposit`'s missing guards. To reproduce this, run `make build`, then `cargo test --workspace --locked --no-fail-fast`. Plain `make test` stops at the first crate that fails.
+
+Test paths follow `tests/SCENARIOS.md`:
+- `unit::…` stands for `tests::unit::…`;
+- `auth::…` for `tests::auth::…`;
+- `itf_replay::…` for `tests::itf_replay::…`, all in the `settlement` crate;
+- `core::…` for `rtgs_core::tests::…`.
+
+The ID in brackets is the test's row in `tests/SCENARIOS.md`.
+
+## Rules for every flow
+
+- **Red, green, refactor (AGENTS.md).** The tests already exist. First run the flow's tests and check that each one fails for the reason you expect. Then write the least code that passes them, and refactor.
+- **Run one flow** with `cargo test -p settlement <test name or module>`, or `cargo test -p rtgs-core` for the kernel flows.
+- **Gate.** Run `make lint test build` before handing a flow back. Every test green so far must stay green.
+- **TTL.** Extend every entry as you write it (`BUMP_THRESHOLD`, `BUMP_AMOUNT`). Flow 0's storage tests check every entry the contract owns, and Flow 20 runs every entry point.
+- **When a test goes green,** tick its box. When a flow is done, update the status lines in `tests/SCENARIOS.md` and `README.md`.
+
+## Flow 0: already green (9)
+
+Keep these green.
+
+- [x] `unit::funding::deposit_moves_tokens_into_the_contract_and_credits_the_bank` (SC-A11-01)
+- [x] `unit::funding::deposit_of_exactly_the_banks_holding_succeeds_and_deposits_add_up` (SC-A11-02)
+- [x] `unit::funding::balance_of_an_unknown_bank_is_zero` (SC-A11-14)
+- [x] `auth::deposit_is_authorized_by_the_bank_for_itself_and_the_transfer` (SC-A11-12)
+- [x] `auth::deposit_without_the_banks_authorization_fails` (SC-A11-12)
+- [x] `unit::storage::a_deposit_extends_the_instance_and_the_balance_to_thirty_days` (SC-ST-01)
+- [x] `unit::storage::an_entry_is_extended_again_only_below_the_threshold` (SC-ST-02)
+- [x] `itf_replay::quint_traces_decode_and_cover_the_paths_the_replay_checks` (SC-MB-02)
+- [x] `itf_replay::settlement_events_match_as_a_set_with_each_offset_before_its_own_settlements` (SC-MB-01, pure helper)
+
+## Flow 1: the constructor records the config and the central bank (1)
+
+Store `config` and `cb` in `__constructor`, and implement the `config()` and `central_bank()` views.
+
+- [ ] `unit::funding::the_constructor_records_the_configuration_and_the_central_bank` (SC-A11-13)
+
+## Flow 2: deposit's guards (4)
+
+Refuse `amount <= 0` with `InvalidAmount` before calling the SAC. Move the money with `try_transfer`, and report a refused transfer as `TokenTransferFailed`.
+
+- [ ] `unit::funding::deposit_of_zero_or_a_negative_amount_is_refused` (SC-A11-03)
+- [ ] `unit::funding::deposit_of_one_more_than_the_bank_holds_is_refused` (SC-A11-04)
+- [ ] `unit::funding::deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac` (SC-A11-05)
+- [ ] `unit::funding::a_deauthorized_bank_cannot_deposit` (SC-A11-15)
+
+After this flow, `integration/pending/deposit-failures.sh` and `integration/pending/deposit-zero.sh` may report `NOW PASSES`. If they do, move them up into `integration/` (TESTING.md §4).
+
+## Flow 3: withdraw, A11 out of the contract (8)
+
+`withdraw` needs:
+- the bank's `require_auth`;
+- `InvalidAmount` and `InsufficientFunds`;
+- the debit;
+- a `try_transfer` out, where a refusal is `TokenTransferFailed`;
+- the `Withdrawn` event.
+
+- [ ] `unit::funding::withdraw_debits_the_bank_and_pays_the_tokens_out` (SC-A11-06)
+- [ ] `unit::funding::withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max` (SC-A11-07)
+- [ ] `unit::funding::withdraw_of_one_more_than_the_balance_is_refused` (SC-A11-08)
+- [ ] `unit::funding::withdraw_of_zero_or_a_negative_amount_is_refused` (SC-A11-09)
+- [ ] `unit::funding::withdraw_by_a_bank_with_no_balance_is_refused` (SC-A11-10)
+- [ ] `unit::funding::a_withdrawal_to_a_deauthorized_bank_is_refused` (SC-A11-16)
+- [ ] `auth::withdraw_is_authorized_by_the_bank_alone` (SC-A11-12)
+- [ ] `auth::withdraw_without_the_banks_authorization_fails` (SC-A11-12)
+
+## Flow 4: the kernel's `covers` (1)
+
+A pure rule in `rtgs-core`, which the contract then calls.
+
+- [ ] `core::covers_is_balance_minus_amount_at_least_zero` (SC-A03-10)
+
+## Flow 5: submit records a payment, then settles it at once or queues it (11)
+
+Build on Flow 4. `submit` needs:
+- A1's guards, `InvalidAmount` and `SameAccount`;
+- sequence-number ids;
+- the `Payment` record;
+- one queue per bank and priority;
+- the `payment`, `queue` and `queued_count` views;
+- the `Submitted` and `Settled` events.
+
+- [ ] `unit::payments::a_covered_payment_settles_at_once` (SC-A01-01)
+- [ ] `unit::payments::a_payment_of_exactly_the_balance_settles` (SC-A01-02)
+- [ ] `unit::payments::a_payment_of_one_more_than_the_balance_is_queued` (SC-A01-03)
+- [ ] `unit::payments::a_bank_with_no_balance_can_queue_a_payment` (SC-A01-04)
+- [ ] `unit::payments::a_zero_or_negative_payment_is_refused` (SC-A01-05)
+- [ ] `unit::payments::a_payment_to_oneself_is_refused` (SC-A01-06)
+- [ ] `unit::payments::a_payment_of_i128_max_queues_or_settles_without_overflow` (SC-A01-07)
+- [ ] `unit::payments::ids_are_increasing_sequence_numbers` (SC-A01-08)
+- [ ] `auth::submit_is_authorized_by_the_sender_alone` (SC-A01-16)
+- [ ] `auth::submit_without_the_senders_authorization_fails` (SC-A01-16)
+- [ ] `auth::the_receiver_cannot_submit_a_payment_from_the_sender` (SC-A01-16)
+
+## Flow 6: queue discipline at submission (5)
+
+Within a priority, payments are strictly first in, first out. While a bank has an urgent payment queued, none of its normal payments settles (S7; ADR-0008, ADR-0009). So a new payment settles at once only if nothing is queued ahead of it.
+
+- [ ] `unit::payments::a_covered_payment_waits_behind_an_uncovered_one_of_the_same_priority` (SC-A01-11)
+- [ ] `unit::payments::a_queued_urgent_payment_blocks_the_banks_normal_payments` (SC-A01-12)
+- [ ] `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` (SC-A01-13)
+- [ ] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). This one may already pass after Flow 5.
+- [ ] `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` (SC-A01-15)
+
+## Flow 7: the queue cap, ADR-0010 (2)
+
+`QueueFull` refuses only a payment that would queue. A covered payment still settles.
+
+- [ ] `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` (SC-A01-09)
+- [ ] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09, and it may already pass after Flow 5.
+
+One decision is still open (README): what the cap does to a payment that would settle by offset. No test decides it, so add no behaviour for it.
+
+## Flow 8: the eager closure, gross (7)
+
+Build on Flows 3 and 6. After any balance increase, from a deposit or from a settlement that credits a bank, settle every covered head, urgent first. Then follow the cascade through the receivers' queues, all in the same call.
+
+- [ ] `unit::payments::a_deposit_that_covers_the_head_settles_it_in_the_same_call` (SC-A02-01)
+- [ ] `unit::payments::new_liquidity_settles_the_queue_in_order_up_to_the_first_uncovered_payment` (SC-A02-02)
+- [ ] `unit::payments::new_liquidity_settles_urgent_payments_before_normal_ones` (SC-A02-03)
+- [ ] `unit::payments::a_settlement_cascades_through_the_receivers_queue` (SC-A02-04)
+- [ ] `unit::payments::a_submission_that_settles_releases_the_receivers_queue` (SC-A02-05)
+- [ ] `unit::payments::a_withdrawal_settles_nothing` (SC-A02-06)
+- [ ] `unit::payments::a_settled_payment_never_changes` (SC-A02-07)
+
+## Flow 9: revoke, A6 (11)
+
+`revoke` needs:
+- the sender's authorization;
+- `UnknownPayment` and `NotQueued`;
+- removal from the payment's queue;
+- the `Revoked` event;
+- then the closure.
+
+- [ ] `unit::queue_management::a_queued_payment_can_be_revoked` (SC-A06-01)
+- [ ] `unit::queue_management::revocation_has_no_cut_off` (SC-A06-02)
+- [ ] `unit::queue_management::a_settled_payment_cannot_be_revoked` (SC-A06-03)
+- [ ] `unit::queue_management::a_revoked_payment_cannot_be_revoked_again` (SC-A06-04)
+- [ ] `unit::queue_management::revoking_an_unknown_payment_is_refused` (SC-A06-06)
+- [ ] `unit::queue_management::revoking_the_head_releases_the_payment_behind_it` (SC-A06-07)
+- [ ] `unit::queue_management::revoking_the_urgent_head_releases_normal_payments` (SC-A06-08)
+- [ ] `unit::queue_management::revoking_from_the_middle_keeps_the_queue_order` (SC-A06-09)
+- [ ] `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` (SC-A11-11)
+- [ ] `auth::revoke_is_authorized_by_the_sender` (SC-A06-10)
+- [ ] `auth::only_the_sender_can_revoke` (SC-A06-10)
+
+## Flow 10: reprioritise, A8 (9)
+
+The payment keeps its place by id. `reprioritise` needs:
+- the sender's authorization;
+- `SamePriority`, `NotQueued` and `UnknownPayment`;
+- the `Reprioritised` event;
+- then the closure.
+
+- [ ] `unit::queue_management::a_promoted_payment_keeps_its_place_by_age` (SC-A08-01)
+- [ ] `unit::queue_management::a_demoted_payment_keeps_its_place_by_age` (SC-A08-02)
+- [ ] `unit::queue_management::promoting_a_blocked_covered_payment_settles_it` (SC-A08-03)
+- [ ] `unit::queue_management::demoting_an_uncovered_urgent_payment_releases_older_normal_ones` (SC-A08-04)
+- [ ] `unit::queue_management::reprioritising_to_the_same_priority_is_refused` (SC-A08-05)
+- [ ] `unit::queue_management::a_settled_payment_cannot_be_reprioritised` (SC-A08-06)
+- [ ] `unit::queue_management::reprioritising_an_unknown_payment_is_refused` (SC-A08-07)
+- [ ] `auth::reprioritise_is_authorized_by_the_sender` (SC-A08-08)
+- [ ] `auth::only_the_sender_can_reprioritise` (SC-A08-08)
+
+## Flow 11: expire, A5 under ADR-0015 (10)
+
+`expire` needs no authorization. While `now <= submitted_at + expiry_secs`, it refuses with `NotExpired`. It also needs `NotQueued`, `UnknownPayment`, the `Expired` event and then the closure.
+
+- [ ] `unit::queue_management::a_payment_past_its_expiry_can_be_expired` (SC-A05-01)
+- [ ] `unit::queue_management::a_payment_exactly_at_its_expiry_has_not_expired` (SC-A05-02)
+- [ ] `unit::queue_management::the_expiry_is_configurable` (SC-A05-03)
+- [ ] `unit::queue_management::expiring_the_head_releases_the_payment_behind_it` (SC-A05-04)
+- [ ] `unit::queue_management::each_payment_expires_from_its_own_submission` (SC-A05-05)
+- [ ] `unit::queue_management::a_settled_payment_cannot_be_expired` (SC-A05-06)
+- [ ] `unit::queue_management::a_revoked_payment_cannot_be_expired` (SC-A05-07)
+- [ ] `unit::queue_management::expiring_an_unknown_payment_is_refused` (SC-A05-08)
+- [ ] `unit::queue_management::an_expired_payment_cannot_be_revoked` (SC-A06-05)
+- [ ] `auth::expire_needs_no_authorization` (SC-A05-09)
+
+One decision is still open (README): whether a payment can still settle once its expiry has passed but before anyone has expired it. No test decides it.
+
+## Flow 12: the kernel's greatest feasible prefix (9)
+
+A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, where an outgoing sum that overflows makes a prefix infeasible. It depends on nothing, so it can be done at any time before Flow 13.
+
+- [ ] `core::the_prefix_of_empty_queues_is_zero` (SC-A03-09)
+- [ ] `core::when_everything_fits_the_prefix_is_every_candidate` (SC-A03-09)
+- [ ] `core::an_uncovered_first_candidate_blocks_the_whole_queue` (SC-A03-09)
+- [ ] `core::dropping_one_candidate_can_make_others_infeasible` (SC-A03-09)
+- [ ] `core::the_prefix_does_not_depend_on_the_account_order` (SC-A03-09)
+- [ ] `core::r7_cycle_has_prefix_one_one_one` (SC-A03-01)
+- [ ] `core::the_descent_drops_the_last_candidate_of_a_violating_account` (SC-A03-03)
+- [ ] `core::the_prefix_never_skips_an_earlier_candidate` (SC-A03-04)
+- [ ] `core::an_overflowing_sum_is_infeasible` (SC-A03-07)
+
+## Flow 13: the LSM offset in the contract, A3 eager (8)
+
+Build on Flows 8 and 12. Once gross settlement is at rest:
+1. Build each bank's candidates in `≺` order: urgent first, then by id.
+2. Apply k*.
+3. Publish the `Offset` event, then one `Settled` event for each payment in it.
+4. Run the closure again.
+
+- [ ] `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible` (SC-A03-01)
+- [ ] `unit::lsm::two_opposite_payments_offset_with_no_liquidity` (SC-A03-02)
+- [ ] `unit::lsm::the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest` (SC-A03-03)
+- [ ] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04)
+- [ ] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05)
+- [ ] `unit::lsm::a_deposit_can_make_an_offset_feasible` (SC-A03-06)
+- [ ] `unit::lsm::an_outflow_that_overflows_i128_is_infeasible_not_a_panic` (SC-A03-07)
+- [ ] `unit::lsm::after_an_offset_the_queues_are_at_rest` (SC-A03-08)
+
+## Flow 14: the offset's cost at the queue cap (1)
+
+This test registers the contract from its Wasm, so run `make build` first. If an offset over 64 payments doesn't fit Mainnet's per-transaction limits, lower `QUEUE_CAP_UNDER_TEST` and record why.
+
+- [ ] `unit::storage::an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-04)
+
+## Flow 15: the model-based replay (1)
+
+The 50 committed Quint traces call deposit, withdraw, submit, revoke, reprioritise, expire and tick. The replay needs Flows 1 to 13.
+
+- [ ] `itf_replay::quint_traces_replay_against_the_contract` (SC-MB-01)
+
+## Flow 16: collateral, A14 (4)
+
+Implement the `credit()` view, and `set_collateral` with:
+- the central bank's authorization;
+- `InvalidAmount`;
+- the `CollateralSet` event.
+
+- [ ] `unit::credit::the_central_bank_sets_a_banks_collateral` (SC-A14-01)
+- [ ] `unit::credit::collateral_can_be_zero_but_not_negative` (SC-A14-02)
+- [ ] `auth::set_collateral_is_authorized_by_the_central_bank` (SC-A14-04)
+- [ ] `auth::only_the_central_bank_can_set_collateral` (SC-A14-04)
+
+## Flow 17: open a repo, A12 with a mint (9)
+
+`open_repo` needs:
+- the central bank's authorization, with the SAC `mint` into the contract in the same tree;
+- `InvalidAmount`;
+- `CreditExceedsCollateral`, checked without overflow;
+- the `Repo` record and the `repo()` view;
+- the `RepoOpened` event;
+- then the closure.
+
+`set_collateral` also gains its `CollateralBelowCredit` check.
+
+- [ ] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
+- [ ] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
+- [ ] `unit::credit::a_bank_with_no_collateral_gets_no_credit` (SC-A12-03)
+- [ ] `unit::credit::a_zero_or_negative_repo_is_refused` (SC-A12-04)
+- [ ] `unit::credit::credit_at_i128_max_is_checked_without_overflow` (SC-A12-05)
+- [ ] `unit::credit::a_repo_releases_the_banks_queue` (SC-A12-06)
+- [ ] `unit::credit::collateral_cannot_fall_below_the_credit_it_backs` (SC-A14-03)
+- [ ] `auth::open_repo_is_authorized_by_the_central_bank_with_the_mint` (SC-A12-07)
+- [ ] `auth::only_the_central_bank_can_open_a_repo` (SC-A12-07)
+
+One decision is still open (README): who holds the SAC admin role. For now, the tests give it to the central bank's own account.
+
+## Flow 18: repay, A13 with a burn (12)
+
+The actor, either the bank or the central bank, authorizes the call. Anyone else is refused with `NotAuthorized`. `repay` also needs:
+- `InvalidAmount`, `UnknownRepo`, `RepayExceedsRepo` and `InsufficientFunds`;
+- the debit and the burn from the contract;
+- the status `Repaid` once nothing is outstanding;
+- the `RepoRepaid` event.
+
+- [ ] `unit::credit::a_partial_repayment_burns_cash_and_lowers_the_credit` (SC-A13-01)
+- [ ] `unit::credit::a_full_repayment_closes_the_repo_and_frees_the_collateral` (SC-A13-02)
+- [ ] `unit::credit::the_central_bank_may_repay_on_the_banks_behalf` (SC-A13-03)
+- [ ] `unit::credit::a_third_party_cannot_repay` (SC-A13-04)
+- [ ] `auth::an_authorized_third_party_is_still_not_authorized_to_repay` (SC-A13-04)
+- [ ] `unit::credit::repaying_more_than_is_outstanding_is_refused` (SC-A13-05)
+- [ ] `unit::credit::a_bank_cannot_repay_more_than_its_balance` (SC-A13-06)
+- [ ] `unit::credit::a_zero_or_negative_repayment_is_refused` (SC-A13-07)
+- [ ] `unit::credit::repaying_an_unknown_repo_is_refused` (SC-A13-08)
+- [ ] `auth::repay_is_authorized_by_the_actor_alone` (SC-A13-09)
+- [ ] `auth::repay_by_the_central_bank_is_authorized_by_the_central_bank_alone` (SC-A13-09)
+- [ ] `auth::repay_without_the_actors_authorization_fails` (SC-A13-09)
+
+## Flow 19: the penalty repo, ADR-0014 and A20 (9)
+
+`convert_overdue` needs no authorization. It refuses with:
+- `NotOverdue` while `now <= opened_at + repo_term_secs`, and for a repaid repo;
+- `AlreadyPenalty`;
+- `UnknownRepo`.
+
+Converting a repo moves its outstanding amount from `cr` to `ovn` and records the rate, with a `RepoPenalised` event. `repay` then lowers `ovn` for a penalty repo, and the collateral checks count `ovn`.
+
+- [ ] `unit::credit::an_overdue_repo_becomes_a_penalty_repo` (SC-A20-01)
+- [ ] `unit::credit::a_repo_exactly_at_its_term_is_not_overdue` (SC-A20-02)
+- [ ] `unit::credit::the_term_and_the_penalty_rate_are_configurable` (SC-A20-03)
+- [ ] `unit::credit::a_penalty_repo_cannot_be_converted_again` (SC-A20-04)
+- [ ] `unit::credit::a_repaid_repo_is_never_overdue` (SC-A20-05)
+- [ ] `unit::credit::converting_an_unknown_repo_is_refused` (SC-A20-06)
+- [ ] `unit::credit::a_penalty_repo_is_repaid_by_a_burn` (SC-A20-07)
+- [ ] `unit::credit::penalty_repos_stay_collateralised` (SC-A20-08)
+- [ ] `auth::convert_overdue_needs_no_authorization` (SC-A20-09)
+
+## Flow 20: every entry point extends every entry it writes (1)
+
+The final check, since it calls every entry point.
+
+- [ ] `unit::storage::every_entry_point_extends_every_entry_it_writes` (SC-ST-03)
+
+## Totals
+
+| | Tests |
+|---|---|
+| Already green (Flow 0) | 9 |
+| Still to fix (Flows 1 to 20) | 123 |
+| All | 132 |
