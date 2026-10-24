@@ -1,5 +1,5 @@
 # Every target runs from the repository root. See README.md for the order to run them in.
-.PHONY: check-env fmt lint build test cov quint quint-traces devnet-up devnet-smoke devnet-down clean
+.PHONY: check-env fmt lint build test cov quint quint-traces devnet-up devnet-smoke devnet-down integration integration-strict clean
 
 check-env:
 	scripts/check-env.sh
@@ -56,6 +56,14 @@ devnet-up:
 
 devnet-smoke: build
 	devnet/smoke.sh
+
+# Every scenario in integration/ against the network from devnet-up. Pending scenarios
+# (integration/pending/) are reported; integration-strict also fails on them.
+integration: build
+	integration/run.sh
+
+integration-strict: build
+	integration/run.sh --strict
 
 devnet-down:
 	devnet/down.sh

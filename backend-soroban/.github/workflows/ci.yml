@@ -1,7 +1,7 @@
-# Mirrors `make lint test build`. Never run on GitHub yet (this repo is not pushed);
-# checked locally with action-validator. Adapted from the testing track's recipe
-# (stellar-research/stellar/testing/lab/ci/contracts.yml). Add a job per test layer as
-# TESTING.md introduces it.
+# Mirrors `make lint test build`, plus `make integration` on Quickstart.
+# Never run on GitHub yet (this repo is not pushed); checked locally with action-validator.
+# Adapted from the testing track's recipe (stellar-research/stellar/testing/lab/ci/contracts.yml).
+# Add a job per test layer as TESTING.md introduces it.
 name: ci
 
 on:
@@ -56,3 +56,28 @@ jobs:
         run: npm install --global @informalsystems/quint@0.33.0
       - name: Model, invariants and stale traces
         run: make quint
+
+  # TESTING.md layer 4: the scenarios in integration/ on a Quickstart network.
+  integration:
+    name: Integration on Quickstart
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - uses: stellar/stellar-cli@v28.1.0
+      # Quickstart's own action at the commit the testing lab read (lab/ci/contracts.yml),
+      # with the image pinned in devnet/common.sh. It serves on port 8000 and waits until
+      # the services are healthy. The image starts at protocol 28 unless told otherwise
+      # (C-HB-071). Unlike devnet/up.sh it doesn't pass --limits testnet.
+      - uses: stellar/quickstart@91a64b5da2d7926bc82ae5a1f06048ef08cdcec2
+        with:
+          tag: v678-b1525.1-latest
+          network: local
+          enable: core,rpc
+          protocol_version: "29"
+      - name: Integration scenarios
+        run: IMPL_PORT=8000 make integration

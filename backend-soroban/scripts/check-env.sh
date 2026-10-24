@@ -19,6 +19,7 @@ expect stellar-cli 28.1.0 "$(stellar --version 2>/dev/null | awk 'NR==1{print $2
 expect soroban-sdk '"=29.0.1"' "$(sed -n 's/^soroban-sdk = //p' Cargo.toml)"
 docker info >/dev/null 2>&1 && ok "docker daemon $(docker version --format '{{.Server.Version}}')" || bad "docker daemon is not reachable"
 expect "quickstart image" stellar/quickstart:v678-b1525.1-latest "$(sed -n 's/.*IMPL_IMAGE:-\([^}]*\)}.*/\1/p' devnet/common.sh)"
+expect "quickstart tag in ci.yml" v678-b1525.1-latest "$(sed -n 's/^ *tag: //p' .github/workflows/ci.yml)"
 
 if command -v quint >/dev/null; then expect quint 0.33.0 "$(quint --version 2>/dev/null)"; else note "quint missing (needed for Quint traces)"; fi
 # `make quint` also needs bash, which this script runs under, and jq to compare traces.

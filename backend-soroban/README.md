@@ -8,7 +8,8 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - the workspace, with toolchain pins;
 - a local devnet with a smoke test;
 - CI;
-- one contract entry point, `deposit`, with its unit tests.
+- one contract entry point, `deposit`, with its unit tests;
+- integration scenarios for `deposit` on the devnet (`integration/`).
 
 Payments, queues, offsetting and credit come next, test first.
 
@@ -19,10 +20,13 @@ make check-env        # every tool matches the handbook's pins
 make lint test build  # fmt + clippy, unit tests, Wasm build
 make devnet-up        # local quickstart network at protocol 29 on 127.0.0.1:8300
 make devnet-smoke     # deploy a test cash token and the contract, deposit, read back
+make integration      # every scenario in integration/ (builds first); pending ones are reported
 make devnet-down
 make cov              # line coverage (informational for now)
 make quint            # Quint model: tests, invariants, and a check that quint/traces/ is fresh
 ```
+
+The devnet targets read `IMPL_NAME` and `IMPL_PORT` (defaults `impl-local`, 8300). To run one network per worktree, give each its own pair, and pass the same values to up, smoke, integration and down: `IMPL_NAME=impl-mine IMPL_PORT=8340 make devnet-up integration devnet-down`.
 
 Prerequisites:
 - `make check-env` lists the tools needed and their versions: rustc 1.99.1 with `wasm32v1-none`, stellar-cli 28.1.0 and Docker, plus quint and the cargo plugins for later test layers.
@@ -37,6 +41,7 @@ Prerequisites:
 | `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Its rules (cover and the greatest feasible prefix) are stubs whose unit tests are red |
 | `quint/` | The contract-level Quint model `settlement.qnt`, its tests `settlement_test.qnt`, and the ITF traces in `traces/` that `src/tests/itf_replay.rs` replays against the contract (TESTING.md §3). `make quint-traces` regenerates them |
 | `devnet/` | `up.sh`, `smoke.sh` and `down.sh` for the local network. Containers are named `impl-*`, and stellar-cli's identities go in `.devnet/` |
+| `integration/` | The devnet scenarios (TESTING.md §4): `lib.sh` holds the ADR-0003 cash-token setup, `run.sh` runs every scenario, and `pending/` holds the scenarios written ahead of the contract code they need |
 | `scripts/check-env.sh` | The pins check |
 | `.github/workflows/ci.yml` | CI, which mirrors `make lint test build`. It has not run on GitHub, because this repo is not pushed |
 | `AGENTS.md` | Rules for agents working here |

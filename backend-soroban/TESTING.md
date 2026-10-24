@@ -1,6 +1,6 @@
 # Testing guide
 
-How to add each kind of test. Two layers exist today: unit and auth tests (§1), and model-based tests (§3). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
+How to add each kind of test. Three layers exist today: unit and auth tests (§1), model-based tests (§3) and integration tests on the devnet (§4). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
 
 All commands come from the research handbook, which ran each of them on this machine: `../stellar-research/handbook/04-testing.md`. A worked example of every layer is in `../stellar-research/stellar/testing/lab/`. Copy from it, but keep this repo's names.
 
@@ -19,7 +19,7 @@ All commands come from the research handbook, which ran each of them on this mac
 
 ## Scenario catalogue
 
-`tests/SCENARIOS.md` lists every behaviour the system must show. The first agent to add a scenario creates the file. Add one row per scenario:
+`tests/SCENARIOS.md` lists every behaviour the system must show. Add one row per scenario, in the form of these two rows:
 
 | ID | Given | When | Then | Model IDs | ADR | Test |
 |---|---|---|---|---|---|---|
@@ -111,7 +111,23 @@ cd .. && cargo test -p settlement itf_replay
 - for anything the test host can't show: classic accounts and trustlines, fees, real authorization signatures, RPC, TTL and archival, and transaction limits;
 - for every multi-party settlement: PvP and DvP in one transaction.
 
-**Where:** `integration/<scenario>.sh`, each one runnable on its own against `make devnet-up`. Start from `devnet/smoke.sh`: it sources `devnet/common.sh` for the network, the identities and `fund`. A `make integration` target runs them all.
+**Where:** `integration/<scenario>.sh`, each one runnable on its own against `make devnet-up` and `make build`. Behaviour the contract doesn't have yet goes in `integration/pending/<scenario>.sh`, written test-first against the model and the ADRs. When the contract code lands, the scenario moves up into `integration/`.
+
+**Run:**
+- `make integration` runs every scenario. It stops at the first failure, then reports each pending scenario as `PENDING (red)`, or as `NOW PASSES` when it should move up.
+- `make integration-strict` also fails on pending scenarios.
+- `integration/<scenario>.sh` runs one on its own.
+- Use the same `IMPL_NAME` and `IMPL_PORT` as `devnet-up`.
+
+**How:**
+- **Setup.** Source `integration/lib.sh`. It sources `devnet/common.sh` for the network, `fund` and `rpc`, and adds:
+  - the cash-token setup ADR-0003 requires: `issue_cash_token` sets AUTH_REQUIRED, AUTH_REVOCABLE and CLAWBACK_ENABLED before any trustline; `open_bank` authorizes the trustline and pays the bank; `authorize_holder` authorizes the contract, which can't hold USD until it is authorized;
+  - `deploy_settlement`, `deposit` (prints the transaction hash), `invoke` and `view`;
+  - the checks: `check`, `expect_fail`, `tx_ledger` (finality), `contract_events` (`getEvents`), `ledger_entry` with `balance_key` and `instance_key` (`getLedgerEntries`, value and TTL), and `seq_num`.
+- **Identities.** Give each scenario its own `it-<scenario>-*` names, and create them with `new_ids`, which overwrites old keys so every run starts from fresh accounts.
+- **Names.** The header comment names the model IDs and ADRs, as in the other layers.
+- **Known hazards.** A scenario can pin behaviour that is wrong but can't be fixed yet, as `issuer-powers-hazard.sh` does. Say so in its header, and say what must change when the fix lands.
+- **Red.** A scenario that tests existing code can't fail by itself. Seed a bug in the contract, check that the scenario fails for the expected reason, and revert. Record the output in the commit message.
 
 **Traps:**
 - **One source account per concurrent stream.** A second transaction from the same account in one ledger gets `TRY_AGAIN_LATER` (C-HB-160).
@@ -122,6 +138,8 @@ cd .. && cargo test -p settlement itf_replay
 - **Make every script fail on purpose once,** and check that it exits non-zero. Smoke scripts that exit 0 after a failed step have happened before (C-HB-091).
 - **Issuer flags.** Set AUTH_REQUIRED, AUTH_REVOCABLE and clawback on an issuer before any trustline opens: clawback can't be imposed on existing holders (C-HB-164).
 - **Ledgers close every second** locally (C-ST-068), so TTLs run out sooner than on a real network.
+- **Amounts are in stroops.** `stellar tx new payment --amount 1000` pays 1,000 of the SAC's i128 units, not 1,000 USD. The contract and the SAC count in the same units.
+- **Run the scripts with bash.** `lib.sh` finds its path through `BASH_SOURCE`, so sourcing it from zsh fails.
 
 ## 5. Later layers
 

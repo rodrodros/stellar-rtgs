@@ -6,6 +6,7 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - `storage::` rows (SC-ST) are about the ledger, not the model: storage lifetime and transaction cost.
 - Test paths are relative to the `settlement` crate: `unit::…` stands for `tests::unit::…`, and `auth::…` for `tests::auth::…`.
 - `core::…` stands for `rtgs_core::tests::…`.
+- `integration/…` rows (SC-IT, SC-H) run on the local devnet (TESTING.md §4). They cover what the test host can't show: issuer flags, trustlines, real signatures, RPC and on-chain TTL.
 - `itf_replay::…` stands for `tests::itf_replay::…`, and `qnt::…` for a `run` in `quint/settlement_test.qnt`.
 
 **Status, 2026-10-24.** The tests are written and red. Only `deposit` and `balance` have code: the tests that exercise only them pass (SC-A11-01, SC-A11-02, SC-A11-14, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02). Every other test fails against `todo!()` stubs, or against `deposit`'s missing checks, until it is implemented test first.
@@ -231,3 +232,22 @@ Not in v1: κ-proto has no groups. ADR-0010's eager group settlement waits for t
 | SC-MB-03 | the model | 2,000 random runs of 30 steps | S1, S2, S3, S5, S7, S9, S11, S23 and the queue cap hold; `make quint` fails if any witness is unreached | S1–S3, S5, S7, S9, S11, S23 | 0004, 0008, 0010 | `make quint` |
 | SC-MB-04 | the model | the scenarios of the catalogue | as in the rows [SC-A01-01, -09, -13, -15; SC-A02-05, -07; SC-A03-01, -03, -04, -05, -06; SC-A05-02, -04; SC-A06-02, -07; SC-A08-01, -03, -05; SC-F-04, -08] | A1–A3, A5, A6, A8, R4, R7 | 0008–0010, 0015, 0016 | `qnt::coveredPaymentSettlesAtOnceTest`, `qnt::queueCapTest`, `qnt::urgentSettlesAheadOfNormalTest`, `qnt::cpssBox4StrictFifoTest`, `qnt::cascadeTest`, `qnt::settledPaymentNeverChangesTest`, `qnt::r7GridlockTest`, `qnt::greatestPrefixTest`, `qnt::noOvertakingTest`, `qnt::urgentFirstInPrefixTest`, `qnt::depositMakesOffsetFeasibleTest`, `qnt::expiringTheHeadReleasesTest`, `qnt::revocationHasNoCutOffTest`, `qnt::revokingTheHeadReleasesTest`, `qnt::promotionKeepsAgeTest`, `qnt::promotionSettlesTest`, `qnt::fundingErrorsTest` |
 | SC-MB-05 | committed traces with one edited, one deleted or one extra | the stale check | each fails; matching sets pass | — | — | `scripts/check-traces-selftest.sh` (run by `make quint`) |
+
+## Integration on the devnet (TESTING.md §4)
+
+Each row runs under ADR-0003's issuer flags, with the bank trustlines and the contract authorized as holders. A11's guard `phase = Open` does not apply (ADR-0013).
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-IT-01 | banks B1 and B2 hold 1,000 each; the contract is an authorized holder | B1 deposits 100, then 200; B2 deposits 50 | each transaction is final (`SUCCESS`); `balance` = 300 and 50; the trustlines hold 700 and 950; the contract holds 350 = Σ balances; `deposited` events B1:100, B1:200, B2:50 in that order; stored `Balance(B1)` = 300; the TTL of `Balance(B1)` and of the instance is `BUMP_AMOUNT` from the first deposit | A11, S1, S4, S6 | 0003, 0004, 0005 | `integration/deposit.sh` |
+| SC-IT-02 | B holds 1,000; another account A holds only its own key | A sends `deposit(B, 1)` | simulation needs B's authorization and only B's; the CLI can't sign for B; nothing moves | A11, S6 | 0004 | `integration/deposit-auth.sh` |
+| SC-IT-03 | the issuer hasn't yet authorized the contract as a holder | B deposits 100 | refused with `Error(Contract, #11)`; nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-04 | B's trustline holds 600 | B deposits 601 | refused by the SAC with `Error(Contract, #10)`; nothing moves; B's sequence number isn't used | A11, S1, S4 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-05 | the issuer has frozen B's trustline | B deposits 100 | refused with `Error(Contract, #11)`; `balance(B)` = 0 and S1 holds | A11, S1, S6 | 0003 | `integration/deposit-failures.sh` |
+| SC-IT-06 | B holds 1,000 | B deposits 0, or −5 | the settlement contract refuses each with its own error before it calls the SAC; nothing moves; no `deposited` event | A11 (guard x > 0), S4 | 0004 | `integration/pending/deposit-zero.sh` (**pending**) |
+
+## Known hazards
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-H-01 | on the devnet: B has deposited 600 under ADR-0003's flags | the issuer claws back 100 straight from the contract through the SAC; then deauthorizes the contract | the contract holds 500 while `balance(B)` = 600, so **S1 is broken**; every later deposit fails. To be fixed by an issuance controller that refuses both (`rtgs-mapping.md` §2; review H1). The test must then be flipped | S1, L1, L3 | 0003, 0006 | `integration/issuer-powers-hazard.sh` (**known hazard**) |
