@@ -7,6 +7,11 @@
 # each bank's trustline and the settlement contract as holders.
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/devnet/common.sh"
 
+# common.sh logs to stdout. Here many helpers run inside "$(...)", which would swallow the
+# message of a die and leave only the exit code, so log and die write to stderr instead.
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
+die() { log "ERROR: $*"; exit 1; }
+
 WASM="$repo/target/wasm32v1-none/release/settlement.wasm"
 # What deposit's extend_ttl sets: 30 days of 5-second ledgers (contracts/settlement/src/lib.rs).
 BUMP_AMOUNT=518400
@@ -45,6 +50,20 @@ view() {
   local source="$1" id="$2"
   shift 2
   stellar contract invoke -q --send=no --source-account "$source" --id "$id" -- "$@" | tr -d '"'
+}
+
+# send_as <source> <contract> <fn> [args...]: builds the call, simulates it, signs the
+# envelope with the source's key only and submits it, so the network, not the CLI, decides
+# whether every authorization the call needs is there. The CLI's own invoke refuses to send a
+# call it can't sign for ("Missing signing key"), which tests the CLI instead. A submitted
+# failure pays its fee and uses its sequence number (C-HB-162, C-HB-163).
+send_as() {
+  local source="$1" id="$2" tx
+  shift 2
+  tx="$(stellar contract invoke -q --build-only --source-account "$source" --id "$id" -- "$@")" || return 1
+  stellar tx simulate --source-account "$source" <<<"$tx" |
+    stellar tx sign --sign-with-key "$source" |
+    stellar tx send
 }
 
 # expect_fail <what> <pattern> <command...>: the command must exit non-zero, and its output

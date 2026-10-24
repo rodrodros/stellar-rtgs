@@ -5,6 +5,7 @@
 #   - an overdraw: the SAC refuses it (Error(Contract, #10));
 #   - a frozen bank (trustline deauthorized by the issuer): Error(Contract, #11);
 #   - a contract the issuer has not yet authorized as a holder: Error(Contract, #11).
+# ADR-0013: no business day, so A11's phase=Open guard has no counterpart here.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 

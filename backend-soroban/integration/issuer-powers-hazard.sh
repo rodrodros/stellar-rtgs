@@ -12,12 +12,12 @@
 #
 # The fix is a design change: an issuance controller holds the SAC admin role and refuses
 # both on the settlement contract outside a recorded A16 path (rtgs-mapping.md §2). When it
-# lands, this scenario must fail. Then flip its assertions: the clawback and the freeze are
-# refused, and S1 holds.
+# lands, this scenario must fail. The correct behaviour is already written, test-first, in
+# integration/pending/issuer-powers-refused.sh: promote that one and delete this one.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-log "KNOWN HAZARD: expected to fail once the issuance controller lands; flip the assertions then"
+log "KNOWN HAZARD: expected to fail once the issuance controller lands; then promote pending/issuer-powers-refused.sh"
 new_ids it-haz-issuer it-haz-bank
 issuer=it-haz-issuer
 bank="$(addr it-haz-bank)"

@@ -123,6 +123,7 @@ cd .. && cargo test -p settlement itf_replay
 - **Setup.** Source `integration/lib.sh`. It sources `devnet/common.sh` for the network, `fund` and `rpc`, and adds:
   - the cash-token setup ADR-0003 requires: `issue_cash_token` sets AUTH_REQUIRED, AUTH_REVOCABLE and CLAWBACK_ENABLED before any trustline; `open_bank` authorizes the trustline and pays the bank; `authorize_holder` authorizes the contract, which can't hold USD until it is authorized;
   - `deploy_settlement`, `deposit` (prints the transaction hash), `invoke` and `view`;
+  - `send_as`, for authorization checks: it signs with the sender's key only and submits, so the network does the refusing. `stellar contract invoke` refuses to send a call it can't sign ("Missing signing key"), which tests the CLI, not the contract;
   - the checks: `check`, `expect_fail`, `tx_ledger` (finality), `contract_events` (`getEvents`), `ledger_entry` with `balance_key` and `instance_key` (`getLedgerEntries`, value and TTL), and `seq_num`.
 - **Identities.** Give each scenario its own `it-<scenario>-*` names, and create them with `new_ids`, which overwrites old keys so every run starts from fresh accounts.
 - **Names.** The header comment names the model IDs and ADRs, as in the other layers.
@@ -140,6 +141,8 @@ cd .. && cargo test -p settlement itf_replay
 - **Ledgers close every second** locally (C-ST-068), so TTLs run out sooner than on a real network.
 - **Amounts are in stroops.** `stellar tx new payment --amount 1000` pays 1,000 of the SAC's i128 units, not 1,000 USD. The contract and the SAC count in the same units.
 - **Run the scripts with bash.** `lib.sh` finds its path through `BASH_SOURCE`, so sourcing it from zsh fails.
+- **Failures inside `$(...)`.** `lib.sh` sends `log` and `die` to stderr, so a helper that dies inside a command substitution still shows why. A substitution inside `<<<` or a pipe doesn't stop a `set -e` script, so assign its result on its own line first.
+- **A simulation that fails has no auth entries.** Check `.result.error` before reading `authJson`.
 
 ## 5. Later layers
 

@@ -25,19 +25,26 @@ deposit it-dep-bank1 "$contract" 200 >/dev/null
 last="$(deposit it-dep-bank2 "$contract" 50)"
 
 # ADR-0005: a deposit is final once its ledger closes.
-read -r status first_ledger <<<"$(tx_ledger "$first")"
+# (tx_ledger runs on its own line: a die inside <<<"$(...)" or a pipe would not stop the script.)
+first_tx="$(tx_ledger "$first")"
+last_tx="$(tx_ledger "$last")"
+read -r status first_ledger <<<"$first_tx"
 check "first deposit's status" "$status" SUCCESS
-check "last deposit's status" "$(tx_ledger "$last" | cut -d' ' -f1)" SUCCESS
+check "last deposit's status" "${last_tx%% *}" SUCCESS
+
+bal1="$(view it-dep-bank1 "$contract" balance --bank "$b1")"
+bal2="$(view it-dep-bank1 "$contract" balance --bank "$b2")"
+held="$(view it-dep-bank1 "$sac" balance --id "$contract")"
+# S1: what the contract holds, read from the SAC, is the sum of the balances the contract
+# reports. It is checked before the expected values, so a bookkeeping bug shows up as S1.
+check "S1: USD held by the contract = balance(bank1) + balance(bank2)" "$held" $((bal1 + bal2))
 
 # S4: each balance moved by exactly the amounts deposited, on both sides of the contract.
-check "balance(bank1)" "$(view it-dep-bank1 "$contract" balance --bank "$b1")" 300
-check "balance(bank2)" "$(view it-dep-bank1 "$contract" balance --bank "$b2")" 50
+check "balance(bank1)" "$bal1" 300
+check "balance(bank2)" "$bal2" 50
 check "bank1's USD" "$(view it-dep-bank1 "$sac" balance --id "$b1")" 700
 check "bank2's USD" "$(view it-dep-bank1 "$sac" balance --id "$b2")" 950
-held="$(view it-dep-bank1 "$sac" balance --id "$contract")"
 check "USD held by the contract" "$held" 350
-# S1: what the contract holds is the sum of the balances it records.
-check "S1: held = balance(bank1) + balance(bank2)" "$held" $((300 + 50))
 
 # One `deposited` event per deposit, in order, with the bank as topic and the amount as data.
 events="$(contract_events "$contract" "$start")"
