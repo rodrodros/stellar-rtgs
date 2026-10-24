@@ -6,6 +6,7 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - `storage::` rows (SC-ST) are about the ledger, not the model: storage lifetime and transaction cost.
 - Test paths are relative to the `settlement` crate: `unit::…` stands for `tests::unit::…`, and `auth::…` for `tests::auth::…`.
 - `core::…` stands for `rtgs_core::tests::…`.
+- `itf_replay::…` stands for `tests::itf_replay::…`, and `qnt::…` for a `run` in `quint/settlement_test.qnt`.
 
 **Status, 2026-10-24.** The tests are written and red. Only `deposit` and `balance` have code: the tests that exercise only them pass (SC-A11-01, SC-A11-02, SC-A11-14, the deposit rows of SC-A11-12, SC-ST-01 and SC-ST-02). Every other test fails against `todo!()` stubs, or against `deposit`'s missing checks, until it is implemented test first.
 
@@ -218,3 +219,15 @@ The 64 of SC-ST-04 is provisional. ADR-0010 sizes the cap from ADR-0007's target
 ## Linked groups (F5, S16, S19)
 
 Not in v1: κ-proto has no groups. ADR-0010's eager group settlement waits for the definition's revision.
+
+## Model-based: Quint traces replayed (TESTING.md §3)
+
+`quint/settlement.qnt` is the oracle. Its header lists where it departs from `rtgs.qnt`: no business day, expiry instead of cut-offs, a queue cap, and no credit yet (ADR-0013 to ADR-0018). The `qnt::…` runs pin the oracle to the catalogue rows named in brackets. The 50 committed traces then judge the contract step by step: the outcome, the `Offset` and `Settled` events, the balances and cash held, both queues of every bank, and every payment record.
+
+| ID | Given | When | Then | Model IDs | ADR | Test |
+|---|---|---|---|---|---|---|
+| SC-MB-01 | three banks, each holding 500 outside | 30 random calls of deposit, withdraw, submit, revoke, reprioritise, expire and tick, ×50 traces | every step matches the model's outcome, events and state | A1, A2, A3, A5, A6, A8, A19, S1, S2, S3, S5, S7, S9, S11, S23 | 0008, 0009, 0010, 0015, 0016 | `itf_replay::quint_traces_replay_against_the_contract` |
+| SC-MB-02 | the committed traces | decode them | each offset is a contiguous ascending run of the settled ids, with ≥ 2 payments; the traces reach an offset, an expiry, a revocation, a reprioritisation and `QueueFull` | A3, S9 | 0010 | `itf_replay::quint_traces_decode_and_cover_the_paths_the_replay_checks` |
+| SC-MB-03 | the model | 2,000 random runs of 30 steps | S1, S2, S3, S7, S9, S11, S23 and the queue cap hold; every witness is reached | S1–S3, S7, S9, S11, S23 | 0004, 0008, 0010 | `make quint` |
+| SC-MB-04 | the model | the scenarios of the catalogue | as in the rows [SC-A01-01, -09, -13, -15; SC-A02-05; SC-A03-01, -03, -04, -05, -06; SC-A05-02, -04; SC-A06-02, -07; SC-A08-01, -03, -05; SC-F-04, -08] | A1–A3, A5, A6, A8, R4, R7 | 0008–0010, 0015, 0016 | `qnt::coveredPaymentSettlesAtOnceTest`, `qnt::queueCapTest`, `qnt::urgentSettlesAheadOfNormalTest`, `qnt::cpssBox4StrictFifoTest`, `qnt::cascadeTest`, `qnt::r7GridlockTest`, `qnt::greatestPrefixTest`, `qnt::noOvertakingTest`, `qnt::urgentFirstInPrefixTest`, `qnt::depositMakesOffsetFeasibleTest`, `qnt::expiringTheHeadReleasesTest`, `qnt::revocationHasNoCutOffTest`, `qnt::revokingTheHeadReleasesTest`, `qnt::promotionKeepsAgeTest`, `qnt::promotionSettlesTest`, `qnt::fundingErrorsTest` |
+| SC-MB-05 | a committed trace edited by hand | `make quint` | it reports `stale:` and exits non-zero | — | — | `make quint` |

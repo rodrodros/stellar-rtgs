@@ -39,3 +39,20 @@ jobs:
         run: make test
       - name: Build Wasm
         run: make build
+
+  # Model-based tests (TESTING.md §3): the Quint model's tests and invariants, and a check
+  # that the committed traces in quint/traces/ are not stale. The replay itself runs in
+  # `make test`.
+  quint:
+    name: Quint model and traces
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Quint
+        run: npm install --global @informalsystems/quint@0.33.0
+      - name: Model, invariants and stale traces
+        run: make quint

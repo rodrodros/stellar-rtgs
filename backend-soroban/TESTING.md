@@ -1,6 +1,6 @@
 # Testing guide
 
-How to add each kind of test. Only the first layer, unit and auth tests, exists today. Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
+How to add each kind of test. Two layers exist today: unit and auth tests (§1), and model-based tests (§3). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
 
 All commands come from the research handbook, which ran each of them on this machine: `../stellar-research/handbook/04-testing.md`. A worked example of every layer is in `../stellar-research/stellar/testing/lab/`. Copy from it, but keep this repo's names.
 

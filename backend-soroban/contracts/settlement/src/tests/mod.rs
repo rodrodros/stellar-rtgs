@@ -4,3 +4,6 @@ mod support;
 
 mod auth;
 mod unit;
+
+// Model-based tests: Quint traces replayed against the contract (TESTING.md §3).
+mod itf_replay;
