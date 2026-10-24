@@ -11,6 +11,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - the contract's constructor, `deposit` and `withdraw`, with the unit tests that exercise only them, and the `balance`, `config` and `central_bank` views;
 - `deposit`'s guards: it refuses an amount of 0 or less with `InvalidAmount`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - `withdraw`'s guards: it refuses an amount of 0 or less with `InvalidAmount` and one above the balance with `InsufficientFunds`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
+- the kernel's cover rule, `rtgs_core::covers`: a payment is covered if paying it leaves the sender's balance non-negative, with its unit and property tests;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
 Payments, queues, offsetting and credit come next, test first.
@@ -40,7 +41,7 @@ Prerequisites:
 | Path | Contents |
 |---|---|
 | `contracts/settlement/` | The settlement contract: one contract holds the cash token and keeps every bank's balance (ADR-0004). `src/tests/` holds its unit, auth, property, state-machine and replay tests, and `tests/SCENARIOS.md` maps each scenario to them |
-| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Its rules (cover and the greatest feasible prefix) are stubs whose unit and property tests are red |
+| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Its cover rule is implemented; the greatest feasible prefix is a stub whose unit and property tests are red |
 | `quint/` | The contract-level Quint model `settlement.qnt`, its tests `settlement_test.qnt`, and the ITF traces in `traces/` that `src/tests/itf_replay.rs` replays against the contract (TESTING.md §3). `make quint-traces` regenerates them |
 | `devnet/` | `up.sh`, `smoke.sh` and `down.sh` for the local network. Containers are named `impl-*`, and stellar-cli's identities go in `.devnet/` |
 | `integration/` | The devnet scenarios (TESTING.md §4): `lib.sh` holds the ADR-0003 cash-token setup, `run.sh` runs every scenario, and `pending/` holds the scenarios written ahead of the contract code they need |

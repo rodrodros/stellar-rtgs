@@ -2,9 +2,9 @@
 //!
 //! This crate has no soroban-sdk dependency and no `Env`, so its rules can be tested
 //! natively, property-tested and proved with Kani, which cannot compile the soroban-sdk
-//! test host (C-ST-059). The settlement contract calls it. Its rules are stubs whose
-//! unit tests (below) and property tests (`props.rs`) are written and red; see TESTING.md,
-//! "Property and state-machine tests".
+//! test host (C-ST-059). The settlement contract calls it. `covers` is implemented.
+//! `greatest_feasible_prefix` is still a stub whose unit tests (below) and property tests
+//! (`props.rs`) are written and red; see TESTING.md, "Property and state-machine tests".
 #![no_std]
 
 extern crate alloc;
@@ -20,8 +20,10 @@ pub struct Candidate {
 
 /// §4.5 `cov` with no credit line and no reservations (ADR-0011, ADR-0018): a payment is
 /// covered if paying it leaves the sender's balance non-negative.
-pub fn covers(_balance: i128, _amount: i128) -> bool {
-    todo!()
+///
+/// `bal − a ≥ 0` is written as `a ≤ bal`, which cannot overflow for any `i128` pair.
+pub fn covers(balance: i128, amount: i128) -> bool {
+    amount <= balance
 }
 
 /// Spec O's greatest feasible prefix k* (§4.5, R4; ADR-0010).

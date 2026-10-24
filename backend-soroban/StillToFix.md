@@ -78,8 +78,8 @@ After this flow, `integration/pending/deposit-failures.sh` and `integration/pend
 
 A pure rule in `rtgs-core`, which the contract then calls.
 
-- [ ] `core::covers_is_balance_minus_amount_at_least_zero` (SC-A03-10)
-- [ ] `core::props::covers_is_exactly_balance_at_least_amount` (SC-P-03)
+- [x] `core::covers_is_balance_minus_amount_at_least_zero` (SC-A03-10)
+- [x] `core::props::covers_is_exactly_balance_at_least_amount` (SC-P-03)
 
 ## Flow 5: submit records a payment, then settles it at once or queues it (11)
 
@@ -338,6 +338,6 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 3) | 24 |
-| Still to fix (Flows 4 to 21) | 125 |
+| Already green (Flows 0 to 4) | 26 |
+| Still to fix (Flows 5 to 21) | 123 |
 | All | 149 |

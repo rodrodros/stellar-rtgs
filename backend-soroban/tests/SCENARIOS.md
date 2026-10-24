@@ -11,7 +11,7 @@ Every behaviour the system must show, with the tests that run it (TESTING.md, "S
 - `props::…`, `state_machine::…` and `reference::…` stand for `tests::props::…`, `tests::state_machine::…` and `tests::reference::…`.
 - The SC-P rows are listed only in their own section, "Properties over many inputs", not in the Test column of the action rows whose behaviour they also run.
 
-**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards, `withdraw` and the `balance`, `config` and `central_bank` views have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-10, SC-A11-12 to SC-A11-16, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). SC-P-09 passes too: it checks the reference rule the property tests are judged by. So do SC-MB-02 and SC-MB-01's event-matching helper. Every other test fails against `todo!()` stubs until it is implemented test first.
+**Status, 2026-10-24.** The tests are written and red. Only the constructor, `deposit` with its guards, `withdraw`, the `balance`, `config` and `central_bank` views and the kernel's `covers` have code: the tests that exercise only them pass (SC-A11-01 to SC-A11-10, SC-A11-12 to SC-A11-16, SC-A03-10, SC-P-03, SC-ST-01 and SC-ST-02, and on the devnet SC-IT-01 to SC-IT-06). SC-P-09 passes too: it checks the reference rule the property tests are judged by. So do SC-MB-02 and SC-MB-01's event-matching helper. Every other test fails against `todo!()` stubs until it is implemented test first.
 
 ## A11 `LiquidityTransfer`: deposit and withdraw
 
