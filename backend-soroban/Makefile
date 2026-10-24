@@ -25,8 +25,9 @@ cov:
 	cargo llvm-cov --workspace --locked --summary-only
 
 # Model-based tests (TESTING.md §3): check the Quint model, then fail if the committed traces
-# are stale. `cargo test -p settlement itf_replay` replays them against the contract.
-QUINT_INVARIANTS = S1_conservation S2_noNegative S3_finalStaysFinal S7_fifo S9_atRest \
+# are stale or any witness is unreached. `cargo test -p settlement itf_replay` replays the
+# traces against the contract.
+QUINT_INVARIANTS = S1_conservation S2_noNegative S3_finalStaysFinal S5_irrevocability S7_fifo S9_atRest \
 	S11_validity S23_eagerOffsetting queueBounded
 QUINT_WITNESSES = W_offset W_queueFull W_expired W_revoked W_urgentOvertook W_deepQueue W_cascade
 # Quint puts the trace number at the first dot of the whole path, so the directory must have
@@ -34,16 +35,17 @@ QUINT_WITNESSES = W_offset W_queueFull W_expired W_revoked W_urgentOvertook W_de
 QUINT_TRACES = quint run settlement.qnt --mbt --max-samples 500 --max-steps 30 --n-traces 50 \
 	--seed 0x5e771e --invariants allInvariants --out-itf
 
-quint: SHELL := bash
 quint:
 	cd quint && quint typecheck settlement.qnt && quint test settlement_test.qnt
+	mkdir -p quint/quint-regen
 	cd quint && quint run settlement.qnt --max-samples 2000 --max-steps 30 --seed 0x6d875 \
-		--invariants $(QUINT_INVARIANTS) --witnesses $(QUINT_WITNESSES)
-	cd quint && rm -rf quint-regen && mkdir quint-regen && $(QUINT_TRACES) quint-regen/trace.itf.json
-	@cd quint && stale=0; for f in traces/*.itf.json; do \
-		diff <(jq -S .states "$$f") <(jq -S .states "quint-regen/$$(basename "$$f")") >/dev/null \
-			|| { echo "stale: $$f (run make quint-traces)"; stale=1; }; \
-	done; exit $$stale
+		--invariants $(QUINT_INVARIANTS) --witnesses $(QUINT_WITNESSES) >quint-regen/run.txt; \
+		status=$$?; cat quint-regen/run.txt; exit $$status
+	@# `quint run` exits 0 even when a witness is never reached, so check its report.
+	@! grep 'witnessed in 0 trace' quint/quint-regen/run.txt
+	cd quint && rm -f quint-regen/*.itf.json && $(QUINT_TRACES) quint-regen/trace.itf.json
+	scripts/check-traces-selftest.sh
+	scripts/check-traces.sh quint/traces quint/quint-regen
 
 # Rewrites quint/traces/ from the model, after a change to quint/settlement.qnt.
 quint-traces:

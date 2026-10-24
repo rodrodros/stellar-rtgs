@@ -141,6 +141,19 @@ module settlement_test {
       .then(reprioritise(1, "Urgent"))
       .expect(queueOf(payments, nextId, "A", "Urgent") == [0, 1, 2])
 
+  // SC-A02-07. S3, S5: a settled payment's record never changes, its settlement time
+  // included, through later time, payments and a withdrawal (ADR-0005, ADR-0006).
+  run settledPaymentNeverChangesTest =
+    init.then(deposit("A", 100))
+      .then(tick(5))
+      .then(submit("A", "B", 40, "Normal"))
+      .then(tick(EXPIRY + 1))
+      .then(submit("A", "B", 70, "Normal"))
+      .expect(S5_irrevocability)
+      .then(withdraw("A", 60))
+      .expect(S3_finalStaysFinal and S5_irrevocability and
+              payments.get(0).status == "Settled" and payments.get(0).settledAt == 5)
+
   // SC-F-04, SC-F-08. Funding errors.
   run fundingErrorsTest =
     init.then(deposit("A", FUNDING + 1))

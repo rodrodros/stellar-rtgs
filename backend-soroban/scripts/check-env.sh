@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fails unless every tool matches the pins of stellar-research/handbook/01-toolchain.md.
 # Required: rustc, the wasm32v1-none target, stellar-cli, Docker and the quickstart image's
-# tag. quint and the cargo test plugins are checked when present and reported when missing,
+# tag. quint, jq and the cargo test plugins are checked when present and reported when missing,
 # because only the later test layers need them (TESTING.md).
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -21,6 +21,9 @@ docker info >/dev/null 2>&1 && ok "docker daemon $(docker version --format '{{.S
 expect "quickstart image" stellar/quickstart:v678-b1525.1-latest "$(sed -n 's/.*IMPL_IMAGE:-\([^}]*\)}.*/\1/p' devnet/common.sh)"
 
 if command -v quint >/dev/null; then expect quint 0.33.0 "$(quint --version 2>/dev/null)"; else note "quint missing (needed for Quint traces)"; fi
+# `make quint` also needs bash, which this script runs under, and jq to compare traces.
+ok "bash $BASH_VERSION"
+command -v jq >/dev/null && ok "$(jq --version)" || note "jq missing (needed by make quint to compare traces)"
 for plugin in llvm-cov mutants kani fuzz scout-audit; do
   command -v "cargo-$plugin" >/dev/null && ok "cargo-$plugin present" || note "cargo-$plugin missing (TESTING.md says which layer needs it)"
 done

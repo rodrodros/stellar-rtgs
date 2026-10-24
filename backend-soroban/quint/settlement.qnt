@@ -56,8 +56,10 @@ module settlement {
   var settledNow: List[int]
   // The ids of each `Offset` event the last call published, in order.
   var offsetsNow: List[List[int]]
-  // History: each payment's status before the last call, for S3 and S5.
+  // History: each payment's status and settlement time before the last call, for S3 and
+  // S5.
   var prevStatus: int -> str
+  var prevSettledAt: int -> int
 
   // ---- Queues and cover (§4.5) ----
 
@@ -154,6 +156,7 @@ module settlement {
     })
 
   pure def statuses(ps: int -> Payment): int -> str = ps.keys().mapBy(i => ps.get(i).status)
+  pure def settledTimes(ps: int -> Payment): int -> int = ps.keys().mapBy(i => ps.get(i).settledAt)
 
   // ---- Actions ----
 
@@ -168,6 +171,7 @@ module settlement {
     settledNow' = List(),
     offsetsNow' = List(),
     prevStatus' = statuses(payments),
+    prevSettledAt' = settledTimes(payments),
   }
 
   // A successful call: apply its own effect, then the eager closure.
@@ -183,6 +187,7 @@ module settlement {
       lastError' = "",
       lastValue' = value,
       prevStatus' = statuses(payments),
+      prevSettledAt' = settledTimes(payments),
     }
   }
 
@@ -272,6 +277,7 @@ module settlement {
     settledNow' = List(),
     offsetsNow' = List(),
     prevStatus' = statuses(payments),
+    prevSettledAt' = settledTimes(payments),
   }
 
   action init = all {
@@ -285,6 +291,7 @@ module settlement {
     settledNow' = List(),
     offsetsNow' = List(),
     prevStatus' = Map(),
+    prevSettledAt' = Map(),
   }
 
   // One named action per contract call. Each picks its arguments with `nondet`, so
@@ -307,10 +314,28 @@ module settlement {
 
   action submitStep = {
     nondet bank = BANK_SET.oneOf()
-    nondet payee = BANK_SET.oneOf()
+    nondet payee = BANK_SET.exclude(Set(bank)).oneOf()
     nondet amount = 1.to(80).oneOf()
     nondet priority = PRIORITIES.oneOf()
     submit(bank, payee, amount, priority)
+  }
+
+  // A payment to oneself, refused with `SameAccount`. It is a step of its own, with a
+  // small weight, so that `submitStep` spends its picks on payments that can queue.
+  action submitToSelfStep = {
+    nondet bank = BANK_SET.oneOf()
+    nondet payee = Set(bank).oneOf()
+    nondet amount = 1.to(80).oneOf()
+    nondet priority = PRIORITIES.oneOf()
+    submit(bank, payee, amount, priority)
+  }
+
+  // A deposit of all the bank holds outside, or up to 3 more, which the token refuses
+  // (`TokenTransferFailed`).
+  action depositLargeStep = {
+    nondet bank = BANK_SET.oneOf()
+    nondet amount = reserve.get(bank).to(reserve.get(bank) + 3).oneOf()
+    deposit(bank, amount)
   }
 
   // Mostly ids that exist, sometimes the next one, which was never issued.
@@ -335,17 +360,27 @@ module settlement {
     tick(dt)
   }
 
+  // `any` picks a branch uniformly, so repeating one weights it. A self-payment is one
+  // ninth of the submissions.
   action step = any {
     depositStep,
     depositStep,
+    depositLargeStep,
     withdrawStep,
     submitStep,
     submitStep,
     submitStep,
     submitStep,
+    submitStep,
+    submitStep,
+    submitStep,
+    submitStep,
+    submitToSelfStep,
+    revokeStep,
     revokeStep,
     reprioritiseStep,
     expireStep,
+    tickStep,
     tickStep,
   }
 
@@ -358,9 +393,13 @@ module settlement {
   val S1_conservation = sumOf(reserve) + sumOf(balances) == FUNDING * BANKS.length()
   // S2: no credit line, so no balance or holding goes negative.
   val S2_noNegative = BANKS.foldl(true, (ok, b) => ok and balances.get(b) >= 0 and reserve.get(b) >= 0)
-  // S3 and S5: a final status never changes, and a settlement time never moves.
+  // S3: a final status never changes.
   val S3_finalStaysFinal = prevStatus.keys().forall(i =>
     prevStatus.get(i) == "Queued" or prevStatus.get(i) == payments.get(i).status)
+  // S5: a settled payment stays settled, and its settlement time never moves.
+  val S5_irrevocability = prevStatus.keys().forall(i =>
+    prevStatus.get(i) != "Settled" or
+      (payments.get(i).status == "Settled" and payments.get(i).settledAt == prevSettledAt.get(i)))
   // S7 (a), (b), and F2 and F6 for offsets: no payment the last call settled overtook a
   // payment of the same bank that is still queued and comes before it in ≺. Priorities
   // change only in A8's own effect, before the closure, so the post-state's priorities
@@ -383,7 +422,7 @@ module settlement {
   // S23: between calls, no offset is feasible.
   val S23_eagerOffsetting = isZero(kstar(balances, payments, nextId))
   val queueBounded = queuedCount(payments, nextId) <= QUEUE_CAP
-  val allInvariants = S1_conservation and S2_noNegative and S3_finalStaysFinal and S7_fifo and
+  val allInvariants = S1_conservation and S2_noNegative and S3_finalStaysFinal and S5_irrevocability and S7_fifo and
     S9_atRest and S11_validity and S23_eagerOffsetting and queueBounded
 
   // ---- Witnesses: states the traces should reach, so the replay exercises them ----
