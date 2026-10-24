@@ -1,0 +1,41 @@
+# Mirrors `make lint test build`. Never run on GitHub yet (this repo is not pushed);
+# checked locally with action-validator. Adapted from the testing track's recipe
+# (stellar-research/stellar/testing/lab/ci/contracts.yml). Add a job per test layer as
+# TESTING.md introduces it.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      # Installs the toolchain, target and components pinned in rust-toolchain.toml.
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      # Installs the stellar-cli release that matches the action's ref.
+      - uses: stellar/stellar-cli@v28.1.0
+      - name: Lint
+        run: make lint
+      - name: Test
+        run: make test
+      - name: Build Wasm
+        run: make build
