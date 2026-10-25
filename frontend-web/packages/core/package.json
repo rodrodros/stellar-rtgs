@@ -6,7 +6,7 @@
   "description": "Networks, contract client, signers, event feed and read models for the RTGS front ends",
   "exports": {
     ".": "./src/index.ts",
-    "./react": "./src/react/index.ts",
+    "./react": "./src/react/index.tsx",
     "./node": "./src/node/index.ts",
     "./wasm/settlement.wasm": "./wasm/settlement.wasm"
   },
@@ -40,6 +40,7 @@
     "react-dom": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   }
 }
