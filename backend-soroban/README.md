@@ -13,7 +13,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - `withdraw`'s guards: it refuses an amount of 0 or less with `InvalidAmount` and one above the balance with `InsufficientFunds`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - the kernel's cover rule, `rtgs_core::covers`: a payment is covered if paying it leaves the sender's balance non-negative, with its unit and property tests;
 - `submit` (A1): the sender's authorization, `InvalidAmount` and `SameAccount`, sequence-number ids and the payment record. A payment `covers` accepts settles at once (A2); any other waits in the sender's queue for its priority. The `payment`, `queue` and `queued_count` views read them back;
-- queue discipline at submission (S7, ADR-0008, ADR-0009): within a priority, payments are strictly first in, first out, and a bank's queued urgent payment blocks its normal ones, so a new payment settles at once only if none of the sender's is queued ahead of it;
+- queue discipline at submission (S7, ADR-0008, ADR-0009): within a priority, payments are strictly first in, first out, and a bank's queued urgent payment blocks its normal ones, so a new payment settles at once only if none of the sender's is queued ahead of it, with its unit and property tests;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
 The queue cap, the eager closure, queue management, offsetting and credit come next, test first.

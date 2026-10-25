@@ -126,10 +126,55 @@ fn is_final(st: Status) -> bool {
     st != Status::Queued
 }
 
-/// `≺` within one bank (§4.5): urgent before normal, then by sequence number.
+/// A payment's place in its bank's `≺` (§4.5): urgent before normal, then by sequence
+/// number.
+fn rank(priority: Priority, id: u64) -> (bool, u64) {
+    (priority != Priority::Urgent, id)
+}
+
 fn precedes(a: &Payment, b: &Payment) -> bool {
-    let rank = |p: &Payment| (p.priority != Priority::Urgent, p.id);
-    rank(a) < rank(b)
+    rank(a.priority, a.id) < rank(b.priority, b.id)
+}
+
+/// S7 under F2: a payment that settled between `before` and `after` precedes, in its
+/// bank's `≺`, every payment of that bank still queued.
+fn settled_in_order(
+    before: &BTreeMap<u64, Payment>,
+    after: &BTreeMap<u64, Payment>,
+) -> Result<(), TestCaseError> {
+    let newly = after
+        .values()
+        .filter(|p| p.status == Status::Settled)
+        .filter(|p| before.get(&p.id).is_none_or(|b| b.status == Status::Queued));
+    for p in newly {
+        for q in after
+            .values()
+            .filter(|q| q.status == Status::Queued && q.from == p.from)
+        {
+            prop_assert!(precedes(p, q), "S7: {} settled ahead of {}", p.id, q.id);
+        }
+    }
+    Ok(())
+}
+
+/// The ids bank `b` has queued, in `≺` order: what its `queue` views, urgent then normal,
+/// must list.
+fn queued_in_order(s: &Setup, payments: &BTreeMap<u64, Payment>, b: usize) -> Vec<u64> {
+    let mut mine: Vec<&Payment> = payments
+        .values()
+        .filter(|p| p.status == Status::Queued && &p.from == s.bank(b))
+        .collect();
+    mine.sort_by_key(|p| rank(p.priority, p.id));
+    mine.iter().map(|p| p.id).collect()
+}
+
+/// Only deposit, withdraw and submit, for the properties of submission alone.
+fn submission_op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        2 => (0..N, amount()).prop_map(|(b, a)| Op::Deposit(b, a)),
+        1 => (0..N, amount()).prop_map(|(b, a)| Op::Withdraw(b, a)),
+        6 => (0..N, 0..N, amount(), priority()).prop_map(|(f, t, a, p)| Op::Submit(f, t, a, p)),
+    ]
 }
 
 proptest! {
@@ -234,18 +279,8 @@ proptest! {
                     prop_assert_eq!(Some(p), q, "S3: final payment {} changed", id);
                 }
             }
-            // S7 under F2: a payment that settled in this call precedes, in its bank's `≺`,
-            // every payment of that bank still queued.
-            let newly: Vec<&Payment> = after
-                .values()
-                .filter(|p| p.status == Status::Settled)
-                .filter(|p| before.get(&p.id).is_none_or(|b| b.status == Status::Queued))
-                .collect();
-            for p in &newly {
-                for q in after.values().filter(|q| q.status == Status::Queued && q.from == p.from) {
-                    prop_assert!(precedes(p, q), "S7: {} settled ahead of {}", p.id, q.id);
-                }
-            }
+            // S7 under F2.
+            settled_in_order(&before, &after)?;
             // The queue views agree with the statuses, in `≺` order, under the cap.
             let queued = after.values().filter(|p| p.status == Status::Queued).count();
             prop_assert_eq!(c.queued_count() as usize, queued);
@@ -254,15 +289,7 @@ proptest! {
             for b in 0..N {
                 let mut q = s.queue(b, Priority::Urgent);
                 q.extend(s.queue(b, Priority::Normal));
-                let expected: Vec<u64> = {
-                    let mut mine: Vec<&Payment> = after
-                        .values()
-                        .filter(|p| p.status == Status::Queued && &p.from == s.bank(b))
-                        .collect();
-                    mine.sort_by_key(|p| (p.priority != Priority::Urgent, p.id));
-                    mine.iter().map(|p| p.id).collect()
-                };
-                prop_assert_eq!(&q, &expected, "queue of bank {}", b);
+                prop_assert_eq!(&q, &queued_in_order(&s, &after, b), "queue of bank {}", b);
                 candidates.push(
                     q.iter()
                         .map(|id| {
@@ -292,6 +319,58 @@ proptest! {
                     }
                 }
                 prop_assert_eq!((cr.cr, cr.ovn), (intraday, penalty), "credit of bank {}", b);
+            }
+            before = after;
+        }
+    }
+
+    /// Submission keeps each bank's queue discipline, over any sequence of deposits,
+    /// withdrawals and submissions, valid or not:
+    /// - S7 under F2: a payment settles only ahead of none of its bank's queued payments
+    ///   in `≺`; within a priority, strictly first in, first out (ADR-0008), and a queued
+    ///   urgent payment blocks the bank's normal ones (ADR-0009);
+    /// - A1, A2: a payment that is covered, with nothing of its sender's queued ahead of it
+    ///   in `≺`, settles in its own submission, never waits (ADR-0010);
+    /// - the queue views list each bank's queued payments in `≺` order;
+    /// - S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    ///
+    /// A refused call, `QueueFull` included, is skipped. The calls need no later entry
+    /// point, so this checks the queue discipline before SC-P-01 can.
+    #[test]
+    fn submissions_keep_each_banks_queue_in_order(ops in prop::collection::vec(submission_op(), 1..30)) {
+        let s = Setup::new(N, FUNDING);
+        let c = s.client();
+        let mut before = payments(&s);
+
+        for op in ops {
+            match op {
+                Op::Deposit(b, a) => {
+                    let _ = typed(c.try_deposit(s.bank(b), &a));
+                }
+                Op::Withdraw(b, a) => {
+                    let _ = typed(c.try_withdraw(s.bank(b), &a));
+                }
+                Op::Submit(f, t, a, p) => {
+                    let id = before.len() as u64;
+                    let ahead = before
+                        .values()
+                        .filter(|q| q.status == Status::Queued && &q.from == s.bank(f))
+                        .any(|q| rank(q.priority, q.id) < rank(p, id));
+                    let covered = c.balance(s.bank(f)) >= a;
+                    if typed(c.try_submit(s.bank(f), s.bank(t), &a, &p)).is_ok() && covered && !ahead {
+                        prop_assert_eq!(c.payment(&id).map(|q| q.status), Some(Status::Settled), "A2: {} waits", id);
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            s.assert_conserved();
+            let after = payments(&s);
+            settled_in_order(&before, &after)?;
+            for b in 0..N {
+                let mut q = s.queue(b, Priority::Urgent);
+                q.extend(s.queue(b, Priority::Normal));
+                prop_assert_eq!(&q, &queued_in_order(&s, &after, b), "queue of bank {}", b);
             }
             before = after;
         }

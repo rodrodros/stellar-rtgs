@@ -105,7 +105,7 @@ Build on Flow 4. `submit` needs:
 
 `submit` settles a covered payment at once whatever is queued ahead of it, until Flow 6. Seven tests of later flows pass with this flow, but stay unticked until their own flow re-checks them: each guards against, or depends on, a behaviour that doesn't exist yet. They are SC-A01-13 and SC-A01-14 (Flow 6, queue discipline), SC-A01-10 (Flow 7, the cap), SC-A02-06 and SC-A02-07 (Flow 8, the closure), and SC-A03-04 and SC-A03-05 (Flow 13, the offset). Each one's line says what to check before ticking it.
 
-## Flow 6: queue discipline at submission (6)
+## Flow 6: queue discipline at submission (7)
 
 Within a priority, payments are strictly first in, first out. While a bank has an urgent payment queued, none of its normal payments settles (S7; ADR-0008, ADR-0009). So a new payment settles at once only if nothing is queued ahead of it.
 
@@ -115,6 +115,7 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 - [x] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). Passed since Flow 5, and still passes with the discipline, which looks at the sender's queues alone.
 - [x] `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` (SC-A01-15)
 - [x] `unit::payments::a_covered_urgent_payment_waits_behind_an_uncovered_urgent_one` (SC-A01-17). Added in Flow 6, since no other test checks FIFO within the urgent priority; it fails if an urgent payment ignores the bank's queued urgent ones.
+- [x] `props::submissions_keep_each_banks_queue_in_order` (SC-P-10). Added in Flow 6: SC-P-01 checks S7 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. Against Flow 5's rule it fails with S7: its shrunk case is a normal payment settling past the bank's queued urgent one, which SC-A01-12 already pins as a unit test.
 
 ## Flow 7: the queue cap, ADR-0010 (2)
 
@@ -343,8 +344,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 6) | 43 |
+| Already green (Flows 0 to 6) | 44 |
 | Still to fix (Flows 7 to 21) | 107 |
-| All | 150 |
+| All | 151 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10.
