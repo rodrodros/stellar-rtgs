@@ -3,7 +3,7 @@
 // comes out as an `RtgsError`.
 import { rpc, scValToNative, type contract } from "@stellar/stellar-sdk";
 import { Client as SettlementClient } from "../generated/settlement.ts";
-import { contractError, CONTRACT_ERRORS, RtgsError, toRtgsError } from "../errors.ts";
+import { contractError, CONTRACT_ERRORS, retryTransient, RtgsError, toRtgsError } from "../errors.ts";
 import { sdkSigning, type Signer, assertSamePassphrase } from "../signer/signer.ts";
 import { accountLoadError, signAndSend, type TxContext } from "../tx.ts";
 import type { Config, Credit, Payment, Priority, Repo, TxOutcome } from "../types.ts";
@@ -71,7 +71,7 @@ export class SettlementReader {
   }
 
   private async view<T>(make: (c: Client) => Promise<Assembled<unknown>>): Promise<T> {
-    return simulated(await build(() => make(this.client))) as T;
+    return retryTransient(async () => simulated(await build(() => make(this.client))) as T);
   }
 
   async config(): Promise<Config> {
@@ -191,13 +191,21 @@ export class SettlementWriter {
     this.client = settlementClient(ctx, signer);
   }
 
-  /** Builds (the client loads the signer's account) and simulates the call. */
+  /**
+   * Builds (the client loads the signer's account) and simulates the call, retrying RPC's
+   * transient snapshot race. Throws the mapped error if the simulation refuses it.
+   */
   private async build(make: (c: Client) => Promise<Assembled<unknown>>): Promise<Assembled<unknown>> {
-    try {
-      return await make(this.client);
-    } catch (e) {
-      throw await accountLoadError(this.ctx, this.signer.address, e);
-    }
+    return retryTransient(async () => {
+      let tx: Assembled<unknown>;
+      try {
+        tx = await make(this.client);
+      } catch (e) {
+        throw await accountLoadError(this.ctx, this.signer.address, e);
+      }
+      simulated(tx);
+      return tx;
+    });
   }
 
   /** Simulates without sending. */
@@ -219,7 +227,6 @@ export class SettlementWriter {
    */
   async send<T>(make: (c: Client) => Promise<Assembled<unknown>>): Promise<TxOutcome<T>> {
     const tx = await this.build(make);
-    simulated(tx);
     const outcome = await signAndSend(this.ctx, this.signer, tx.built!);
     const value = outcome.value === undefined ? undefined : tx.options.parseResultXdr(outcome.value);
     return { ...outcome, value: unwrap<T>(value) };

@@ -1,6 +1,6 @@
 import { contract } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
-import { CONTRACT_ERRORS, RtgsError, toRtgsError } from "../src/errors.ts";
+import { CONTRACT_ERRORS, retryTransient, RtgsError, toRtgsError } from "../src/errors.ts";
 import { wasm } from "./helpers.ts";
 
 describe("error mapping", () => {
@@ -46,6 +46,35 @@ describe("error mapping", () => {
   it("names the cash token's issuer, not the central bank (spec fact 3)", () => {
     for (const t of Object.values(CONTRACT_ERRORS)) expect(t.detail).not.toMatch(/central bank/i);
     expect(toRtgsError("op_not_authorized").detail).not.toMatch(/central bank/i);
+  });
+
+  it("maps RPC's transient snapshot race and retries it", async () => {
+    const race = "setting ContractComputeV0 is not present in the snapshot";
+    expect(toRtgsError(race)).toMatchObject({ kind: "rpc", title: "Network busy" });
+    let calls = 0;
+    expect(
+      await retryTransient(async () => {
+        calls += 1;
+        if (calls < 3) throw toRtgsError(race);
+        return "ok";
+      }),
+    ).toBe("ok");
+    calls = 0;
+    await expect(
+      retryTransient(async () => {
+        calls += 1;
+        throw toRtgsError(race);
+      }),
+    ).rejects.toMatchObject({ title: "Network busy" });
+    expect(calls).toBe(3);
+    calls = 0;
+    await expect(
+      retryTransient(async () => {
+        calls += 1;
+        throw toRtgsError("Error(Contract, #5)");
+      }),
+    ).rejects.toMatchObject({ code: 5 });
+    expect(calls).toBe(1);
   });
 
   it("passes an RtgsError through", () => {

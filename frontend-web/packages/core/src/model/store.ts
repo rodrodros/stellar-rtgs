@@ -6,7 +6,8 @@
 // Framework-agnostic: `subscribe` / `getSnapshot` fit React's `useSyncExternalStore`.
 import type { Capabilities } from "../capabilities.ts";
 import { latestId, mapLimit } from "../contract/gateway.ts";
-import { notifyAll, RtgsError, toRtgsError } from "../errors.ts";
+import { RtgsError, toRtgsError } from "../errors.ts";
+import { notifyAll } from "../listeners.ts";
 import type { EventFeed, FeedOptions, FeedStatus } from "../events/feed.ts";
 import type { Bank } from "../registry/banks.ts";
 import type { LedgerClock } from "../rpc.ts";
@@ -31,8 +32,16 @@ export interface StoreOptions {
 
 export interface SystemSnapshot {
   status: "loading" | "ready" | "error";
-  /** The last failure (initial load, or a later refresh). */
+  /**
+   * The last failure of the initial load or of a refresh; cleared by the next one that
+   * succeeds. Registry failures are reported apart, in `registryError`.
+   */
   error?: RtgsError;
+  /**
+   * Reading the bank registry from the ledger failed; banks registered only there may be
+   * missing. Cleared by the next successful read (every `registryPollMs`).
+   */
+  registryError?: RtgsError;
   contractId: string;
   centralBank: string;
   capabilities: Capabilities;
@@ -172,11 +181,7 @@ export class RtgsStore {
       const [config, queuedCount, ledger] = await Promise.all([read.config(), read.queuedCount(), this.session.latestLedger()]);
       if (!this.running) return;
       this.update({ config, queuedCount, ledger });
-      try {
-        await registry.load();
-      } catch (e) {
-        this.update({ error: toRtgsError(e) });
-      }
+      await this.reloadRegistry();
       await this.loadRecentPayments();
       await this.loadRepos();
       await this.refreshBanks(registry.list().map((b) => b.address));
@@ -202,12 +207,13 @@ export class RtgsStore {
     void this.load();
   }
 
-  /** Re-reads the registry; banks it hasn't seen get their views. */
+  /** Re-reads the registry; banks it hasn't seen get their views. A failure is reported apart. */
   private async reloadRegistry(): Promise<void> {
     try {
       await this.session.registry.load();
-    } catch {
-      // Kept as it was; the next poll tries again.
+      if (this.running && this.snapshot.registryError) this.update({ registryError: undefined });
+    } catch (e) {
+      if (this.running) this.update({ registryError: toRtgsError(e) });
     }
   }
 
@@ -336,8 +342,10 @@ export class RtgsStore {
     if (!this.running) return;
     const banks = new Map(this.banks);
     for (const view of views) {
-      const name = this.session.registry.get(view.address)?.name;
-      banks.set(view.address, name ? { ...view, name } : view);
+      // The bank may have left the registry while its views were being read.
+      const bank = this.session.registry.get(view.address);
+      if (!bank) continue;
+      banks.set(view.address, bank.name ? { ...view, name: bank.name } : view);
       this.model = mergePayments(this.model, [...view.queues.urgent, ...view.queues.normal]);
     }
     this.banks = banks;

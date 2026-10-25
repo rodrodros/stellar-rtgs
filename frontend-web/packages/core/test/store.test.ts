@@ -43,7 +43,9 @@ function fakeSession() {
       },
       load: vi.fn(async () => []),
       observe: () => [],
-      get: () => undefined,
+      get(address: string) {
+        return this.banks.find((b) => b.address === address);
+      },
       subscribe(fn: (b: unknown[]) => void) {
         this.listeners.add(fn);
         return () => this.listeners.delete(fn);
@@ -181,6 +183,36 @@ describe("store", () => {
     for (const l of fake.registry.listeners) l(fake.registry.banks);
     expect(store.getSnapshot().banks.has(B)).toBe(false);
     expect(store.getSnapshot().banks.get(A)!.name).toBe("Renamed");
+    store.stop();
+  });
+
+  it("doesn't bring back a bank that left the registry while its views were being read", async () => {
+    const fake = fakeSession();
+    const store = new RtgsStore(fake.session, { refreshDebounceMs: 1 });
+    store.start();
+    await ready(store);
+    fake.read.bank.mockImplementation(async (address: string) => {
+      await new Promise((r) => setTimeout(r, 30));
+      return view(address, 1n);
+    });
+    const refreshing = store.refresh();
+    fake.registry.banks = [{ address: A, sources: ["config"] }];
+    for (const l of fake.registry.listeners) l(fake.registry.banks);
+    expect(store.getSnapshot().banks.has(B)).toBe(false);
+    await refreshing;
+    expect(store.getSnapshot().banks.has(B)).toBe(false);
+    store.stop();
+  });
+
+  it("reports a registry read failure apart from the load, until a read succeeds", async () => {
+    const fake = fakeSession();
+    fake.registry.load.mockRejectedValueOnce(new TypeError("fetch failed"));
+    const store = new RtgsStore(fake.session, { registryPollMs: 300 });
+    store.start();
+    await ready(store);
+    expect(store.getSnapshot().registryError).toMatchObject({ kind: "rpc" });
+    expect(store.getSnapshot().error).toBeUndefined();
+    await vi.waitFor(() => expect(store.getSnapshot().registryError).toBeUndefined());
     store.stop();
   });
 });

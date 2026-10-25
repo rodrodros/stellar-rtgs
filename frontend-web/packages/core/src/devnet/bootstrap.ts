@@ -11,9 +11,10 @@
 //   7. publish the contract id and the bank registry on the central bank's account.
 //
 // Every step checks what is already there first, so a rerun resumes; a published contract
-// running another Wasm is replaced. Cash is issued only to a bank that holds none. The devnet is reset often, after which everything is
-// created afresh.
-import { Asset, AuthClawbackEnabledFlag, AuthRequiredFlag, AuthRevocableFlag, hash, Operation } from "@stellar/stellar-sdk";
+// running another Wasm is replaced. Cash is issued to a bank only when its trustline opens,
+// or while nothing is deployed yet, so a rerun doesn't add money. The devnet is reset often,
+// after which everything is created afresh.
+import { Asset, AuthClawbackEnabledFlag, AuthRequiredFlag, AuthRevocableFlag, hash, Keypair, Operation, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { Client as SettlementClient } from "../generated/settlement.ts";
 import { RtgsError, toRtgsError } from "../errors.ts";
@@ -99,7 +100,7 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
 
   await run("issuer-flags", async () => {
     const required = AuthRequiredFlag | AuthRevocableFlag | AuthClawbackEnabledFlag;
-    const { flags } = await server.getAccountEntry(issuer);
+    const flags = await accountFlags(ctx, issuer);
     if ((flags & required) === required) return { value: undefined, skipped: true };
     await sendClassic(ctx, cb, [Operation.setOptions({ setFlags: required as 1 | 2 | 8 })]);
     return { value: undefined };
@@ -115,10 +116,15 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
   const holdings = new CashTokenReader(ctx, token);
 
   await run("banks", async () => {
+    // Before any contract is deployed no bank can have deposited, so a bank holding nothing
+    // was never issued its cash (an earlier run stopped half way). Once a deployment exists,
+    // a bank holding nothing may have deposited everything; issuing again would add money.
+    const deployed = (await discoverDeployment(ctx, cb.address)).contractId !== undefined;
     let changed = false;
     for (const bank of ids.banks) {
       let holding = await holdings.holding(bank.address);
-      if (!holding.exists) {
+      const opened = !holding.exists;
+      if (opened) {
         await sendClassic(ctx, bank, [Operation.changeTrust({ asset })]);
         holding = await holdings.holding(bank.address);
         changed = true;
@@ -127,9 +133,7 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
         await admin.authorize(bank.address, true);
         changed = true;
       }
-      // Issue only to a bank that holds nothing yet. Topping up a bank that has since
-      // deposited or paid its cash away would issue new money on every rerun.
-      if (holding.balance === 0n) {
+      if (holding.balance === 0n && (opened || !deployed)) {
         await admin.issue(bank.address, cash);
         changed = true;
       }
@@ -196,13 +200,25 @@ async function deployedWasmHash(ctx: TxContext, contractId: string): Promise<str
   }
 }
 
+/** Whether a lookup finds its entry: RPC's `{ code: 404 }` means no; other failures throw. */
 async function exists(read: () => Promise<unknown>): Promise<boolean> {
   try {
     await read();
     return true;
-  } catch {
-    return false;
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code === 404) return false;
+    throw toRtgsError(e);
   }
+}
+
+/** The account's flags, read from the ledger so an RPC failure isn't "Account not found". */
+async function accountFlags(ctx: TxContext, address: string): Promise<number> {
+  const key = xdr.LedgerKey.account(new xdr.LedgerKeyAccount({ accountId: Keypair.fromPublicKey(address).xdrAccountId() }));
+  const [entry] = (await ctx.server.getLedgerEntries(key)).entries;
+  if (!entry || entry.val.type !== "account") {
+    throw new RtgsError("transaction", "No such account", `${address} does not exist on ${ctx.net.label}.`);
+  }
+  return entry.val.account.flags;
 }
 
 /** Uploads the Wasm unless the network has it, then deploys a contract running it. */

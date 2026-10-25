@@ -1,7 +1,7 @@
 // The bank registry the apps see (spec fact 2): the union of the banks listed in config, those
 // the central bank registered on its account (registry/ledger.ts), the devnet identities, and
 // any address the event feed mentions. The central bank and the contract are not banks.
-import { notifyAll } from "../errors.ts";
+import { notifyAll } from "../listeners.ts";
 import { DEFAULT_DEVNET_SEED, type NetworkConfig } from "../network/networks.ts";
 import { deriveDevnetKeypair, bankLabel } from "../signer/keypair.ts";
 import type { Signer } from "../signer/signer.ts";
@@ -26,6 +26,10 @@ export class BankRegistry {
   private fromLedger = new Map<string, string | undefined>();
   private readonly fromEvents = new Set<string>();
   private banks = new Map<string, Bank>();
+  /** `list()`'s array, rebuilt only when the registry changes, so it is stable for React. */
+  private listed: Bank[] = [];
+  /** Bumped by every register and unregister, so an older ledger read can't undo them. */
+  private writes = 0;
   private readonly listeners = new Set<(banks: Bank[]) => void>();
   private devnetNames: Map<string, string> | undefined;
 
@@ -40,7 +44,7 @@ export class BankRegistry {
   }
 
   list(): Bank[] {
-    return [...this.banks.values()];
+    return this.listed;
   }
 
   get(address: string): Bank | undefined {
@@ -91,6 +95,7 @@ export class BankRegistry {
     const changed = JSON.stringify([...next.values()]) !== JSON.stringify([...this.banks.values()]);
     this.banks = next;
     if (changed) {
+      this.listed = [...next.values()];
       notifyAll(this.listeners, this.list());
     }
   }
@@ -100,7 +105,13 @@ export class BankRegistry {
    * contribution, so a bank another app unregistered or renamed is updated here too.
    */
   async load(): Promise<Bank[]> {
-    const ledger = await readLedgerBanks(this.ctx, this.centralBank);
+    let ledger;
+    // A read that a register or unregister overtook is stale: read again.
+    for (;;) {
+      const writes = this.writes;
+      ledger = await readLedgerBanks(this.ctx, this.centralBank);
+      if (writes === this.writes) break;
+    }
     this.fromLedger = new Map(ledger.map((b) => [b.address, b.name]));
     this.recompute();
     return this.list();
@@ -123,6 +134,7 @@ export class BankRegistry {
   /** The central bank registers (or renames) a bank on its account. */
   async register(cb: Signer, entry: { address: string; name?: string }): Promise<TxOutcome> {
     const outcome = await registerBank(this.ctx, cb, this.centralBank, entry);
+    this.writes += 1;
     this.fromLedger.set(entry.address, entry.name?.trim() || undefined);
     this.recompute();
     return outcome;
@@ -130,6 +142,7 @@ export class BankRegistry {
 
   async unregister(cb: Signer, address: string): Promise<TxOutcome> {
     const outcome = await unregisterBank(this.ctx, cb, this.centralBank, address);
+    this.writes += 1;
     this.fromLedger.delete(address);
     this.recompute();
     return outcome;

@@ -1,12 +1,12 @@
 // The cash token: a classic asset used through its Stellar Asset Contract (ADR-0003).
 import { Asset, Contract, Keypair, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
+import { RtgsError, toRtgsError } from "../errors.ts";
+import { simulateRead, type TxContext } from "../tx.ts";
 
-// TrustLineFlags (Stellar XDR).
+// Stellar XDR `TrustLineFlags`.
 const AuthorizedFlag = 1;
 const AuthorizedToMaintainLiabilitiesFlag = 2;
 const TrustlineClawbackEnabledFlag = 4;
-import { RtgsError, toRtgsError } from "../errors.ts";
-import { simulateRead, type TxContext } from "../tx.ts";
 
 export interface CashToken {
   /** The SAC's C-address. */

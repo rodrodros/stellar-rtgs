@@ -1,7 +1,7 @@
 // Building, signing, sending and confirming transactions. A transaction is final once the
 // ledger that applies it closes (ADR-0005), so every send polls until RPC reports it.
 import { Account, BASE_FEE, contract, Keypair, rpc, TransactionBuilder, xdr, type Transaction } from "@stellar/stellar-sdk";
-import { RtgsError, toRtgsError } from "./errors.ts";
+import { retryTransient, RtgsError, toRtgsError } from "./errors.ts";
 import { contractIdOf, decodeEvent, eventId } from "./events/decode.ts";
 import type { NetworkConfig } from "./network/networks.ts";
 import type { RpcServer } from "./rpc.ts";
@@ -207,12 +207,14 @@ export async function sendInvoke(
 ): Promise<TxOutcome<xdr.ScVal | undefined>> {
   const b = await builder(ctx, signer.address);
   b.addOperation(op);
-  let prepared: Transaction;
-  try {
-    prepared = await ctx.server.prepareTransaction(b.build());
-  } catch (e) {
-    throw toRtgsError(e, source);
-  }
+  const unsigned = b.build();
+  const prepared = await retryTransient(async () => {
+    try {
+      return await ctx.server.prepareTransaction(unsigned);
+    } catch (e) {
+      throw toRtgsError(e, source);
+    }
+  });
   return signAndSend(ctx, signer, prepared, source);
 }
 
@@ -222,13 +224,16 @@ export async function simulateRead(ctx: TxContext, op: xdr.Operation, source: "s
     .addOperation(op)
     .setTimeout(TIMEOUT_SECS)
     .build();
-  let sim: rpc.Api.SimulateTransactionResponse;
-  try {
-    sim = await ctx.server.simulateTransaction(tx);
-  } catch (e) {
-    throw toRtgsError(e, source);
-  }
-  if (rpc.Api.isSimulationError(sim)) throw toRtgsError(sim.error, source);
+  const sim = await retryTransient(async () => {
+    let result: rpc.Api.SimulateTransactionResponse;
+    try {
+      result = await ctx.server.simulateTransaction(tx);
+    } catch (e) {
+      throw toRtgsError(e, source);
+    }
+    if (rpc.Api.isSimulationError(result)) throw toRtgsError(result.error, source);
+    return result;
+  });
   if (rpc.Api.isSimulationRestore(sim)) throw toRtgsError("archived", source);
   return sim.result?.retval ?? xdr.ScVal.scvVoid();
 }

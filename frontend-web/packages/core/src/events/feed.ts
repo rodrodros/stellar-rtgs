@@ -6,7 +6,8 @@
 // says so; older history needs an indexer, which this project does not have. Payment orders
 // themselves stay readable through the contract's views.
 import { rpc } from "@stellar/stellar-sdk";
-import { notifyAll, RtgsError, toRtgsError } from "../errors.ts";
+import { RtgsError, toRtgsError } from "../errors.ts";
+import { notifyAll } from "../listeners.ts";
 import type { RpcServer } from "../rpc.ts";
 import type { FeedEvent } from "../types.ts";
 import { decodeFeedEvent } from "./decode.ts";

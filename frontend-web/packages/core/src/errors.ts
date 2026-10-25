@@ -163,6 +163,30 @@ function messageOf(e: unknown): string {
   }
 }
 
+/**
+ * A simulation failure stellar-rpc raises now and then at a ledger boundary ("setting
+ * ContractComputeV0 is not present in the snapshot"). Simulating again succeeds.
+ */
+const TRANSIENT = /is not present in the snapshot/;
+
+/** Whether a failure is RPC's transient snapshot race, worth simulating again. */
+export function isTransient(e: unknown): boolean {
+  if (e instanceof RtgsError) return e.kind === "rpc" && e.title === "Network busy";
+  return TRANSIENT.test(messageOf(e));
+}
+
+/** Runs `attempt`, again up to twice more if it fails with RPC's transient snapshot race. */
+export async function retryTransient<T>(attempt: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await attempt();
+    } catch (e) {
+      if (tries >= 3 || !isTransient(e)) throw e;
+      await new Promise((r) => setTimeout(r, 300 * tries));
+    }
+  }
+}
+
 /** Whether a host error text is a Wasm trap, which a `todo!()` stub raises. */
 export function isWasmTrap(text: string): boolean {
   return /Error\(WasmVm,/.test(text) || /UnreachableCodeReached/.test(text);
@@ -200,6 +224,9 @@ export function toRtgsError(e: unknown, source: "settlement" | "sac" = "settleme
       cause: e,
     });
   }
+  if (TRANSIENT.test(text)) {
+    return new RtgsError("rpc", "Network busy", "RPC was between ledgers and couldn't simulate the call; try again.", { cause: e });
+  }
   if (/Error\(Storage, MissingValue\)/.test(text)) {
     return new RtgsError("config", "Nothing deployed there", "No contract (or no entry it needs) exists at that address on this network; it may have been reset.", {
       cause: e,
@@ -222,25 +249,4 @@ export function toRtgsError(e: unknown, source: "settlement" | "sac" = "settleme
     });
   }
   return new RtgsError("rpc", "Unexpected failure", text.slice(0, 500), { cause: e });
-}
-
-/**
- * Reports an exception from an app's listener without letting it break core's own loop: the
- * host's `reportError` (browsers, Node 22+), else the console.
- */
-export function reportListenerError(e: unknown): void {
-  const report = (globalThis as { reportError?: (e: unknown) => void }).reportError;
-  if (report) report(e);
-  else console.error("@rtgs/core: a listener threw", e);
-}
-
-/** Calls each listener, reporting rather than propagating what it throws. */
-export function notifyAll<A extends unknown[]>(listeners: Iterable<(...args: A) => void>, ...args: A): void {
-  for (const listener of listeners) {
-    try {
-      listener(...args);
-    } catch (e) {
-      reportListenerError(e);
-    }
-  }
 }
