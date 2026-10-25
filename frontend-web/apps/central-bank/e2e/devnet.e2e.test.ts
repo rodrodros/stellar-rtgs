@@ -1,7 +1,8 @@
 // The central bank's work end to end against a running devnet (stellar-implementation's
 // `make devnet-up`), through the same core calls and app logic the UI uses:
-//   IMPL_NAME=impl-fe-cb IMPL_PORT=8390 make -C ../stellar-implementation devnet-up
-//   RTGS_DEVNET_RPC=http://localhost:8390/rpc pnpm --filter @rtgs/central-bank test:e2e
+//   make -C ../stellar-implementation devnet-up        # http://localhost:8300/rpc
+//   pnpm --filter @rtgs/central-bank test:e2e
+// For a devnet of your own, pass IMPL_NAME and IMPL_PORT to make, and RTGS_DEVNET_RPC here.
 // Each run uses a fresh seed, so it bootstraps its own central bank, banks and contract.
 import {
   bootstrapDevnet,
@@ -22,7 +23,7 @@ import { conservation } from "../src/model/conservation.ts";
 import { expirablePayments } from "../src/model/due.ts";
 import { roleOf } from "../src/session/role.ts";
 
-const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8390/rpc";
+const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
 /** lib.sh's config with a 10-second expiry, so the keeper can reject a payment in the test. */
 const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 86_400, penaltyRateBps: 500 };
 
@@ -122,10 +123,30 @@ describe.skipIf(!up)("the central bank on the devnet", () => {
     expect(conservation(held, [...[...s.banks.values()].map((v) => v.balance), ...others]).holds).toBe(true);
   });
 
-  it("reports the credit entry points the contract doesn't implement yet", () => {
-    for (const ep of ["setCollateral", "openRepo", "repay", "convertOverdue", "credit", "repo"] as const) {
-      expect(session.capabilities[ep]).toBe("stub");
+  it("freezes the settlement contract and unfreezes it (hazard H1)", async () => {
+    const admin = roleOf(session, ids.centralBank).tokenAdmin!;
+    const bankA = session.as(ids.banks[0]!);
+    await admin.authorize(session.contractId, false);
+    try {
+      expect((await session.token.holding(session.contractId)).authorized).toBe(false);
+      await expect(bankA.deposit(parseAmount("1"))).rejects.toMatchObject({ kind: "contract", code: 2 });
+    } finally {
+      await admin.authorize(session.contractId, true);
     }
+    await bankA.deposit(parseAmount("1"));
+  });
+
+  it("opens credit when the contract implements it, and reports it unavailable otherwise", async () => {
+    const caps = session.capabilities;
+    for (const ep of ["setCollateral", "openRepo", "repay", "convertOverdue", "credit", "repo"] as const) {
+      expect(["available", "stub"]).toContain(caps[ep]);
+    }
+    if (caps.setCollateral !== "available" || caps.openRepo !== "available") return;
+    const cb = roleOf(session, ids.centralBank).centralBank!;
+    const bank = ids.banks[1]!.address;
+    await cb.setCollateral(bank, parseAmount("50"));
+    const { value } = await cb.openRepo(bank, parseAmount("20"));
+    await waitFor("the repo in the store", () => store.getSnapshot().repos.get(value.repoId));
   });
 
   it("lets the auto-keeper expire the payment once its expiry has passed", async () => {

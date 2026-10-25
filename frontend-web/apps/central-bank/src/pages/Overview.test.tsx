@@ -1,5 +1,5 @@
 import { cleanup, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BANK_A, BANK_B, bankView, fakeSession, payment, renderConnected, rowOf } from "../test/fake.tsx";
 import { Overview } from "./Overview.tsx";
 
@@ -27,8 +27,24 @@ describe("Overview", () => {
   it("flags a broken conservation check", async () => {
     // The contract holds 100 less than the banks' recorded 600: a direct clawback (H1).
     renderConnected(<Overview />, fakeSession({ contractHolding: { balance: 500n } }));
-    const alert = await within(screen.getByLabelText("Conservation")).findByRole("alert");
+    // A mismatch is read twice before it is reported.
+    const alert = await within(screen.getByLabelText("Conservation")).findByRole("alert", {}, { timeout: 5000 });
     expect(alert.textContent).toMatch(/broken by/);
+  });
+
+  it("doesn't alarm on a mismatch that a second read doesn't confirm (a deposit between the reads)", async () => {
+    const fake = fakeSession();
+    // The first read straddles a deposit: the holding already includes it, the balance doesn't.
+    vi.mocked(fake.session.token.holding).mockImplementationOnce(async () => ({
+      balance: 601n,
+      exists: true,
+      authorized: true,
+      authorizedToMaintainLiabilities: false,
+      clawbackEnabled: true,
+    }));
+    renderConnected(<Overview />, fake);
+    expect(await within(screen.getByLabelText("Conservation")).findByText("holds", {}, { timeout: 5000 })).toBeTruthy();
+    expect(within(screen.getByLabelText("Conservation")).queryByRole("alert")).toBeNull();
   });
 
   it("says conservation holds when it does", async () => {

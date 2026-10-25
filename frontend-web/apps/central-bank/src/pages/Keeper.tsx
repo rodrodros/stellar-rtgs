@@ -1,32 +1,27 @@
 // Keeper actions (ADR-0014, ADR-0015): anyone may reject an expired payment order or convert an
 // overdue repo; nothing on the ledger runs by itself. "Due" follows the contract's guards on
 // the latest ledger's close time.
-import { toRtgsError } from "@rtgs/core";
-import { useCapabilities, useSession, useSnapshot, useStore } from "@rtgs/core/react";
-import { useEffect, useMemo, useState } from "react";
+import { useCapabilities, useSession, useSnapshot } from "@rtgs/core/react";
+import { useMemo } from "react";
 import { ActionButton } from "../components/ActionButton.tsx";
 import { ActionStatus } from "../components/ActionStatus.tsx";
 import { Amount } from "../components/Amount.tsx";
 import { capabilityReason, firstReason } from "../components/capability.ts";
 import { useAction } from "../hooks/useAction.ts";
-import { AutoKeeper, type KeeperResult } from "../keeper/autoKeeper.ts";
+import { AUTO_KEEPER_INTERVAL_MS, useAutoKeeper } from "../keeper/AutoKeeperProvider.tsx";
 import { expirablePayments, expiryOf, overdueRepos, termEndOf } from "../model/due.ts";
 import { useRole } from "../session/role.ts";
-
-export const AUTO_KEEPER_INTERVAL_MS = 10_000;
 
 export function Keeper() {
   const session = useSession();
   const caps = useCapabilities();
   const role = useRole();
-  const store = useStore();
   const payments = useSnapshot((s) => s.payments);
   const repos = useSnapshot((s) => s.repos);
   const config = useSnapshot((s) => s.config);
   const closeTime = useSnapshot((s) => s.ledger?.closeTime);
   const action = useAction();
-  const [auto, setAuto] = useState(false);
-  const [log, setLog] = useState<string[]>([]);
+  const auto = useAutoKeeper();
 
   const duePayments = useMemo(
     () => (config && closeTime !== undefined ? expirablePayments(payments.values(), config, closeTime) : []),
@@ -39,33 +34,6 @@ export function Keeper() {
   const busy = action.busy && "Busy";
   const expireReason = firstReason(capabilityReason(caps, "expire"), noSigner, busy);
   const convertReason = firstReason(capabilityReason(caps, "convertOverdue"), noSigner, busy);
-  const autoReason = firstReason(noSigner, caps.expire === "stub" && caps.convertOverdue === "stub" && "Both keeper entry points are stubs");
-
-  // The auto-keeper runs while this page is open and the toggle is on. A new session or signer
-  // (a network switch) unmounts or rebuilds it, so it never acts on a network it wasn't started on.
-  useEffect(() => {
-    if (!auto || !actor) return;
-    const keeper = new AutoKeeper({
-      due: () => {
-        const s = store.getSnapshot();
-        if (!s.config || !s.ledger) return { payments: [], repos: [] };
-        return {
-          payments: caps.expire === "stub" ? [] : expirablePayments(s.payments.values(), s.config, s.ledger.closeTime).map((p) => p.id),
-          repos: caps.convertOverdue === "stub" ? [] : overdueRepos(s.repos.values(), s.config, s.ledger.closeTime).map((r) => r.id),
-        };
-      },
-      expire: (id) => actor.expire(id),
-      convertOverdue: (id) => actor.convertOverdue(id),
-      onResult: (r) => setLog((l) => [describe(r), ...l].slice(0, 20)),
-    });
-    keeper.start();
-    void keeper.tick();
-    const timer = setInterval(() => void keeper.tick(), AUTO_KEEPER_INTERVAL_MS);
-    return () => {
-      keeper.stop();
-      clearInterval(timer);
-    };
-  }, [auto, actor, store, caps]);
 
   const code = session.cashToken.code;
   return (
@@ -78,17 +46,17 @@ export function Keeper() {
       ) : null}
       <div className="card">
         <label className="inline">
-          <input type="checkbox" checked={auto} disabled={!!autoReason} onChange={(e) => setAuto(e.target.checked)} />
+          <input type="checkbox" checked={auto.enabled} disabled={!!auto.disabledReason} onChange={(e) => auto.setEnabled(e.target.checked)} />
           Auto-keeper: every {AUTO_KEEPER_INTERVAL_MS / 1000}s, reject expired payment orders and convert overdue repos
         </label>
-        {autoReason ? <span className="hint">{autoReason}</span> : null}
+        {auto.disabledReason ? <span className="hint">{auto.disabledReason}</span> : null}
         <p className="small muted">
-          It runs only while this tab is open, signing with the connected signer. An always-on keeper needs a server, which this
-          project doesn't have.
+          It runs while this browser tab is open, on any page, signing with the connected signer. Switching network, contract or
+          signer turns it off. An always-on keeper needs a server, which this project doesn't have.
         </p>
-        {log.length ? (
+        {auto.log.length ? (
           <ul className="small">
-            {log.map((l, i) => (
+            {auto.log.map((l, i) => (
               <li key={i}>{l}</li>
             ))}
           </ul>
@@ -104,7 +72,7 @@ export function Keeper() {
             {duePayments.map((p) => (
               <li key={String(p.id)}>
                 <span className="mono">#{String(p.id)}</span> {session.registry.nameOf(p.from)} → {session.registry.nameOf(p.to)}{" "}
-                <Amount value={p.amount} code={code} /> · {p.priority} · expired at{" "}
+                <Amount value={p.amount} code={code} /> · {p.priority} · past expiry since{" "}
                 {new Date(expiryOf(p, config!) * 1000).toISOString().replace(".000Z", "Z")}{" "}
                 <ActionButton disabledReason={expireReason} onClick={() => void action.run(`Expire #${p.id}`, () => actor!.expire(p.id))}>
                   Expire
@@ -156,15 +124,4 @@ export function Keeper() {
       <ActionStatus state={action.state} />
     </section>
   );
-}
-
-function describe(r: KeeperResult): string {
-  switch (r.kind) {
-    case "expired":
-      return `expired payment order #${r.id}`;
-    case "converted":
-      return `converted repo #${r.id} to a penalty repo`;
-    case "failed":
-      return `${r.action} #${r.id} failed: ${toRtgsError(r.error).title}`;
-  }
 }

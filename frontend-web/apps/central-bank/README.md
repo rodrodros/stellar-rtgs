@@ -7,7 +7,7 @@ The central bank's app: the RTGS's **operator** and **settlement agent**. A stat
 | Overview | Every bank's settlement balance and queues (urgent first, head first, why a head is blocked, expiry), the central queue against `queue_cap`, recent settlements and offsets, the live `config()`, and a conservation check: the cash the contract holds against the balances it records (S1). |
 | Banks | The bank registry (written to the central bank's account), trustline authorization, issuing cash, clawback from a bank's own holding, and the settlement contract's authorization. |
 | Credit | `set_collateral`, `open_repo`, the repo list with terms, `repay` on a bank's behalf, `convert_overdue`. |
-| Keeper | Expire payment orders past expiry, convert overdue repos; an opt-in auto-keeper while the tab is open. |
+| Keeper | Expire payment orders past expiry, convert overdue repos; an opt-in auto-keeper that runs while the browser tab is open, on any page. |
 | Setup | The devnet bootstrap (core's `bootstrapDevnet`, in the browser), and the contract id and RPC URL per network. |
 
 ## Run
@@ -32,17 +32,24 @@ Switching network drops the signer. A signer that isn't the contract's `central_
 - **Clawback** is offered only against a bank's own cash token holding, never against the settlement contract (hazard H1, ADR-0006), and core refuses that too. The dialog says what clawback can't do: touch settlement balances, or reverse a final payment.
 - **Freezing the settlement contract** (deauthorizing it as a holder) needs `FREEZE` typed: it stops every deposit and withdrawal.
 - **Stubs:** every action whose entry point the deployed contract doesn't implement yet is disabled, with the reason shown (core's capability probe).
+- **One write at a time:** every write, from a button or the auto-keeper, goes through one queue per signer, so two transactions never race on the account's sequence number.
 - **Keeper timing:** "due" follows the contract's guards (strictly after `submitted_at + expiry_secs` and `opened_at + repo_term_secs`), on ledger close time.
 
 ## Tests
 
 ```sh
 pnpm --filter @rtgs/central-bank test         # unit and component tests (jsdom, fake core session)
-IMPL_NAME=impl-fe-cb IMPL_PORT=8390 make -C ../../../stellar-implementation devnet-up
-RTGS_DEVNET_RPC=http://localhost:8390/rpc pnpm --filter @rtgs/central-bank test:e2e
+make -C ../../../stellar-implementation devnet-up     # or IMPL_NAME=… IMPL_PORT=… for a devnet of your own
+pnpm --filter @rtgs/central-bank test:e2e            # RTGS_DEVNET_RPC=http://localhost:<port>/rpc for another port
 ```
 
-The e2e bootstraps its own deployment from a fresh seed. It then exercises the central bank's role, trustline authorization, issue and clawback (and the refusal against the contract), a queued payment and the conservation check, the capability flags, and the auto-keeper expiring a payment.
+The e2e bootstraps its own deployment from a fresh seed. It then exercises:
+- the central bank's role;
+- trustline authorization, issue and clawback, including the refusal against the contract;
+- freezing and unfreezing the contract;
+- a queued payment and the conservation check;
+- credit wherever the contract implements it;
+- the auto-keeper expiring a payment.
 
 ## Not built
 

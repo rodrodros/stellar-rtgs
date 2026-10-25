@@ -12,6 +12,7 @@ import { TypedConfirmDialog } from "../components/TypedConfirmDialog.tsx";
 import { firstReason } from "../components/capability.ts";
 import { useAction } from "../hooks/useAction.ts";
 import { useLedgerReads } from "../hooks/useLedgerReads.ts";
+import { isBank } from "../model/accounts.ts";
 import { centralBankReason, tokenAdminReason, useRole, type Role } from "../session/role.ts";
 
 export function Banks() {
@@ -46,7 +47,9 @@ export function Banks() {
           </tr>
         </thead>
         <tbody>
-          {banks.map((bank) => (
+          {banks
+            .filter((bank) => isBank(bank.address, session))
+            .map((bank) => (
             <BankRow key={bank.address} bank={bank} holding={reads.holdings.get(bank.address)} role={role} code={code} onChange={reads.reload} />
           ))}
           {banks.length === 0 ? (
@@ -233,15 +236,12 @@ function ClawbackDialog(props: { bank: Bank; holding: bigint; code: string; onCo
       <div className="dialog" role="dialog" aria-modal="true" aria-label="Clawback">
         <h3>Claw back from {props.bank.name ?? props.bank.address}</h3>
         <div className="dialog-body">
+          <p>{CLAWBACK_LIMITS}</p>
           <p>
-            <strong>What it can do:</strong> remove up to <Amount value={props.holding} code={props.code} /> of cash tokens this bank
-            holds on its trustline, outside the RTGS, as a recorded operator action for a case the rulebook lists (ADR-0006).
+            Here it can remove up to <Amount value={props.holding} code={props.code} /> the bank holds on its trustline, outside the
+            RTGS. It can't touch the bank's settlement balance in the settlement contract, or reverse a settled payment, which is
+            final (ADR-0005).
           </p>
-          <p>
-            <strong>What it can't do:</strong> touch the bank's settlement balance in the settlement contract, or reverse a settled
-            payment. Settlement is final (ADR-0005). A payment sent in error is returned by a new payment from the payee.
-          </p>
-          <p className="muted">{CLAWBACK_LIMITS}</p>
         </div>
         <label>
           Amount
@@ -283,7 +283,9 @@ function RegisterBank(props: { role: Role }) {
         onSubmit={(e) => {
           e.preventDefault();
           const entry = name.trim() ? { address: address.trim(), name: name.trim() } : { address: address.trim() };
-          void action.run(`Register ${entry.name ?? "the bank"}`, () => session.registry.register(props.role.signer!, entry)).then(() => {
+          void action.run(`Register ${entry.name ?? "the bank"}`, () => session.registry.register(props.role.signer!, entry)).then((result) => {
+            // Keep what was typed when registration failed, so it can be corrected.
+            if (result === undefined) return;
             setAddress("");
             setName("");
           });

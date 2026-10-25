@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { BANK_A, NOW, fakeSession, renderConnected, rowOf } from "../test/fake.tsx";
+import { BANK_A, NOW, OTHER, fakeSession, renderConnected, rowOf } from "../test/fake.tsx";
 import { NOT_IMPLEMENTED } from "../components/capability.ts";
 import { Credit } from "./Credit.tsx";
 
@@ -24,6 +24,14 @@ describe("Credit", () => {
     fireEvent.change(within(row).getByLabelText("Collateral for Bank A"), { target: { value: "0" } });
     fireEvent.click(within(row).getByRole("button", { name: "Set collateral" }));
     await waitFor(() => expect(actor.setCollateral).toHaveBeenCalledWith(BANK_A, 0n));
+  });
+
+  it("is read-only for a signer that isn't the central bank", () => {
+    renderConnected(<Credit />, fakeSession(), OTHER);
+    const row = rowOf("Bank A");
+    fireEvent.change(within(row).getByLabelText("Collateral for Bank A"), { target: { value: "100" } });
+    expect((within(row).getByRole("button", { name: "Set collateral" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(row).getAllByText("Only the central bank may do this").length).toBeGreaterThan(0);
   });
 
   it("lists repos with penalty repos highlighted, and converts an overdue one", async () => {

@@ -14,6 +14,7 @@ import {
   type RtgsError,
 } from "@rtgs/core";
 import { useState } from "react";
+import { parseConfig, parseWhole, type ConfigForm } from "../model/setupForm.ts";
 import { useAppSession } from "../session/AppSession.tsx";
 
 export function Setup(props: { devnetBanks?: number }) {
@@ -44,8 +45,10 @@ const STEP_LABELS: Record<BootstrapStep["step"], string> = {
 
 function DevnetBootstrap(props: { devnetBanks?: number }) {
   const app = useAppSession();
-  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
-  const [banks, setBanks] = useState(Math.max(3, props.devnetBanks ?? 0));
+  const [form, setForm] = useState<ConfigForm>(
+    () => Object.fromEntries(Object.entries(DEFAULT_CONFIG).map(([k, v]) => [k, String(v)])) as ConfigForm,
+  );
+  const [banksText, setBanksText] = useState(String(Math.max(3, props.devnetBanks ?? 0)));
   const [cash, setCash] = useState(formatAmount(DEFAULT_CASH));
   const [fresh, setFresh] = useState(false);
   const [steps, setSteps] = useState<BootstrapStep[]>([]);
@@ -53,7 +56,23 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
   const [error, setError] = useState<RtgsError>();
   const [done, setDone] = useState<string>();
 
+  const parsedConfig = parseConfig(form);
+  const banks = parseWhole(banksText, 1, 20);
+  let cashValue: bigint | undefined;
+  try {
+    cashValue = parseAmount(cash);
+  } catch {
+    cashValue = undefined;
+  }
+  const problems = [
+    "invalid" in parsedConfig && `whole numbers needed for ${parsedConfig.invalid.join(", ")}`,
+    banks === undefined && "banks must be a whole number from 1 to 20",
+    (cashValue === undefined || cashValue < 0n) && "cash per bank must be an amount",
+  ].filter((p): p is string => !!p);
+
   const run = async () => {
+    if (problems.length || !("config" in parsedConfig) || banks === undefined || cashValue === undefined) return;
+    const config = parsedConfig.config;
     setRunning(true);
     setError(undefined);
     setDone(undefined);
@@ -64,11 +83,16 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
         wasm: await loadSettlementWasm(),
         config,
         banks,
-        cash: parseAmount(cash),
+        cash: cashValue,
         fresh,
         onStep: (s) => setSteps((all) => [...all.filter((x) => x.step !== s.step), s]),
       });
       setDone(deployment.contractId);
+      // Reconnecting unmounts this page, so the result goes to the app-level notice.
+      app.setNotice(
+        `Devnet bootstrapped: settlement contract ${deployment.contractId}, cash token ${deployment.cashToken.code} ` +
+          `(${deployment.sacId}), ${deployment.banks.length} banks onboarded.`,
+      );
       app.reconnect();
     } catch (e) {
       setError(toRtgsError(e));
@@ -80,13 +104,7 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
   const num = (key: keyof Config) => (
     <label>
       {key}
-      <input
-        type="number"
-        min={0}
-        value={config[key]}
-        onChange={(e) => setConfig({ ...config, [key]: Number(e.target.value) })}
-        disabled={running}
-      />
+      <input aria-label={key} inputMode="numeric" value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} disabled={running} />
     </label>
   );
 
@@ -108,20 +126,21 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
       <div className="row">
         <label>
           Banks
-          <input type="number" min={1} max={20} value={banks} onChange={(e) => setBanks(Number(e.target.value))} disabled={running} />
+          <input aria-label="Banks" inputMode="numeric" value={banksText} onChange={(e) => setBanksText(e.target.value)} disabled={running} />
         </label>
         <label>
           Cash per bank
-          <input value={cash} onChange={(e) => setCash(e.target.value)} disabled={running} />
+          <input aria-label="Cash per bank" value={cash} onChange={(e) => setCash(e.target.value)} disabled={running} />
         </label>
         <label className="inline">
           <input type="checkbox" checked={fresh} onChange={(e) => setFresh(e.target.checked)} disabled={running} />
           Deploy a new contract even if one is live
         </label>
-        <button type="button" onClick={run} disabled={running}>
+        <button type="button" onClick={run} disabled={running || problems.length > 0}>
           {running ? "Bootstrapping…" : "Bootstrap"}
         </button>
       </div>
+      {problems.length ? <p className="hint error">Fix the form: {problems.join("; ")}.</p> : null}
       {steps.length ? (
         <ol className="steps">
           {steps.map((s) => (

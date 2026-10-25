@@ -1,12 +1,14 @@
 import { RtgsProvider, useBankRegistry } from "@rtgs/core/react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NetworkBar } from "./components/NetworkBar.tsx";
 import { Banks } from "./pages/Banks.tsx";
 import { Credit } from "./pages/Credit.tsx";
 import { Keeper } from "./pages/Keeper.tsx";
 import { Overview } from "./pages/Overview.tsx";
 import { Setup } from "./pages/Setup.tsx";
+import { AutoKeeperProvider } from "./keeper/AutoKeeperProvider.tsx";
 import { useAppSession } from "./session/AppSession.tsx";
+import { WriteQueue, WriteQueueContext } from "./session/writeQueue.ts";
 
 const TABS = { overview: "Overview", banks: "Banks", credit: "Credit", keeper: "Keeper", setup: "Setup" } as const;
 type Tab = keyof typeof TABS;
@@ -33,6 +35,14 @@ export function App() {
     <div className="app">
       <NetworkBar />
       <main>
+        {app.notice ? (
+          <p className="status ok" role="status">
+            {app.notice}{" "}
+            <button type="button" onClick={() => app.setNotice(undefined)}>
+              Dismiss
+            </button>
+          </p>
+        ) : null}
         {app.session ? (
           <RtgsProvider session={app.session} fallback={<p className="muted">Connecting…</p>}>
             <Connected />
@@ -52,8 +62,12 @@ function Connected() {
   const app = useAppSession();
   const devnetBanks = useBankRegistry().filter((b) => b.sources.includes("devnet")).length;
   const readOnly = !app.signer || app.signer.address !== app.session?.centralBank;
+  // One write queue per signer; the auto-keeper restarts (off) for a new network, contract or signer.
+  const owner = `${app.network.id}:${app.session?.contractId}:${app.signer?.address ?? ""}`;
+  const queue = useMemo(() => new WriteQueue(), [owner]);
   return (
-    <>
+    <WriteQueueContext.Provider value={queue}>
+      <AutoKeeperProvider key={owner}>
       <nav className="tabs">
         {(Object.keys(TABS) as Tab[]).map((t) => (
           <button key={t} type="button" className={t === tab ? "active" : undefined} aria-current={t === tab ? "page" : undefined} onClick={() => setTab(t)}>
@@ -73,6 +87,7 @@ function Connected() {
       {tab === "credit" ? <Credit /> : null}
       {tab === "keeper" ? <Keeper /> : null}
       {tab === "setup" ? <Setup devnetBanks={devnetBanks} /> : null}
-    </>
+      </AutoKeeperProvider>
+    </WriteQueueContext.Provider>
   );
 }

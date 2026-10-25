@@ -10,7 +10,7 @@ import { Address } from "../components/Address.tsx";
 import { Amount } from "../components/Amount.tsx";
 import { capabilityReason, firstReason } from "../components/capability.ts";
 import { useAction } from "../hooks/useAction.ts";
-import { formatSpan, termEndOf } from "../model/due.ts";
+import { formatSpan, overdueRepos, termEndOf } from "../model/due.ts";
 import { centralBankReason, useRole } from "../session/role.ts";
 
 const CREDIT_ENTRY_POINTS = ["setCollateral", "openRepo", "repay", "convertOverdue", "credit", "repo"] as const;
@@ -144,7 +144,10 @@ function CreditRow(props: { address: string; name: string | undefined; view: Ban
 export function RepoTable(props: { repos: Repo[] }) {
   const session = useSession();
   const config = useSnapshot((s) => s.config);
+  // The countdown ticks with the ledger clock; "overdue" follows the latest closed ledger, as
+  // the Keeper page does, so the two never disagree.
   const clock = useLedgerClock();
+  const closeTime = useSnapshot((s) => s.ledger?.closeTime);
   const sorted = [...props.repos].sort((a, b) => (a.id < b.id ? 1 : -1));
   if (!sorted.length) return <p className="muted">No repos.</p>;
   return (
@@ -163,23 +166,31 @@ export function RepoTable(props: { repos: Repo[] }) {
       </thead>
       <tbody>
         {sorted.map((r) => (
-          <RepoRow key={String(r.id)} repo={r} termEnd={config ? termEndOf(r, config) : undefined} now={clock.now} code={session.cashToken.code} />
+          <RepoRow
+            key={String(r.id)}
+            repo={r}
+            termEnd={config ? termEndOf(r, config) : undefined}
+            now={clock.now}
+            closeTime={closeTime}
+            code={session.cashToken.code}
+          />
         ))}
       </tbody>
     </table>
   );
 }
 
-function RepoRow(props: { repo: Repo; termEnd: number | undefined; now: number | undefined; code: string }) {
-  const { repo: r, termEnd, now } = props;
+function RepoRow(props: { repo: Repo; termEnd: number | undefined; now: number | undefined; closeTime: number | undefined; code: string }) {
+  const { repo: r, termEnd, now, closeTime } = props;
   const session = useSession();
   const caps = useCapabilities();
   const role = useRole();
+  const config = useSnapshot((s) => s.config);
   const action = useAction();
   const [amount, setAmount] = useState("");
   const left = termEnd !== undefined && now !== undefined ? termEnd - now : undefined;
-  // The contract converts only strictly after the term ends (SC-A20-02).
-  const overdue = r.status === "intraday" && left !== undefined && left < 0;
+  // The contract converts only strictly after the term ends (SC-A20-02): the same rule as the keeper's.
+  const overdue = !!config && closeTime !== undefined && overdueRepos([r], config, closeTime).length > 0;
   const value = parsePositive(amount);
   const busy = action.busy && "Busy";
 
@@ -196,7 +207,7 @@ function RepoRow(props: { repo: Repo; termEnd: number | undefined; now: number |
         <Amount value={r.outstanding} code={props.code} />
       </td>
       <td>{new Date(r.openedAt * 1000).toISOString().replace(".000Z", "Z")}</td>
-      <td>{r.status === "intraday" && left !== undefined ? (overdue ? <span className="badge warn">overdue</span> : `ends in ${formatSpan(left)}`) : "—"}</td>
+      <td>{r.status !== "intraday" ? "—" : overdue ? <span className="badge warn">overdue</span> : left !== undefined ? `ends in ${formatSpan(left)}` : "—"}</td>
       <td>
         <span className={r.status === "penalty" ? "badge danger" : r.status === "repaid" ? "badge ok" : "badge"}>
           {r.status}

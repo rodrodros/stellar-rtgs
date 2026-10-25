@@ -6,11 +6,10 @@ import { useMemo } from "react";
 import { Address } from "../components/Address.tsx";
 import { Amount } from "../components/Amount.tsx";
 import { QueueView } from "../components/QueueView.tsx";
-import { useLedgerReads } from "../hooks/useLedgerReads.ts";
-import { conservation } from "../model/conservation.ts";
+import { useConservation } from "../hooks/useConservation.ts";
 import { formatSpan } from "../model/due.ts";
 
-const VIA = { "at-once": "on submission", "eager-closure": "released by the eager closure", offset: "in an offset" } as const;
+const VIA = { "at-once": "settled on submission", "eager-closure": "released by the eager closure", offset: "settled in an offset" } as const;
 
 export function Overview() {
   const session = useSession();
@@ -18,16 +17,12 @@ export function Overview() {
   const registry = useBankRegistry();
   const feed = useFeedStatus();
   const clock = useLedgerClock();
-  const reads = useLedgerReads([], snapshot.banks);
+  const { result: check } = useConservation();
   const code = session.cashToken.code;
   const nameOf = (a: string) => session.registry.nameOf(a);
   const { config } = snapshot;
   const banks = registry.map((b) => snapshot.banks.get(b.address)).filter((v) => v !== undefined);
 
-  // Compared only when the holdings were read after the bank views they are checked against,
-  // so a deposit between the two reads doesn't flash a false alarm.
-  const comparable = snapshot.status === "ready" && banks.length === registry.length && reads.madeFor === snapshot.banks;
-  const check = comparable && reads.contract ? conservation(reads.contract.balance, [...banks.map((b) => b.balance), ...reads.otherBalances]) : undefined;
   const recent = useMemo(
     () => snapshot.events.filter((e): e is Extract<FeedEvent, { type: "Settled" | "Offset" }> => e.type === "Settled" || e.type === "Offset").slice(-25).reverse(),
     [snapshot.events],
@@ -148,5 +143,5 @@ export function Overview() {
 
 function viaOf(record: PaymentRecord | undefined, eventId: string): string {
   const step = record?.steps.find((s) => s.kind === "settled" && s.eventId === eventId);
-  return step?.via ? `settled ${VIA[step.via]}` : "settled";
+  return step?.via ? VIA[step.via] : "settled";
 }

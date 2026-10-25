@@ -18,8 +18,9 @@ import {
 } from "@rtgs/core";
 import { RtgsProvider } from "@rtgs/core/react";
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { StrictMode, type ReactNode } from "react";
 import { vi } from "vitest";
+import { AutoKeeperProvider } from "../keeper/AutoKeeperProvider.tsx";
 import { AppSessionContext, type AppSession } from "../session/AppSession.tsx";
 
 export const CB = "GCENTRALBANKXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
@@ -50,6 +51,8 @@ export function bankView(address: string, name: string, balance: bigint, queues:
 }
 
 export interface FakeOptions {
+  /** Extra registry entries, e.g. one core should never list. */
+  extraRegistry?: Bank[];
   capabilities?: Partial<Capabilities>;
   banks?: BankView[];
   payments?: Payment[];
@@ -62,7 +65,10 @@ export interface FakeOptions {
 
 export function fakeSession(opts: FakeOptions = {}) {
   const banks = opts.banks ?? [bankView(BANK_A, "Bank A", 500n), bankView(BANK_B, "Bank B", 100n)];
-  const registry: Bank[] = banks.map((b) => ({ address: b.address, ...(b.name ? { name: b.name } : {}), sources: ["ledger"] }));
+  const registry: Bank[] = [
+    ...banks.map((b): Bank => ({ address: b.address, ...(b.name ? { name: b.name } : {}), sources: ["ledger"] })),
+    ...(opts.extraRegistry ?? []),
+  ];
   const capabilities = { ...allAvailable(), ...opts.capabilities } as Capabilities;
   const holding = (h: Partial<Holding> = {}): Holding => ({
     balance: 0n,
@@ -128,7 +134,7 @@ export function fakeSession(opts: FakeOptions = {}) {
     token: {
       holding: vi.fn(async (a: string) => (a === CONTRACT ? contractHolding : holding(opts.holdings?.[a]))),
     },
-    read: { balance: vi.fn(async () => 0n) },
+    read: { balance: vi.fn(async (a: string) => banks.find((b) => b.address === a)?.balance ?? 0n) },
     as: vi.fn(() => actor),
     tokenAdmin: vi.fn((s: Signer) => {
       if (s.address !== CB) throw new Error("not the token admin");
@@ -139,8 +145,21 @@ export function fakeSession(opts: FakeOptions = {}) {
   return { session: session as unknown as RtgsSession, actor, tokenAdmin, registry: registryApi, snapshot };
 }
 
-/** Renders `ui` inside a connected app, signed by `as` (the central bank by default; null for no signer). */
-export function renderConnected(ui: ReactNode, fake = fakeSession(), as: string | null = CB) {
+/**
+ * Renders `ui` inside a connected app, signed by `as` (the central bank by default; null for no
+ * signer). `strict` renders under StrictMode, as `pnpm dev` does.
+ */
+export function renderConnected(ui: ReactNode, fake = fakeSession(), as: string | null = CB, opts: RenderOptions = {}) {
+  return { ...fake, ...render(renderConnected.tree(ui, fake, as, opts)) };
+}
+
+interface RenderOptions {
+  strict?: boolean;
+  app?: Partial<AppSession>;
+}
+
+/** The element renderConnected renders, for `rerender`. */
+renderConnected.tree = function tree(ui: ReactNode, fake = fakeSession(), as: string | null = CB, opts: RenderOptions = {}) {
   const app: AppSession = {
     networks: [devnet],
     network: devnet,
@@ -153,15 +172,18 @@ export function renderConnected(ui: ReactNode, fake = fakeSession(), as: string 
     connecting: false,
     error: undefined,
     reconnect: () => {},
+    notice: undefined,
+    setNotice: () => {},
+    ...opts.app,
   };
-  return {
-    ...fake,
-    ...render(
-      <AppSessionContext.Provider value={app}>
-        <RtgsProvider session={fake.session}>{ui}</RtgsProvider>
-      </AppSessionContext.Provider>,
-    ),
-  };
+  const tree = (
+    <AppSessionContext.Provider value={app}>
+      <RtgsProvider session={fake.session}>
+        <AutoKeeperProvider>{ui}</AutoKeeperProvider>
+      </RtgsProvider>
+    </AppSessionContext.Provider>
+  );
+  return opts.strict ? <StrictMode>{tree}</StrictMode> : tree;
 }
 
 /** The table row that names `name`. */

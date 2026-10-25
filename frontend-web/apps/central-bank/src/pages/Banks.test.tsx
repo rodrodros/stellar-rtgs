@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { BANK_A, CONTRACT, OTHER, fakeSession, renderConnected, rowOf } from "../test/fake.tsx";
+import { BANK_A, CB, CONTRACT, OTHER, fakeSession, renderConnected, rowOf } from "../test/fake.tsx";
 import { Banks } from "./Banks.tsx";
 
 afterEach(cleanup);
@@ -51,6 +51,35 @@ describe("Banks", () => {
     await waitFor(() => expect((issue as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(issue);
     await waitFor(() => expect(tokenAdmin.issue).toHaveBeenCalledWith(BANK_A, 1_000_000_000n));
+  });
+
+  it("finishes a write under StrictMode, as in pnpm dev", async () => {
+    const { tokenAdmin } = renderConnected(<Banks />, fakeSession(), undefined, { strict: true });
+    const row = rowOf("Bank A");
+    fireEvent.change(within(row).getByLabelText("Amount for Bank A"), { target: { value: "1" } });
+    const issue = within(row).getByRole("button", { name: "Issue" });
+    await waitFor(() => expect((issue as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(issue);
+    await waitFor(() => expect(tokenAdmin.issue).toHaveBeenCalled());
+    expect(await within(row).findByText(/Issue cash to Bank A: done/)).toBeTruthy();
+  });
+
+  it("never lists the settlement contract or the central bank as a bank, even if the registry did", () => {
+    renderConnected(<Banks />, fakeSession({ extraRegistry: [{ address: CONTRACT, name: "Contract?", sources: ["events"] }, { address: CB, name: "CB?", sources: ["events"] }] }));
+    expect(screen.queryByText("Contract?")).toBeNull();
+    expect(screen.queryByText("CB?")).toBeNull();
+  });
+
+  it("keeps the registration form when registering fails", async () => {
+    const fake = fakeSession();
+    fake.registry.register.mockRejectedValueOnce(new Error("tx_bad_seq"));
+    renderConnected(<Banks />, fake);
+    fireEvent.change(screen.getByLabelText("Bank address"), { target: { value: OTHER } });
+    fireEvent.change(screen.getByLabelText("Bank name"), { target: { value: "Bank C" } });
+    fireEvent.click(screen.getByRole("button", { name: "Register or rename" }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
+    expect((screen.getByLabelText("Bank address") as HTMLInputElement).value).toBe(OTHER);
+    expect((screen.getByLabelText("Bank name") as HTMLInputElement).value).toBe("Bank C");
   });
 
   it("disables token administration for a signer that isn't the token's admin", async () => {

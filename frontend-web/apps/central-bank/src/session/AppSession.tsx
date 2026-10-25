@@ -34,6 +34,9 @@ export interface AppSession {
   error: RtgsError | undefined;
   /** Connects again, e.g. after a devnet bootstrap published a new contract. */
   reconnect(): void;
+  /** A one-shot message that outlives a reconnect, e.g. the bootstrap's result. */
+  notice: string | undefined;
+  setNotice(notice: string | undefined): void;
 }
 
 /** Exported for tests, which provide a fixed session without connecting. */
@@ -72,6 +75,7 @@ export function AppSessionProvider(props: { env: Env; children: ReactNode }) {
   const network = useMemo(() => withOverrides(base, overrides), [base, overrides]);
   const [signerState, setSignerState] = useState<Signer | undefined>(() => defaultSigner(network));
   const [epoch, setEpoch] = useState(0);
+  const [notice, setNotice] = useState<string>();
 
   const selectNetwork = useCallback(
     (id: NetworkId, opts: { acknowledgeMainnet?: true } = {}) => {
@@ -82,6 +86,7 @@ export function AppSessionProvider(props: { env: Env; children: ReactNode }) {
       setSelected({ id, mainnetAck: id === "mainnet" });
       setOverrides(nextOverrides);
       setSignerState(defaultSigner(withOverrides(next, nextOverrides)));
+      setNotice(undefined);
     },
     [networks, store],
   );
@@ -113,6 +118,8 @@ export function AppSessionProvider(props: { env: Env; children: ReactNode }) {
     connecting: connection.connecting,
     error: connection.error,
     reconnect,
+    notice,
+    setNotice,
   };
   return <AppSessionContext.Provider value={value}>{props.children}</AppSessionContext.Provider>;
 }
