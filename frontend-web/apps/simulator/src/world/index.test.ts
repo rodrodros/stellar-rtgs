@@ -126,6 +126,16 @@ describe("createWorld", () => {
       });
     });
 
+    it("rejects at once when stopped while waiting for the store", async () => {
+      const fake = fakeSession();
+      const world = createWorld(fake.session, BANKS);
+      const starting = world.start();
+      world.stop();
+      await expect(starting).rejects.toMatchObject({ title: "World stopped" });
+      expect(fake.release).toHaveBeenCalledTimes(1);
+      expect(fake.listeners.size).toBe(0);
+    });
+
     it("rejects when a trustline read fails", async () => {
       const fake = fakeSession();
       fake.set(ready());
@@ -223,6 +233,24 @@ describe("createWorld", () => {
       });
       expect(world.bank(BANK_1)?.queues.normal.map((p) => p.id)).toEqual([2n]);
       expect(world.queuedPayments().map((p) => p.id)).toEqual([2n]);
+    });
+
+    it("moves an order the events show as reprioritised into its new class, by age", async () => {
+      const older = payment({ id: 5n, from: BANK_1, priority: "urgent" });
+      const newer = payment({ id: 6n, from: BANK_1 });
+      const { world } = await started({
+        banks: new Map([[BANK_1, view(BANK_1, { queues: { urgent: [older], normal: [newer] } })]]),
+        payments: new Map([
+          [5n, { ...older, priority: "normal", steps: [] }],
+          [6n, { ...newer, steps: [] }],
+        ]),
+      });
+      const queues = world.bank(BANK_1)!.queues;
+      expect(queues.urgent).toEqual([]);
+      expect(queues.normal.map((p) => [p.id, p.priority])).toEqual([
+        [5n, "normal"],
+        [6n, "normal"],
+      ]);
     });
 
     it("lists repos not repaid, all or one bank's, by id", async () => {

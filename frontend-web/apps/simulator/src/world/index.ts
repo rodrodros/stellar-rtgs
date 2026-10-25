@@ -35,6 +35,8 @@ export function createWorld(
 
   let held: { store: RtgsStore; release: () => void; unsubscribe: () => void } | undefined;
   let stopped = false;
+  /** Ends a `start()` still waiting for the store, so `stop()` doesn't leave it hanging. */
+  let abortWait: ((error: RtgsError) => void) | undefined;
 
   // The local clock's lead over ledger close time, as small as ever observed (as in core's
   // `useLedgerClock`): taking the minimum keeps `now()` from stepping back when a later ledger
@@ -79,10 +81,24 @@ export function createWorld(
       return cache;
     }
     // The bank views are re-read a moment after the events that change them; until then, drop
-    // the payment orders the events already show as settled, revoked or expired.
-    const stillQueued = (p: Payment) => {
-      const record = s.payments.get(p.id);
-      return !record || record.status === "queued";
+    // the payment orders the events already show as settled, revoked or expired, and put a
+    // reprioritised one in its new class (by age, as the contract keeps it).
+    const queuesOf = (view: { queues: BankState["queues"] }): BankState["queues"] => {
+      const queues: BankState["queues"] = { urgent: [], normal: [] };
+      let moved = false;
+      for (const p of [...view.queues.urgent, ...view.queues.normal]) {
+        const record = s.payments.get(p.id);
+        if (record && record.status !== "queued") continue;
+        const priority = record?.priority ?? p.priority;
+        const inView = view.queues[priority].includes(p);
+        moved ||= !inView;
+        queues[priority].push(inView ? p : { ...p, priority });
+      }
+      if (moved) {
+        queues.urgent.sort(byId);
+        queues.normal.sort(byId);
+      }
+      return queues;
     };
     const list: BankState[] = [];
     for (const { address, label } of banks) {
@@ -97,7 +113,7 @@ export function createWorld(
         balance: view.balance,
         holding: trustline?.balance ?? 0n,
         authorized: trustline?.authorized ?? false,
-        queues: { urgent: view.queues.urgent.filter(stillQueued), normal: view.queues.normal.filter(stillQueued) },
+        queues: queuesOf(view),
       };
       if (view.credit) state.credit = view.credit;
       const collateral = s.collateral.get(address);
@@ -137,9 +153,11 @@ export function createWorld(
       const settle = (error?: unknown) => {
         if (timer) clearTimeout(timer);
         unsubscribe();
+        abortWait = undefined;
         if (error) reject(error);
         else resolve();
       };
+      abortWait = settle;
       const check = () => {
         if (store.getSnapshot().status === "ready") settle();
       };
@@ -156,6 +174,7 @@ export function createWorld(
 
   const stop = () => {
     stopped = true;
+    abortWait?.(new RtgsError("config", "World stopped", "The world was stopped before the store was ready."));
     if (!held) return;
     const { release, unsubscribe } = held;
     held = undefined;
@@ -168,7 +187,7 @@ export function createWorld(
     contractId: session.contractId,
 
     async start() {
-      if (held) throw new RtgsError("config", "World already started", "Start a world once; stop() it and create a new one to start again.");
+      if (held) throw new RtgsError("config", "World already started", "Start a world once; stop() it before starting it again.");
       stopped = false;
       const { store, release } = session.store();
       const unsubscribe = store.subscribe(() => observeLedger(store.getSnapshot()));
@@ -177,6 +196,7 @@ export function createWorld(
         await waitReady(store);
         observeLedger(store.getSnapshot());
         await readTrustlines(banks.map((b) => b.address));
+        if (stopped) throw new RtgsError("config", "World stopped", "The world was stopped while it was starting.");
       } catch (e) {
         stop();
         throw e;
