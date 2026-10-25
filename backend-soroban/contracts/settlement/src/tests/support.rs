@@ -1,10 +1,10 @@
 //! Shared setup and the checks every test can make after a call.
-use std::vec::Vec as StdVec;
+use std::{rc::Rc, vec::Vec as StdVec};
 
 use soroban_sdk::{
     testutils::{Address as _, EnvTestConfig, Events as _, IssuerFlags, Ledger as _},
     token::{StellarAssetClient, TokenClient},
-    xdr, Address, Env, Event,
+    xdr, Address, Env, Event, TryFromVal,
 };
 
 use crate::{Config, Priority, Settlement, SettlementArgs, SettlementClient};
@@ -50,6 +50,16 @@ enum Code<'a> {
     Wasm(&'a [u8]),
 }
 
+/// What kind of address a test's banks have.
+enum Banks {
+    /// Contract addresses, from `Address::generate`: enough for behaviour.
+    Contracts,
+    /// Stellar accounts that hold the token on a trustline, as banks do on the network
+    /// (ADR-0003). In XDR an account address is 4 bytes longer than a contract address,
+    /// so every event that names a bank costs more: the cost tests need these.
+    Accounts,
+}
+
 impl Setup {
     /// Mocks every authorization, for tests of behaviour. Auth tests use [`Setup::strict`].
     pub fn new(n: usize, funding: i128) -> Self {
@@ -57,25 +67,26 @@ impl Setup {
     }
 
     pub fn with_config(n: usize, funding: i128, config: Config) -> Self {
-        let setup = Self::build(n, funding, config, Code::Native);
+        let setup = Self::build(n, funding, config, Code::Native, Banks::Contracts);
         setup.env.mock_all_auths();
         setup
     }
 
     /// Mocks no authorization: each test decides which auths the call under test gets.
     pub fn strict(n: usize, funding: i128) -> Self {
-        Self::build(n, funding, default_config(), Code::Native)
+        Self::build(n, funding, default_config(), Code::Native, Banks::Contracts)
     }
 
     /// Like [`Setup::with_config`], with the contract registered from `wasm`, the output
-    /// of `make build`. For cost tests (TESTING.md, "Costs").
+    /// of `make build`, and the banks Stellar accounts with trustlines, as on the network.
+    /// For cost tests (TESTING.md, "Costs").
     pub fn from_wasm(wasm: &[u8], n: usize, config: Config) -> Self {
-        let setup = Self::build(n, 0, config, Code::Wasm(wasm));
+        let setup = Self::build(n, 0, config, Code::Wasm(wasm), Banks::Accounts);
         setup.env.mock_all_auths();
         setup
     }
 
-    fn build(n: usize, funding: i128, config: Config, code: Code) -> Self {
+    fn build(n: usize, funding: i128, config: Config, code: Code, kind: Banks) -> Self {
         // No snapshot at drop: the files are gitignored and never read, and writing one per
         // proptest case took nearly all of a property test's time.
         let env = Env::new_with_config(EnvTestConfig {
@@ -96,11 +107,19 @@ impl Setup {
             Code::Native => env.register(Settlement, args),
             Code::Wasm(wasm) => env.register(wasm, args),
         };
-        let banks: StdVec<Address> = (0..n).map(|_| Address::generate(&env)).collect();
+        let banks: StdVec<Address> = (0..n)
+            .map(|i| match kind {
+                Banks::Contracts => Address::generate(&env),
+                Banks::Accounts => account(&env, i),
+            })
+            .collect();
         env.mock_all_auths();
         let admin = StellarAssetClient::new(&env, &token);
         admin.set_authorized(&contract, &true);
         for bank in &banks {
+            if let Banks::Accounts = kind {
+                admin.trust(bank);
+            }
             admin.set_authorized(bank, &true);
             if funding > 0 {
                 admin.mint(bank, &funding);
@@ -205,6 +224,39 @@ impl Setup {
             .cloned()
             .collect()
     }
+}
+
+/// The `i`th bank as a new Stellar account, with no trustline yet. Its key is made up:
+/// the tests mock every authorization, so no one signs for it.
+fn account(env: &Env, i: usize) -> Address {
+    let mut public_key = [0xBA_u8; 32];
+    public_key[24..].copy_from_slice(&(i as u64).to_be_bytes());
+    let account_id = xdr::AccountId(xdr::PublicKey::PublicKeyTypeEd25519(xdr::Uint256(
+        public_key,
+    )));
+    let entry = xdr::LedgerEntry {
+        last_modified_ledger_seq: 0,
+        data: xdr::LedgerEntryData::Account(xdr::AccountEntry {
+            account_id: account_id.clone(),
+            balance: 0,
+            seq_num: xdr::SequenceNumber(0),
+            num_sub_entries: 0,
+            inflation_dest: None,
+            flags: 0,
+            home_domain: xdr::String32::default(),
+            thresholds: xdr::Thresholds([1; 4]),
+            signers: xdr::VecM::default(),
+            ext: xdr::AccountEntryExt::V0,
+        }),
+        ext: xdr::LedgerEntryExt::V0,
+    };
+    let ledger_key = xdr::LedgerKey::Account(xdr::LedgerKeyAccount {
+        account_id: account_id.clone(),
+    });
+    env.host()
+        .add_ledger_entry(&Rc::new(ledger_key), &Rc::new(entry), None)
+        .unwrap();
+    Address::try_from_val(env, &xdr::ScAddress::Account(account_id)).unwrap()
 }
 
 /// The XDR contract id of a contract address, for filtering `xdr::ContractEvent`s.

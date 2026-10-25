@@ -97,11 +97,14 @@ fn the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest() {
     assert_eq!(setup.queue(0, NORMAL), std::vec![a2]);
     assert_eq!(setup.balances(), std::vec![0, 0]);
     setup.assert_conserved();
-    // Spec O's index of queued banks (ADR-0010) keeps A, and only A.
-    let index = setup
-        .env
-        .as_contract(&setup.contract, || queued_banks(&setup.env));
-    assert_eq!(index, vec![&setup.env, setup.bank(0).clone()]);
+    // Spec O's index of queued banks (ADR-0010) keeps A, and only A, at its priority.
+    let index = |priority| {
+        setup
+            .env
+            .as_contract(&setup.contract, || queued_banks(&setup.env, priority))
+    };
+    assert_eq!(index(NORMAL), vec![&setup.env, setup.bank(0).clone()]);
+    assert!(index(URGENT).is_empty());
 }
 
 /// SC-A03-04. F2 and F6, S7 for A3 (ADR-0008): the offset never takes a payment ahead of
@@ -292,6 +295,14 @@ fn a_bank_whose_only_payment_changes_priority_still_offsets() {
     let client = setup.client();
     let a1 = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
     client.reprioritise(&a1, &URGENT);
+    // A moved from the index of normal queues to the index of urgent ones.
+    let index = |priority| {
+        setup
+            .env
+            .as_contract(&setup.contract, || queued_banks(&setup.env, priority))
+    };
+    assert_eq!(index(URGENT), vec![&setup.env, setup.bank(0).clone()]);
+    assert!(index(NORMAL).is_empty());
 
     let b1 = client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
 
@@ -300,15 +311,77 @@ fn a_bank_whose_only_payment_changes_priority_still_offsets() {
     assert_eq!(client.queued_count(), 0);
     assert_eq!(setup.balances(), std::vec![0, 0]);
     setup.assert_conserved();
-    // The offset emptied the index, and A rejoins it once when it queues again.
+    // The offset emptied the indexes, and A rejoins one once when it queues again.
+    assert!(index(URGENT).is_empty());
+    assert!(index(NORMAL).is_empty());
+    client.submit(setup.bank(0), setup.bank(1), &5, &NORMAL);
+    assert_eq!(index(NORMAL), vec![&setup.env, setup.bank(0).clone()]);
+    assert!(index(URGENT).is_empty());
+}
+
+/// SC-A03-22. Spec O's index of queued banks (A3, ADR-0010) holds each bank once, at each
+/// priority it has a queue, however many payments it queues there, and drops it when that
+/// queue empties. Added in Flow 14, since the offset reads a bank's queue at a priority
+/// only through the index; it fails if a payment queued behind another, or moved into a
+/// queue that already holds one, adds the bank again, which would leave it in the index
+/// once its queue empties.
+#[test]
+fn a_bank_is_in_the_index_once_per_priority_however_many_payments_it_queues() {
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let index = |priority| {
+        setup
+            .env
+            .as_contract(&setup.contract, || queued_banks(&setup.env, priority))
+    };
+    let only_a = || vec![&setup.env, setup.bank(0).clone()];
+    let n1 = client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL);
+    let n2 = client.submit(setup.bank(0), setup.bank(1), &20, &NORMAL);
+    let u1 = client.submit(setup.bank(0), setup.bank(1), &30, &URGENT);
+    assert_eq!((index(URGENT), index(NORMAL)), (only_a(), only_a()));
+
+    // Moved into A's urgent queue, which is not empty: by age, ahead of `u1` (A8,
+    // `toEnd = false`). And out of a normal queue that keeps `n1`.
+    client.reprioritise(&n2, &URGENT);
+    assert_eq!((index(URGENT), index(NORMAL)), (only_a(), only_a()));
+
+    client.revoke(&n1);
+    assert_eq!(index(URGENT), only_a());
+    assert!(index(NORMAL).is_empty());
+    client.revoke(&u1);
+    assert_eq!(index(URGENT), only_a());
+    client.revoke(&n2);
+    assert!(index(URGENT).is_empty());
+    assert!(index(NORMAL).is_empty());
+}
+
+/// SC-A03-23. Gross settlement keeps Spec O's index of queued banks (A2, A3, ADR-0010):
+/// a deposit that settles part of A's queue leaves A in the index once, and one that
+/// settles the rest drops it. Added in Flow 14's third review, since gross settlement
+/// writes a queue it shortens through the index, and no other test reads the index after
+/// it; it fails if that write adds the bank again, which would leave it in the index with
+/// no queue, read again by every later closure.
+#[test]
+fn gross_settlement_keeps_a_bank_in_the_index_once_until_its_queue_empties() {
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
     let index = || {
         setup
             .env
-            .as_contract(&setup.contract, || queued_banks(&setup.env))
+            .as_contract(&setup.contract, || queued_banks(&setup.env, NORMAL))
     };
-    assert!(index().is_empty());
-    client.submit(setup.bank(0), setup.bank(1), &5, &NORMAL);
+    client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL);
+    let rest = client.submit(setup.bank(0), setup.bank(1), &20, &NORMAL);
+    setup.mint(setup.bank(0), 30);
+
+    client.deposit(setup.bank(0), &10);
+    assert_eq!(setup.queue(0, NORMAL), std::vec![rest]);
     assert_eq!(index(), vec![&setup.env, setup.bank(0).clone()]);
+
+    client.deposit(setup.bank(0), &20);
+    assert!(setup.queue(0, NORMAL).is_empty());
+    assert!(index().is_empty());
+    setup.assert_conserved();
 }
 
 /// SC-A03-15. The eager closure in one call (§4.6, S9, S23; ADR-0010): gross settlement

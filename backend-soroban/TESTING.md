@@ -47,7 +47,7 @@ All commands come from the research handbook, which ran each of them on this mac
   - For each entry point, add a test that calls `try_<fn>` with no auths mocked and expects it to fail.
 - **Events.** `env.events().all()` holds only the last top-level invocation's events (C-HB-132). Read it right after the call. Compare against `MyEvent { .. }.to_xdr(&env, &contract)`.
 - **Errors.** Use `#[contracterror]` enums. Assert `try_<fn>` returns `Err(Ok(Error::X))`, then assert that the state is unchanged.
-- **Costs.** Register from Wasm when cost matters. A natively registered contract skips VM metering (C-HB-042): use `contractimport!` on `target/wasm32v1-none/release/settlement.wasm`, after `make build`.
+- **Costs.** Register from Wasm when cost matters. A natively registered contract skips VM metering (C-HB-042): register the bytes of `target/wasm32v1-none/release/settlement.wasm`, after `make build`, as `Setup::from_wasm` does. Mainnet counts the call's return value towards the event limit, and the test host doesn't, so add it, as `assert_within_mainnet_limits` does. Make the banks Stellar accounts, as `Setup::from_wasm` does: an account address is 4 bytes longer in XDR than the contract address `Address::generate` makes, so contract banks understate every event that names a bank.
 - **Archival.** The test host restores archived entries by itself (C-HB-131, C-HB-145), so TTL behaviour needs the integration layer.
 - **The batch limit.** It refuses batches above about 400 footprint entries (C-HB-137). Batch tests that pass here can still fail at the network's 200-write limit (C-SC-204).
 

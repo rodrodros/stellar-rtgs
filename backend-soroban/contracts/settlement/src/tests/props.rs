@@ -324,8 +324,8 @@ fn booked_only_settlements(
 /// Spec O at rest, after any call (A3; ADR-0010):
 /// - S23: the greatest feasible prefix of the queues, by the reference descent, is 0, so
 ///   the closure offset everything the call made feasible (R4);
-/// - `QueuedBanks`, the index the offset reads, holds each bank with a queued payment once,
-///   and no other. A stale or doubled entry changes nothing a view shows. The
+/// - each `QueuedBanks(priority)` index, which the offset and gross settlement read,
+///   holds each bank with a payment queued at that priority once, and no other. A stale or doubled entry changes nothing a view shows. The
 ///   `debug_assert!` in `offset` catches a doubled entry once an offset runs; this check
 ///   catches a stale one, and either kind even without the assert.
 fn offset_at_rest(setup: &Setup, after: &BTreeMap<u64, Payment>) -> Result<(), TestCaseError> {
@@ -348,15 +348,21 @@ fn offset_at_rest(setup: &Setup, after: &BTreeMap<u64, Payment>) -> Result<(), T
         "S23: k* = {:?} between calls",
         prefix
     );
-    let mut index: Vec<usize> = setup
-        .env
-        .as_contract(&setup.contract, || crate::queued_banks(&setup.env))
-        .iter()
-        .map(|address| bank(&address))
-        .collect();
-    index.sort_unstable();
-    let queued: Vec<usize> = (0..BANKS).filter(|i| !queues[*i].is_empty()).collect();
-    prop_assert_eq!(index, queued, "QueuedBanks");
+    for priority in [Priority::Urgent, Priority::Normal] {
+        let mut index: Vec<usize> = setup
+            .env
+            .as_contract(&setup.contract, || {
+                crate::queued_banks(&setup.env, priority)
+            })
+            .iter()
+            .map(|address| bank(&address))
+            .collect();
+        index.sort_unstable();
+        let queued: Vec<usize> = (0..BANKS)
+            .filter(|i| !setup.queue(*i, priority).is_empty())
+            .collect();
+        prop_assert_eq!(index, queued, "QueuedBanks({:?})", priority);
+    }
     Ok(())
 }
 

@@ -247,7 +247,7 @@ Before this flow, ask the user to settle the README decision on the queue cap an
 
 Step 1 needs every bank with a queued payment. Since Flow 5, queues are stored one per `Queue(bank, priority)` and the contract keeps no list of banks, so the offset needs a persistent index of the banks with queued payments. That index could replace `QueuedCount`.
 
-Done in Flow 13 as `QueuedBanks`, a list kept by `put_queue` (the offset rewrites it at most once, when some bank has no payment left), next to `QueuedCount`, which the cap still reads. Step 2 is the kernel's `balances_after`, which sums each account's net change in 64-bit halves, as k* does. Step 4 is not a loop. The model's closure repeats gross settlement and the offset until an offset settles nothing, but since k* decides F1 exactly, R5 makes every round after the first offset empty, and no test can tell the loop from a single offset. So the closure is one gross pass, then one offset. That saves a second read of every queue on the cap path Flow 14 measures. SC-P-12 to SC-P-15 check k* = 0 after every call, so a closure that stopped short of rest would fail them. R5 rests on strict FIFO in both priorities (ADR-0008, ADR-0009), one floor for `covers` and F1 alike (today 0, ADR-0011) and no limits or reservations, so that K6 holds (ADR-0018, provisional). If limits or a class that bypasses FIFO come in, the model's loop must come back (C-DF-026).
+Done in Flow 13 as `QueuedBanks`, a list kept by `put_queue` (the offset rewrites it at most once, when some bank has no payment left; Flow 14 split it into one list per priority), next to `QueuedCount`, which the cap still reads. Step 2 is the kernel's `balances_after`, which sums each account's net change in 64-bit halves, as k* does. Step 4 is not a loop. The model's closure repeats gross settlement and the offset until an offset settles nothing, but since k* decides F1 exactly, R5 makes every round after the first offset empty, and no test can tell the loop from a single offset. So the closure is one gross pass, then one offset. That saves a second read of every queue on the cap path Flow 14 measures. SC-P-12 to SC-P-15 check k* = 0 after every call, so a closure that stopped short of rest would fail them. R5 rests on strict FIFO in both priorities (ADR-0008, ADR-0009), one floor for `covers` and F1 alike (today 0, ADR-0011) and no limits or reservations, so that K6 holds (ADR-0018, provisional). If limits or a class that bypasses FIFO come in, the model's loop must come back (C-DF-026).
 
 The cap decision above was not taken in Flow 13: `submit` still checks the cap before the closure, so it refuses a payment that an offset would settle, and SC-P-11 still accepts either answer. It remains open in the README, and blocks Flow 15.
 
@@ -275,21 +275,37 @@ The cap decision above was not taken in Flow 13: `submit` still checks the cap b
 - [x] `unit::lsm::an_offset_credits_a_queued_bank_whose_own_prefix_is_zero` (SC-A03-20). Added in Flow 13's third review, since SC-A03-20's first test credits only a bank with no queue: it fails if the offset books only the banks it takes payments from, and those with no queue.
 - [x] `unit::lsm::an_offset_that_ends_inside_a_mixed_queue_takes_the_urgent_payments_first` (SC-A03-21). Added in Flow 13's third review, since in every other offset a bank with both priorities queued has nothing or everything taken: it fails if the offset slices the normal queue first, which leaves the settled urgent payment queued, to settle a second time.
 
-## Flow 14: the offset's cost at the queue cap (1)
+## Flow 14: the offset's cost at the queue cap (8)
 
-This test registers the contract from its Wasm, so run `make build` first. If an offset over 64 payments doesn't fit Mainnet's per-transaction limits, lower `QUEUE_CAP_UNDER_TEST` and record why.
+These tests register the contract from its Wasm, so run `make build` first. If a call that clears a full queue doesn't fit Mainnet's per-transaction limits, lower `QUEUE_CAP_UNDER_TEST` and record why.
 
-Passes since Flow 13, but only because its ring nets to zero for 62 of the 64 banks, and the offset doesn't rewrite a balance that nets to what it was. With Flow 13's offset, the ring measured about 63M instructions, 135 entries written, 400 entries read and written in all (limit 400), and 16,116 bytes of events (limit 16,384). So the fixture is no longer the worst case for writes.
+Flow 13's fixture netted to zero for 62 of its 64 banks, and the offset doesn't rewrite a balance that nets to what it was, so it was no longer the worst case for writes. Flow 14 made it the worst case again: a ring of 64 where bank `i` pays `100 − i` and bank 0 deposits 63, so every balance changes. Red: 462 footprint entries, over the test host's 400 (it counts a written entry twice, once read and once written).
 
-A ring of 64 whose balances all change, with bank `i` paying `100 − i` and bank 0 depositing 63, needs 462 footprint entries and is refused by the test host. Before ticking this test:
-- make the fixture's balances all change, so it is the worst case again;
-- then lower `QUEUE_CAP_UNDER_TEST` and re-measure, or shrink the footprint. One idea: the offset reads `Queue(bank, Urgent)` for every queued bank, even one with no urgent queue, which is 64 entries at the cap. Another: `put_queue` checks both of the bank's queue keys with `has` to keep `QueuedBanks`, where a caller that knows the old length could pass it in.
+The footprint was shrunk first:
+- `QueuedBanks` became one index per priority, `QueuedBanks(Priority)`, and the offset reads `Queue(bank, priority)` only for the banks in that priority's index. It used to read `Queue(bank, Urgent)` for every queued bank.
+- `put_queue` takes whether the queue was empty, which every caller has read, instead of checking both of the bank's queue keys with `has`.
+- Gross settlement reads the two indexes once and skips a queue whose bank is not in its index. Without this, every bank the closure visited cost a read of its absent urgent queue: 463 entries for a gross cascade around the ring (SC-ST-05, red first).
 
-Every submission that queues also runs the offset over every queue. At 63 queued payments across 63 banks, one queuing submission measured 263 entries read and about 33M instructions to find k* = 0. ADR-0010 requires the eager offset, but that cost bears on ADR-0007's fee target, so a cost check for it could sit next to SC-ST-04.
+The closure at the cap must fit gross settlement as well as the offset, and both priorities as well as one, so Flow 14 added SC-ST-05 to SC-ST-07, and SC-A03-22 to pin the index (nothing else failed if a payment queued behind another added its bank again). A call that clears a full queue writes, for each payment, the payment and at most one queue and one balance, plus one balance more for a cascade with no cycle. At 64 that cascade touches 65 accounts: the path (SC-ST-05) measured 401 entries and the binary tree with both priorities (SC-ST-07) 402. So `QUEUE_CAP_UNDER_TEST` was lowered to 63.
 
-An offset over the limits refuses the call that makes it feasible, and that call is an otherwise valid `deposit`, `submit`, `revoke`, `reprioritise` or `expire`. ADR-0010 names a keeper as the backstop, but the contract has no keeper entry point for the offset yet. Flow 14 should decide what the backstop is: a keeper entry point, or an eager offset bounded to what fits that leaves the rest to the keeper.
+The review then found that a covered `submit` costs more than any deposit. The cap refuses only a payment that would queue, so `submit` accepts a covered one with the queue full, settles it, and runs the closure: 64 payments across 65 accounts at a cap of 63. SC-ST-08 prices that call cascading down SC-ST-07's tree, and SC-ST-09 the same call making SC-ST-04's ring feasible, which publishes the most events. Each cost test now also holds its call to what it measured, its budget of footprint entries and event bytes, so a needless entry or a larger event fails at once. SC-ST-05 and SC-ST-07 check that the call publishes no `Offset` event, and SC-ST-04, SC-ST-06 and SC-ST-09 exactly one. Without that, SC-ST-05 still passed when gross settlement stopped at the first bank outside an index, because the offset then settled the path.
 
-- [ ] `unit::storage::an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-04)
+The third review found that the cost tests' banks were contract addresses, from `Address::generate`. On the network a bank is a Stellar account holding the token on a trustline (ADR-0003), and in XDR an account address is 4 bytes longer, so every `Settled` event, which names two banks, was understated by 8 bytes. `Setup::from_wasm` now makes each bank an account and opens its trustline through the SAC's `trust`. Red: SC-ST-09 at 63 needed 16,508 of Mainnet's 16,384 event bytes. So `QUEUE_CAP_UNDER_TEST` was lowered to 62, and events, not entries, set it. The same review added SC-A03-23: nothing failed if gross settlement, writing a queue it shortened, added the bank to the index again.
+
+Three limits come close, and they count differently. Mainnet allows 16,384 bytes of events and return value, 200 written entries, and 400 footprint entries counted once each. The test host leaves the return value out of the events, so the cost tests add it (4 bytes for a deposit, 12 for a submission's id), and it counts a written entry twice towards the 400. Measured at 62 with account banks, as test-host footprint entries, writes and event bytes: SC-ST-04 387, 191 and 16,132; SC-ST-05 389, 192 and 15,284; SC-ST-06 388, 192 and 16,132; SC-ST-07 390, 193 and 15,284; SC-ST-08 392, 194 and 15,408; SC-ST-09 389, 192 and 16,256, or 16,268 with its return value. At 63, SC-ST-04 and SC-ST-06 publish 16,384 event bytes, which their return value takes over Mainnet's limit. No call uses more than about 84M instructions. The tests mock authorization, so a bank that signs, rather than being the transaction's source account, costs a few entries more that no test prices. Before the account banks, at 63: the submission that queued the 63rd payment, across 63 banks with k* = 0, read 198 entries (263 before Flow 14) and used about 26M instructions (33M before).
+
+`revoke`, `reprioritise` and `expire` release at most one payment fewer than the cap, behind the one they remove. A scratch measurement in the review, at 62 with account banks, put them at 378 to 383 test-host entries, at most 190 writes and at most 15,568 event bytes, below SC-ST-08 and SC-ST-09, but no test prices them yet.
+
+The backstop, decided in Flow 14: the cap is sized so that the eager closure over a full queue fits the call that triggers it, so the contract has no keeper entry point. The README asks the user to confirm this, since ADR-0010 names a keeper. Any later entry point that runs the closure with more entries or events of its own, such as `open_repo` (Flow 17), must be priced at the cap.
+
+- [x] `unit::storage::an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-04)
+- [x] `unit::storage::a_gross_cascade_over_a_full_queue_fits_in_one_transaction` (SC-ST-05). Added in Flow 14; it fails if gross settlement reads queues that do not exist, or if the cap leaves no room for a cascade's extra account.
+- [x] `unit::storage::an_offset_over_a_full_queue_of_both_priorities_fits_in_one_transaction` (SC-ST-06). Added in Flow 14, the offset with both indexes written.
+- [x] `unit::storage::a_gross_cascade_down_a_tree_of_both_priorities_fits_in_one_transaction` (SC-ST-07). Added in Flow 14, the worst case for a deposit.
+- [x] `unit::storage::a_covered_submission_cascading_down_a_full_tree_fits_in_one_transaction` (SC-ST-08). Added in Flow 14's review, the worst case for entries.
+- [x] `unit::storage::a_covered_submission_that_makes_a_full_ring_feasible_fits_in_one_transaction` (SC-ST-09). Added in Flow 14's review, the worst case for events.
+- [x] `unit::lsm::a_bank_is_in_the_index_once_per_priority_however_many_payments_it_queues` (SC-A03-22). Added in Flow 14; it fails if a payment queued behind another, or moved into a queue that already holds one, adds its bank to the index again.
+- [x] `unit::lsm::gross_settlement_keeps_a_bank_in_the_index_once_until_its_queue_empties` (SC-A03-23). Added in Flow 14's third review; it fails if gross settlement adds a bank to the index again when it shortens the bank's queue.
 
 ## Flow 15: the model-based replay (1)
 
@@ -322,6 +338,8 @@ Implement the `credit()` view, and `set_collateral` with:
 - then the closure.
 
 `set_collateral` also gains its `CollateralBelowCredit` check.
+
+`open_repo` runs the closure, so a repo can make a full queue's offset feasible. Flow 14's full queues use up to 16,268 of the 16,384 bytes of events and return value (SC-ST-09) and 194 of the 200 writes (SC-ST-08) for a covered `submit`, and `open_repo` writes more entries, and publishes more events, of its own. Price it at the cap, and lower the cap if it doesn't fit.
 
 - [ ] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
 - [ ] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
@@ -392,8 +410,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 13) | 142 |
-| Still to fix (Flows 14 to 21) | 39 |
-| All | 181 |
+| Already green (Flows 0 to 14) | 150 |
+| Still to fix (Flows 15 to 21) | 38 |
+| All | 188 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, and Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, and Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23.

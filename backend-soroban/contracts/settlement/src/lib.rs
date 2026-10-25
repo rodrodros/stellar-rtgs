@@ -89,6 +89,10 @@ pub enum Priority {
     Urgent,
 }
 
+/// The priorities in `≺` order: a bank's urgent payments go before its normal ones (S7,
+/// ADR-0009).
+const PRIORITIES: [Priority; 2] = [Priority::Urgent, Priority::Normal];
+
 /// A payment's status (§4.3 `st`). `Expired` is the model's `rejected` (A5, ADR-0015).
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -167,9 +171,11 @@ enum DataKey {
     /// The ids `bank` has queued at a priority, head first and so in id order (ADR-0008,
     /// ADR-0009); no entry while the queue is empty.
     Queue(Address, Priority),
-    /// The banks with a `Queue` entry, each once and in no set order, for the offset, which
-    /// ranges over every queue (Spec O); no entry while no payment is queued.
-    QueuedBanks,
+    /// The banks with a `Queue` entry at a priority, each once and in no set order, for the
+    /// offset, which ranges over every queue (Spec O) and through this index reads only the
+    /// queues that exist, as gross settlement does; no entry while no payment is queued at
+    /// that priority.
+    QueuedBanks(Priority),
 }
 
 #[contractevent]
@@ -335,8 +341,9 @@ fn record_settled(env: &Env, payment: &mut Payment) {
 fn enqueue(env: &Env, payment: &Payment) {
     put(env, &DataKey::Payment(payment.id), payment);
     let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
+    let was_empty = queue.is_empty();
     queue.push_back(payment.id);
-    put_queue(env, &payment.from, payment.priority, &queue);
+    put_queue(env, &payment.from, payment.priority, &queue, was_empty);
     let count = Settlement::queued_count(env.clone()) + 1;
     put(env, &DataKey::QueuedCount, &count);
 }
@@ -354,7 +361,7 @@ fn remove_from_queue(env: &Env, payment: &Payment) {
     let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
     let i = queue.first_index_of(payment.id).unwrap();
     queue.remove(i);
-    put_queue(env, &payment.from, payment.priority, &queue);
+    put_queue(env, &payment.from, payment.priority, &queue, false);
 }
 
 /// Puts the queued payment into its sender's queue for its priority at its place by age.
@@ -363,9 +370,10 @@ fn remove_from_queue(env: &Env, payment: &Payment) {
 /// payment is in no queue of its sender's yet.
 fn insert_by_age(env: &Env, payment: &Payment) {
     let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
+    let was_empty = queue.is_empty();
     let i = queue.binary_search(payment.id).unwrap_err();
     queue.insert(i, payment.id);
-    put_queue(env, &payment.from, payment.priority, &queue);
+    put_queue(env, &payment.from, payment.priority, &queue, was_empty);
 }
 
 /// The eager closure (§4.6, S9, S23; ADR-0010): gross settlement from `banks`, then, at
@@ -402,11 +410,22 @@ fn eager_closure(env: &Env, banks: Vec<Address>) {
 /// settlement takes one of the queued payments the cap bounds, so the visits are at most
 /// `banks.len()` plus the settlements: gross settlement ends, and it ends with no head
 /// covered.
+///
+/// It reads a bank's queue at a priority only if the bank is in that priority's
+/// `QueuedBanks` index, read once at the start: gross settlement only shortens queues, so
+/// no bank joins an index during it. A cascade through a full queue then reads no queue
+/// that did not exist when it began, and fits Mainnet's footprint (SC-ST-05, SC-ST-07).
+/// A queue it empties may be read again if the cascade comes back to its bank, at no
+/// footprint cost: the entry is already in the footprint, as a write.
 fn settle_gross(env: &Env, mut banks: Vec<Address>) {
     let mut settled = 0;
+    let indexed = PRIORITIES.map(|priority| queued_banks(env, priority));
     while let Some(bank) = banks.pop_front() {
         let mut balance = Settlement::balance(env.clone(), bank.clone());
-        for priority in [Priority::Urgent, Priority::Normal] {
+        for (rank, priority) in PRIORITIES.into_iter().enumerate() {
+            if !indexed[rank].contains(&bank) {
+                continue;
+            }
             let mut queue = Settlement::queue(env.clone(), bank.clone(), priority);
             let queue_len = queue.len();
             while let Some(id) = queue.first() {
@@ -424,7 +443,7 @@ fn settle_gross(env: &Env, mut banks: Vec<Address>) {
             }
             if queue.len() < queue_len {
                 settled += queue_len - queue.len();
-                put_queue(env, &bank, priority, &queue);
+                put_queue(env, &bank, priority, &queue, false);
             }
             // The head left queued is not covered. If it is urgent, it blocks the bank's
             // normal payments (S7).
@@ -453,10 +472,12 @@ fn settle_gross(env: &Env, mut banks: Vec<Address>) {
 /// Each bank's net change is booked exactly (`rtgs_core::balances_after`): queued sums
 /// can exceed `i128` (SC-A03-11, SC-A03-12), but F1 and S1 put every final balance
 /// between 0 and the tokens the contract holds. A bank whose balance nets to what it was
-/// is not rewritten, and `QueuedBanks` is rewritten at most once, when some bank has no
-/// payment left.
+/// is not rewritten, and each `QueuedBanks` index is written at most once, when one of
+/// its queues emptied.
+///
+/// It reads only the queues that exist, through the two indexes, so that the offset over
+/// a full queue fits Mainnet's footprint (SC-ST-04, SC-ST-06).
 fn offset(env: &Env) {
-    let banks = queued_banks(env);
     let mut index: Map<Address, u32> = Map::new(env);
     let mut accounts: AVec<Address> = AVec::new();
     let mut account = |bank: &Address| match index.get(bank.clone()) {
@@ -467,32 +488,38 @@ fn offset(env: &Env) {
             accounts.len() - 1
         }
     };
-    // `queues[account]` and `payments[account]` belong to a queued bank, the first accounts.
-    let mut queues = AVec::new();
-    let mut payments = AVec::new();
-    for bank in banks.iter() {
-        // `QueuedBanks` holds each bank once, so the nth bank is account n; SC-P-12 to
-        // SC-P-15 check that `put_queue` keeps it so. Were a bank there twice, the tests
-        // stop here, and a release build skips the second entry rather than misaligning
-        // every later bank.
-        let new_bank = account(&bank) == payments.len();
-        debug_assert!(new_bank, "QueuedBanks holds a bank twice");
-        if !new_bank {
-            continue;
+    // `queues[slot]` and `payments[slot]` belong to a queued bank, the first accounts, with
+    // its queues in `PRIORITIES` order, empty where it has none.
+    let mut indexed = [0; 2];
+    let mut queues: AVec<(Address, [Vec<u64>; 2])> = AVec::new();
+    for (rank, priority) in PRIORITIES.into_iter().enumerate() {
+        let banks = queued_banks(env, priority);
+        indexed[rank] = banks.len();
+        for bank in banks.iter() {
+            let slot = account(&bank);
+            if slot == queues.len() {
+                queues.push((bank.clone(), [Vec::new(env), Vec::new(env)]));
+            }
+            // Each index holds a bank once; SC-P-12 to SC-P-15 check that `put_queue`
+            // keeps it so. Were a bank there twice, the tests stop here, and a release
+            // build reads its queue once, not twice.
+            let unread = queues[slot].1[rank].is_empty();
+            debug_assert!(unread, "a QueuedBanks index holds a bank twice");
+            if unread {
+                queues[slot].1[rank] = Settlement::queue(env.clone(), bank, priority);
+            }
         }
-        let urgent = Settlement::queue(env.clone(), bank.clone(), Priority::Urgent);
-        let normal = Settlement::queue(env.clone(), bank.clone(), Priority::Normal);
-        let bank_payments: AVec<Payment> = urgent
-            .iter()
-            .chain(normal.iter())
-            .map(|id| Settlement::payment(env.clone(), id).unwrap())
-            .collect();
-        payments.push(bank_payments);
-        queues.push((
-            bank,
-            [(Priority::Urgent, urgent), (Priority::Normal, normal)],
-        ));
     }
+    let payments: AVec<AVec<Payment>> = queues
+        .iter()
+        .map(|(_, [urgent, normal])| {
+            urgent
+                .iter()
+                .chain(normal.iter())
+                .map(|id| Settlement::payment(env.clone(), id).unwrap())
+                .collect()
+        })
+        .collect();
     let mut candidates: AVec<AVec<Candidate>> = payments
         .iter()
         .map(|bank_payments| {
@@ -523,24 +550,25 @@ fn offset(env: &Env) {
             set_balance(env, bank, after[account]);
         }
     }
-    let mut still_queued = Vec::new(env);
+    let mut still_queued = [Vec::new(env), Vec::new(env)];
     for ((bank, by_priority), &taken_from_bank) in queues.into_iter().zip(&prefix) {
         let mut left = taken_from_bank as u32;
-        let mut remaining = 0;
-        for (priority, queue) in &by_priority {
+        for (rank, priority) in PRIORITIES.into_iter().enumerate() {
+            let queue = &by_priority[rank];
             let taken = left.min(queue.len());
             if taken > 0 {
-                write_queue(env, &bank, *priority, &queue.slice(taken..));
+                write_queue(env, &bank, priority, &queue.slice(taken..));
                 left -= taken;
             }
-            remaining += queue.len() - taken;
-        }
-        if remaining > 0 {
-            still_queued.push_back(bank);
+            if queue.len() > taken {
+                still_queued[rank].push_back(bank.clone());
+            }
         }
     }
-    if still_queued.len() < banks.len() {
-        put_queued_banks(env, &still_queued);
+    for (rank, priority) in PRIORITIES.into_iter().enumerate() {
+        if still_queued[rank].len() < indexed[rank] {
+            put_queued_banks(env, priority, &still_queued[rank]);
+        }
     }
     let count = Settlement::queued_count(env.clone()) - settled;
     put(env, &DataKey::QueuedCount, &count);
@@ -560,46 +588,40 @@ fn offset(env: &Env) {
     }
 }
 
-/// The banks with a queued payment, in no set order.
-fn queued_banks(env: &Env) -> Vec<Address> {
+/// The banks with a payment queued at `priority`, in no set order.
+fn queued_banks(env: &Env, priority: Priority) -> Vec<Address> {
     env.storage()
         .persistent()
-        .get(&DataKey::QueuedBanks)
+        .get(&DataKey::QueuedBanks(priority))
         .unwrap_or_else(|| Vec::new(env))
 }
 
-/// Records the banks with a queued payment, or removes the entry once there are none.
-fn put_queued_banks(env: &Env, banks: &Vec<Address>) {
+/// Records the banks with a payment queued at `priority`, or removes the entry once there
+/// are none.
+fn put_queued_banks(env: &Env, priority: Priority, banks: &Vec<Address>) {
+    let key = DataKey::QueuedBanks(priority);
     if banks.is_empty() {
-        env.storage().persistent().remove(&DataKey::QueuedBanks);
+        env.storage().persistent().remove(&key);
     } else {
-        put(env, &DataKey::QueuedBanks, banks);
+        put(env, &key, banks);
     }
 }
 
-/// `write_queue`, keeping `QueuedBanks`: the bank joins it when its first queue gets an
-/// entry, and leaves it when its last one loses it.
-fn put_queue(env: &Env, bank: &Address, priority: Priority, queue: &Vec<u64>) {
-    let persistent = env.storage().persistent();
-    let key = DataKey::Queue(bank.clone(), priority);
-    let other = match priority {
-        Priority::Urgent => Priority::Normal,
-        Priority::Normal => Priority::Urgent,
-    };
-    let other_queued = persistent.has(&DataKey::Queue(bank.clone(), other));
-    let was_queued = other_queued || persistent.has(&key);
+/// `write_queue`, keeping `QueuedBanks(priority)`: the bank joins it when its queue gets a
+/// first payment, and leaves it when the queue loses its last. The caller says whether the
+/// queue was empty before, which it has read, so no other entry is read to know it.
+fn put_queue(env: &Env, bank: &Address, priority: Priority, queue: &Vec<u64>, was_empty: bool) {
     write_queue(env, bank, priority, queue);
-    let is_queued = other_queued || !queue.is_empty();
-    if was_queued == is_queued {
+    if was_empty == queue.is_empty() {
         return;
     }
-    let mut banks = queued_banks(env);
-    if is_queued {
+    let mut banks = queued_banks(env, priority);
+    if was_empty {
         banks.push_back(bank.clone());
     } else {
         banks.remove(banks.first_index_of(bank).unwrap());
     }
-    put_queued_banks(env, &banks);
+    put_queued_banks(env, priority, &banks);
 }
 
 /// Records `bank`'s queue at `priority`, or removes its entry once the queue is empty. It
