@@ -39,11 +39,15 @@ export function touches(event: FeedEvent, bank: string, { payments, repos }: Loo
  * The id of the newest event that concerns `bank`, or "" if none: a key that changes exactly
  * when the bank's views need reading again.
  */
-export function lastTouching(snapshot: Pick<SystemSnapshot, "events" | "payments" | "repos">, bank: string): string {
+export function lastTouching(
+  snapshot: Pick<SystemSnapshot, "events" | "payments" | "repos">,
+  bank: string,
+  types?: ReadonlySet<FeedEvent["type"]>,
+): string {
   const { events } = snapshot;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i]!;
-    if (touches(event, bank, snapshot)) return event.eventId;
+    if ((!types || types.has(event.type)) && touches(event, bank, snapshot)) return event.eventId;
   }
   return "";
 }

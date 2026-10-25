@@ -31,6 +31,12 @@ export const SAFETY_REFRESH_MS = 30_000;
 /** Gathers a burst of events (e.g. the replay of the retention window) into one read. */
 export const EVENT_DEBOUNCE_MS = 300;
 
+/**
+ * Events that change a bank's credit position but that core's store doesn't re-read the bank
+ * for (it resolves only payment-order events to banks), so this provider asks it to.
+ */
+const STORE_MISSES = new Set(["RepoRepaid", "RepoPenalised"] as const);
+
 function useDebounced<T>(value: T, ms: number): T {
   const [settled, setSettled] = useState(value);
   useEffect(() => {
@@ -51,6 +57,7 @@ export function BankDataProvider(props: { address: string; children: ReactNode }
     useSnapshot((s) => lastTouching(s, address)),
     EVENT_DEBOUNCE_MS,
   );
+  const missed = useSnapshot((s) => lastTouching(s, address, STORE_MISSES));
   const [local, bump] = useReducer((n: number) => n + 1, 0);
 
   const refresh = useCallback(() => {
@@ -64,6 +71,9 @@ export function BankDataProvider(props: { address: string; children: ReactNode }
   }, [refresh]);
 
   const fromStore = registered && storeView !== undefined;
+  useEffect(() => {
+    if (missed && fromStore) void store.refresh([address]);
+  }, [missed, fromStore, store, address]);
   const direct = useLoad(
     () => (fromStore ? Promise.resolve(undefined) : session.read.bank(address, config ? { config } : {})),
     [session, address, config, fromStore, fromStore || touched, local],

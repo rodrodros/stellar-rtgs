@@ -24,7 +24,7 @@ export function headNote(analysis: QueueAnalysis, balance: bigint, code?: string
   if (analysis.blockedBy === "urgent-queued") return "Waits behind your urgent payment orders, which go first.";
   if (analysis.blockedBy === "uncovered") {
     const shortfall = head.amount - (balance > 0n ? balance : 0n);
-    return `Blocked queue head: your settlement balance doesn't cover it. ${amountText(shortfall, code)} more is needed, from a deposit or an incoming payment.`;
+    return `Blocked queue head: your custody balance doesn't cover it. ${amountText(shortfall, code)} more is needed, from a deposit or an incoming payment.`;
   }
   return "Covered: it settles on the next eager closure.";
 }

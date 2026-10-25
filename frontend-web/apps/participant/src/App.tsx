@@ -7,8 +7,10 @@ import { useMemo, useState } from "react";
 import { BankBar } from "./connect/BankBar.tsx";
 import { DeploymentSettings } from "./connect/DeploymentSettings.tsx";
 import { NetworkSwitcher } from "./connect/NetworkSwitcher.tsx";
+import { StoreHealth } from "./connect/StoreHealth.tsx";
 import { Dashboard } from "./Dashboard.tsx";
 import { ActingBankProvider } from "./session/ActingBank.tsx";
+import { ReconnectContext } from "./session/Reconnect.tsx";
 import { ErrorBoundary } from "./ui/ErrorBoundary.tsx";
 
 function localStore(): Storage | undefined {
@@ -77,12 +79,15 @@ export function App(props: { env?: Env; bank?: string }) {
         </div>
       )}
       <ErrorBoundary key={sessionKey(connection.session)} onReset={connection.reconnect}>
-        <RtgsProvider session={connection.session}>
-          <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
-            <BankBar />
-            <Dashboard />
-          </ActingBankProvider>
-        </RtgsProvider>
+        <ReconnectContext.Provider value={connection.reconnect}>
+          <RtgsProvider session={connection.session}>
+            <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
+              <BankBar />
+              <StoreHealth />
+              <Dashboard />
+            </ActingBankProvider>
+          </RtgsProvider>
+        </ReconnectContext.Provider>
       </ErrorBoundary>
       <DeploymentSettings
         key={`settings:${network.id}:${version}`}

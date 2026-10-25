@@ -32,7 +32,7 @@ export function Notices({ bank }: { bank: string }) {
           ? [
               {
                 key: e.eventId,
-                text: `Incoming payment #${e.id} from ${session.registry.nameOf(e.from)} settled: ${amountText(e.amount, session.cashToken.code)}`,
+                text: `Incoming payment order #${e.id} from ${session.registry.nameOf(e.from)} settled: ${amountText(e.amount, session.cashToken.code)}`,
               },
             ]
           : [],

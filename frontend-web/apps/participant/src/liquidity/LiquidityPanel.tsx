@@ -34,7 +34,7 @@ export function LiquidityPanel() {
       () => (kind === "deposit" ? actor.deposit(parsed.value) : actor.withdraw(parsed.value)),
       () => {
         setAmount("");
-        return kind === "deposit" ? `Deposited ${shown} into your settlement balance.` : `Withdrew ${shown} to your trustline.`;
+        return kind === "deposit" ? `Deposited ${shown} into your custody balance.` : `Withdrew ${shown} to your trustline.`;
       },
     );
   };

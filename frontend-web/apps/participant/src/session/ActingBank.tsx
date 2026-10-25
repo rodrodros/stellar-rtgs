@@ -3,7 +3,7 @@
 // session, which is keyed on the network, so a switch drops the signer with it.
 import { connectWallet, devnetIdentities, disconnectWallet, toRtgsError, type RtgsActor, type RtgsError, type Signer } from "@rtgs/core";
 import { useBankRegistry, useSession } from "@rtgs/core/react";
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export interface ActingBank {
   signer?: Signer;
@@ -85,6 +85,13 @@ export function ActingBankProvider(props: { initialBank?: string; children: Reac
   );
   const current = useRef(signer);
   current.current = signer;
+  // The provider unmounts when the session goes (a network switch): forget a wallet with it.
+  useEffect(
+    () => () => {
+      if (current.current?.kind === "wallet") void disconnectWallet().catch(() => {});
+    },
+    [],
+  );
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<RtgsError>();
 

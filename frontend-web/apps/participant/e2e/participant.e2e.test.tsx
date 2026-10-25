@@ -6,7 +6,7 @@
 import { bootstrapDevnet, loadNetworks, withOverrides, type Env } from "@rtgs/core";
 import { readSettlementWasm } from "@rtgs/core/node";
 import { join } from "node:path";
-import { cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { App } from "../src/App.tsx";
 
@@ -60,19 +60,42 @@ describe.skipIf(!up)("participant app on the devnet", () => {
   const region = (root: HTMLElement, name: RegExp) => within(root).getByRole("region", { name });
   const balanceOf = (root: HTMLElement) => within(root).getByTestId("settlement-balance").textContent;
 
-  async function submit(root: HTMLElement, to: string, amount: string) {
+  const outcomeText = (panel: HTMLElement) => panel.querySelector(".tx")?.textContent ?? "";
+
+  /**
+   * Clicks `button` in `panel` and waits for the write's outcome line to change from what it
+   * was. A refused write fails at once with core's message, rather than at the timeout.
+   */
+  async function write(panel: HTMLElement, button: string): Promise<string> {
+    const before = outcomeText(panel);
+    fireEvent.click(within(panel).getByRole("button", { name: button }));
+    const deadline = Date.now() + 90_000;
+    for (;;) {
+      const line = panel.querySelector(".tx");
+      const text = line?.textContent ?? "";
+      if (line?.classList.contains("tx-error")) throw new Error(`${button} refused: ${text}`);
+      if (line?.classList.contains("tx-done") && text !== before) return text;
+      if (Date.now() > deadline) throw new Error(`${button}: no outcome; the panel shows: ${panel.textContent}`);
+      await act(() => new Promise((r) => setTimeout(r, 250)));
+    }
+  }
+
+  /** Submits a payment order and returns its id and the outcome line. */
+  async function submit(root: HTMLElement, to: string, amount: string): Promise<{ id: string; text: string }> {
     const form = region(root, /new payment order/i);
     fireEvent.change(within(form).getByLabelText("Receiver"), { target: { value: to } });
     fireEvent.change(within(form).getByLabelText(/Amount/), { target: { value: amount } });
-    fireEvent.click(within(form).getByRole("button", { name: "Submit" }));
+    const text = await write(form, "Submit");
+    const id = /Payment order #(\d+)/.exec(text)?.[1];
+    if (!id) throw new Error(`no payment order id in "${text}"`);
+    return { id, text };
   }
 
   /** `shown`: the amount as the app prints it, e.g. "1,000". */
   async function deposit(root: HTMLElement, amount: string, shown: string) {
     const liquidity = region(root, /liquidity/i);
     fireEvent.change(within(liquidity).getByLabelText(/Amount/), { target: { value: amount } });
-    fireEvent.click(within(liquidity).getByRole("button", { name: "Deposit" }));
-    await eventually(() => within(liquidity).getByText(`Deposited ${shown} USD into your settlement balance.`), () => liquidity);
+    expect(await write(liquidity, "Deposit")).toBe(`Deposited ${shown} USD into your custody balance.`);
   }
 
   const bank2 = () => {
@@ -90,33 +113,33 @@ describe.skipIf(!up)("participant app on the devnet", () => {
   it("deposits, then settles a covered payment order at once", async () => {
     await deposit(a, "1000", "1,000");
     await eventually(() => expect(balanceOf(a)).toBe("1,000 USD"));
-    await submit(a, bank2(), "100");
-    await eventually(() => within(a).getByText("Payment order #0 settled at once."), () => region(a, /new payment order/i));
+    const { id, text } = await submit(a, bank2(), "100");
+    expect(text).toBe(`Payment order #${id} settled at once.`);
     await eventually(() => expect(balanceOf(b)).toBe("100 USD"));
   });
 
   it("queues an uncovered payment order behind a blocked head, then reprioritises and revokes it", async () => {
-    await submit(a, bank2(), "5000");
-    await eventually(() => within(a).getByText("Payment order #1 queued at position 1 in your normal queue."), () => region(a, /new payment order/i));
+    const { id, text } = await submit(a, bank2(), "5000");
+    expect(text).toBe(`Payment order #${id} queued at position 1 in your normal queue.`);
     const normal = () => within(a).getByLabelText("Normal queue");
     await eventually(() => expect(within(normal()).getByText(/Blocked queue head/).textContent).toMatch(/4,100 USD more is needed/));
 
     fireEvent.click(within(normal()).getByRole("button", { name: "Make urgent" }));
     const urgent = () => within(a).getByLabelText("Urgent queue");
-    await eventually(() => within(urgent()).getByText("#1"));
+    await eventually(() => within(urgent()).getByText(`#${id}`));
     fireEvent.click(within(urgent()).getByRole("button", { name: "Revoke" }));
     await eventually(() => within(urgent()).getByText("Empty."));
-    await eventually(() => within(within(a).getByTestId("payment-1")).getByText("Revoked"));
+    await eventually(() => within(within(a).getByTestId(`payment-${id}`)).getByText("Revoked"));
   });
 
   it("settles a queued payment order when a deposit covers it, and the receiver sees it live", async () => {
-    await submit(a, bank2(), "2000");
-    await eventually(() => within(a).getByText(/Payment order #2 queued/));
+    const { id, text } = await submit(a, bank2(), "2000");
+    expect(text).toMatch(/queued/);
     await deposit(a, "1500", "1,500");
-    await eventually(() => within(within(a).getByTestId("payment-2")).getByText("Settled"));
-    await eventually(() => within(b).getByText("Incoming payment #2 from Bank 1 settled: 2,000 USD"));
+    await eventually(() => within(within(a).getByTestId(`payment-${id}`)).getByText("Settled"));
+    await eventually(() => within(b).getByText(`Incoming payment order #${id} from Bank 1 settled: 2,000 USD`));
     await eventually(() => expect(balanceOf(b)).toBe("2,100 USD"));
-    expect(within(within(b).getByTestId("payment-2")).getByText(/released by Bank 1's deposit/)).toBeTruthy();
+    expect(within(within(b).getByTestId(`payment-${id}`)).getByText(/released by Bank 1's deposit/)).toBeTruthy();
   });
 
   it("reconnects after saving deployment settings, keeping the app alive", async () => {

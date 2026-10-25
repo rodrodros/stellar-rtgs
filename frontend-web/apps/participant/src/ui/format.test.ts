@@ -14,6 +14,7 @@ describe("format", () => {
     expect(duration(90_061)).toBe("1d 1h 1m");
     expect(countdown(1060, 1000)).toBe("in 1m 0s");
     expect(countdown(1000, 1060)).toBe("1m 0s ago");
+    expect(countdown(1000, 1000)).toBe("in 0s");
   });
 
   it("reads only positive amounts with at most 7 decimals", () => {

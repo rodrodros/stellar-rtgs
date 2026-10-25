@@ -2,6 +2,7 @@ import { RtgsProvider } from "@rtgs/core/react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { BankBar } from "./connect/BankBar.tsx";
+import { StoreHealth } from "./connect/StoreHealth.tsx";
 import { Dashboard } from "./Dashboard.tsx";
 import { ActingBankProvider } from "./session/ActingBank.tsx";
 import { devnetIdentities } from "@rtgs/core";
@@ -21,6 +22,7 @@ function setup(options: FakeOptions = {}, bank = "1") {
     <RtgsProvider session={fake.session}>
       <ActingBankProvider initialBank={bank}>
         <BankBar />
+        <StoreHealth />
         <Dashboard />
       </ActingBankProvider>
     </RtgsProvider>,
@@ -52,7 +54,7 @@ describe("Dashboard", () => {
     await within(liquidity).findByText("Authorized");
     fireEvent.change(within(liquidity).getByLabelText(/Amount/), { target: { value: "100" } });
     fireEvent.click(within(liquidity).getByRole("button", { name: "Deposit" }));
-    expect(await within(liquidity).findByText("Deposited 100 USD into your settlement balance.")).toBeTruthy();
+    expect(await within(liquidity).findByText("Deposited 100 USD into your custody balance.")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("100 USD"));
   });
 
@@ -100,7 +102,7 @@ describe("Dashboard", () => {
     const fake = setup({ balances: { 2: USD(500) } });
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("0 USD"));
     await act(() => fake.as(2).submit({ to: fake.banks[0]!.address, amount: USD(75), priority: "urgent" }));
-    expect(await screen.findByText("Incoming payment #0 from Bank 2 settled: 75 USD")).toBeTruthy();
+    expect(await screen.findByText("Incoming payment order #0 from Bank 2 settled: 75 USD")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("75 USD"));
     const row = screen.getByTestId("payment-0");
     expect(within(row).getByText("From Bank 2")).toBeTruthy();
@@ -116,17 +118,27 @@ describe("Dashboard", () => {
     expect(within(screen.getByLabelText("Normal queue")).getByText("Empty.")).toBeTruthy();
   });
 
-  it("loads payment orders older than the store holds, from the views", async () => {
+  it("loads payment orders older than the store holds, filling the gaps below its newest run", async () => {
     const fake = setup({ balances: { 1: USD(100) } });
-    for (const amount of [1, 2, 3]) await act(() => fake.as(1).submit({ to: fake.banks[1]!.address, amount: USD(amount), priority: "normal" }));
-    await screen.findByTestId("payment-2");
-    act(() => fake.forgetBefore(2n));
-    await waitFor(() => expect(screen.queryByTestId("payment-0")).toBeNull());
-    expect(screen.getByText(/back to #2/)).toBeTruthy();
+    for (let i = 1; i <= 7; i++) await act(() => fake.as(1).submit({ to: fake.banks[1]!.address, amount: USD(i), priority: "normal" }));
+    await screen.findByTestId("payment-6");
+    // Like core's store: the newest orders, plus an old one an event or a queue brought in.
+    act(() => fake.keepOnly([1n, 5n, 6n]));
+    await waitFor(() => expect(screen.queryByTestId("payment-3")).toBeNull());
+    expect(screen.getByText(/back to #5/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Load older payment orders" }));
-    expect(await screen.findByTestId("payment-0")).toBeTruthy();
-    expect(within(screen.getByTestId("payment-1")).getByText("Settled")).toBeTruthy();
+    for (const id of [0, 2, 3, 4]) expect(await screen.findByTestId(`payment-${id}`)).toBeTruthy();
+    expect(within(screen.getByTestId("payment-3")).getByText("Settled")).toBeTruthy();
     // Everything back to #0 is read: nothing older to load.
+    expect(screen.queryByRole("button", { name: "Load older payment orders" })).toBeNull();
+  });
+
+  it("says so when the store's first load failed, and offers to reconnect", async () => {
+    setup({ storeError: { title: "Network unreachable", detail: "The network's RPC did not answer." } });
+    const alert = await screen.findByText(/Couldn't load the system's state/);
+    expect(alert.parentElement!.textContent).toMatch(/Network unreachable/);
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+    expect(screen.getByText(/Payment orders couldn't be loaded/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load older payment orders" })).toBeNull();
   });
 

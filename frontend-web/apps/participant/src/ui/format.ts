@@ -28,9 +28,9 @@ export function duration(secs: number): string {
   return parts.length ? parts.join(" ") : "0s";
 }
 
-/** "in 5m 0s" before `target`, "5m 0s ago" after it. */
+/** "in 5m 0s" until `target` (inclusive, as expiry is), "5m 0s ago" after it. */
 export function countdown(target: number, now: number): string {
-  return now < target ? `in ${duration(target - now)}` : `${duration(now - target)} ago`;
+  return now <= target ? `in ${duration(target - now)}` : `${duration(now - target)} ago`;
 }
 
 export type AmountInput = { ok: true; value: bigint } | { ok: false; message: string };

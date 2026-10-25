@@ -48,5 +48,7 @@ describe("touches", () => {
     const theirs = ev({ type: "Deposited", bank: OTHER, amount: 1n });
     expect(lastTouching({ ...lookups, events: [mine, theirs] }, ME)).toBe(mine.eventId);
     expect(lastTouching({ ...lookups, events: [theirs] }, ME)).toBe("");
+    const repaid = ev({ type: "RepoRepaid", id: 7n, amount: 1n, outstanding: 0n });
+    expect(lastTouching({ ...lookups, events: [repaid, mine] }, ME, new Set(["RepoRepaid"]))).toBe(repaid.eventId);
   });
 });

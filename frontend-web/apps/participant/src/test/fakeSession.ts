@@ -34,6 +34,8 @@ export const USD = (n: number) => BigInt(Math.round(n * 1e7));
 export interface FakeOptions {
   network?: NetworkConfig;
   capabilities?: Partial<Capabilities>;
+  /** The store's first load failed with this error. */
+  storeError?: { title: string; detail: string };
   /** Settlement balances per bank index (1-based), in stroops. */
   balances?: Record<number, bigint>;
   repos?: Repo[];
@@ -303,12 +305,15 @@ export function createFakeSession(options: FakeOptions = {}) {
   };
 
   snapshot = { ...snapshot, banks: views() };
+  if (options.storeError) {
+    snapshot = { ...snapshot, status: "error", error: new RtgsError("rpc", options.storeError.title, options.storeError.detail) };
+  }
 
   return {
     session: session as unknown as RtgsSession,
-    /** Pretends the store holds only payment orders from `id` up, as after a long history. */
-    forgetBefore(id: bigint) {
-      snapshot = { ...snapshot, payments: new Map([...snapshot.payments].filter(([k]) => k >= id)) };
+    /** Pretends the store holds only these payment orders, as after a long history. */
+    keepOnly(ids: bigint[]) {
+      snapshot = { ...snapshot, payments: new Map([...snapshot.payments].filter(([k]) => ids.includes(k))) };
       for (const l of listeners) l();
     },
     banks,

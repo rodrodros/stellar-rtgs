@@ -14,7 +14,7 @@ import { useTx } from "../ui/useTx.ts";
 export function CreditPanel() {
   const session = useSession();
   const caps = useCapabilities();
-  const { address, view } = useBankData();
+  const { address, view, error } = useBankData();
   const repos = useSnapshot((s) => s.repos);
   const mine = useMemo(() => [...repos.values()].filter((r) => r.bank === address).sort((a, b) => (a.id < b.id ? 1 : -1)), [repos, address]);
   const code = session.cashToken.code;
@@ -41,6 +41,12 @@ export function CreditPanel() {
             <dd className={view.credit.penalty > 0n ? "warn" : ""}>{amountText(view.credit.penalty, code)}</dd>
           </div>
         </dl>
+      ) : error ? (
+        <p className="tx tx-error">
+          {error.title}: {error.detail}
+        </p>
+      ) : !view ? (
+        <p className="note">Loading…</p>
       ) : (
         <p className="note">Credit position unavailable.</p>
       )}

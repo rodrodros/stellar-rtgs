@@ -35,6 +35,20 @@ export function filterHistory(
 /** How many payment ids "Load older" reads per click. */
 export const OLDER_PAGE = 100n;
 
+/**
+ * The lowest id of the unbroken run of ids down from the newest one: every payment order from
+ * it up is known. The store holds more than the newest payment orders (old queued ones, and
+ * old ones its events mention), so its smallest id says nothing about the gaps above it.
+ */
+export function contiguousFrom(known: ReadonlySet<bigint>): bigint | undefined {
+  let newest: bigint | undefined;
+  for (const id of known) if (newest === undefined || id > newest) newest = id;
+  if (newest === undefined) return undefined;
+  let lowest = newest;
+  while (lowest > 0n && known.has(lowest - 1n)) lowest -= 1n;
+  return lowest;
+}
+
 /** The store's payment orders, plus older ones read on demand; the store's are fresher. */
 export function withOlder(store: ReadonlyMap<bigint, PaymentRecord>, older: ReadonlyMap<bigint, Payment>): PaymentRecord[] {
   const merged = new Map<bigint, PaymentRecord>();
@@ -48,20 +62,17 @@ export function PaymentHistory() {
   const { address } = useBankData();
   const payments = useSnapshot((s) => s.payments);
   const feed = useSnapshot((s) => s.feed);
-  const loading = useSnapshot((s) => s.status === "loading");
+  const storeStatus = useSnapshot((s) => s.status);
+  const loading = storeStatus === "loading";
   const [direction, setDirection] = useState<Direction>("all");
   const [status, setStatus] = useState<PaymentStatus | "all">("all");
   const [older, setOlder] = useState<ReadonlyMap<bigint, Payment>>(new Map());
   const [paging, setPaging] = useState<{ busy: boolean; error?: RtgsError }>({ busy: false });
-  // The lowest id "Load older" has read, whether or not it was the bank's.
-  const [readBackTo, setReadBackTo] = useState<bigint>();
+  // Every id "Load older" has read, including ids the views no longer return (archived).
+  const [scanned, setScanned] = useState<ReadonlySet<bigint>>(new Set());
   const all = useMemo(() => withOlder(payments, older), [payments, older]);
   const rows = useMemo(() => filterHistory(all, address, direction, status), [all, address, direction, status]);
-  // The oldest id read so far: everything from it up is in `all`.
-  const lowest = [...all.map((p) => p.id), ...(readBackTo === undefined ? [] : [readBackTo])].reduce<bigint | undefined>(
-    (min, id) => (min === undefined || id < min ? id : min),
-    undefined,
-  );
+  const lowest = useMemo(() => contiguousFrom(new Set([...all.map((p) => p.id), ...scanned])), [all, scanned]);
 
   const loadOlder = async () => {
     if (lowest === undefined || lowest === 0n) return;
@@ -75,7 +86,11 @@ export function PaymentHistory() {
         for (const p of page) next.set(p.id, p);
         return next;
       });
-      setReadBackTo(from);
+      setScanned((prev) => {
+        const next = new Set(prev);
+        for (let id = from; id <= to; id++) next.add(id);
+        return next;
+      });
       setPaging({ busy: false });
     } catch (e) {
       setPaging({ busy: false, error: toRtgsError(e) });
@@ -108,7 +123,9 @@ export function PaymentHistory() {
         </label>
       </div>
       {rows.length === 0 ? (
-        <p className="note">{loading ? "Loading payment orders…" : "No payment orders found."}</p>
+        <p className="note">
+          {loading ? "Loading payment orders…" : storeStatus === "error" ? "Payment orders couldn't be loaded; reconnect above." : "No payment orders found."}
+        </p>
       ) : (
         <table className="history">
           <thead>
@@ -154,7 +171,7 @@ export function PaymentHistory() {
         {lowest !== undefined && lowest > 0n ? ` (back to #${lowest})` : ""} and every event since ledger {feed.startLedger ?? "…"}.
         {feed.clamped && " Older events are beyond the RPC retention window; older payment orders still load from the contract."}
       </p>
-      {!loading && lowest !== undefined && lowest > 0n && (
+      {storeStatus === "ready" && lowest !== undefined && lowest > 0n && (
         <button type="button" disabled={paging.busy} onClick={() => void loadOlder()}>
           {paging.busy ? "Loading…" : "Load older payment orders"}
         </button>
