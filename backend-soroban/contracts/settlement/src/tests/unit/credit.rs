@@ -13,6 +13,10 @@
 //! - A12's and A14's guard `p ∈ P` is not checked: the contract keeps no list of banks,
 //!   so `set_collateral` and `open_repo` accept any address, as `submit` accepts any
 //!   receiver. Still open (README, "Decide which addresses a payment may credit").
+//! - A20's guard `0 < x ≤ ovn(p)` is checked per repo, as A13's is (SC-A13-05): a bank
+//!   with two penalty repos of 60 and 40 repays each on its own, and a repayment of 100
+//!   against either is `RepayExceedsRepo` where the model's `RepayOvernight(100)` would
+//!   pass.
 //! - The penalty rate is recorded on the repo but not charged: decided with the user on
 //!   2026-10-24 (status and rate only, no interest accrual). Conversion therefore mints
 //!   and burns nothing.
@@ -547,11 +551,23 @@ fn a_penalty_repo_is_repaid_by_a_burn() {
     setup.at(default_config().repo_term_secs + 1);
     client.convert_overdue(&id);
 
+    assert_eq!(
+        client.try_repay(setup.bank(0), &id, &61),
+        Err(Ok(Error::RepayExceedsRepo))
+    );
     client.repay(setup.bank(0), &id, &25);
     assert_eq!(client.credit(setup.bank(0)), credit(0, 35, 100));
     assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Penalty);
 
     client.repay(setup.bank(0), &id, &35);
+    assert_eq!(
+        setup.our_events(),
+        std::vec![setup.ev(RepoRepaid {
+            id,
+            amount: 35,
+            outstanding: 0,
+        })]
+    );
     assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
     assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Repaid);
     assert_eq!(setup.token().balance(&setup.contract), 0);
@@ -579,4 +595,72 @@ fn penalty_repos_stay_collateralised() {
         client.try_set_collateral(setup.bank(0), &99),
         Err(Ok(Error::CollateralBelowCredit))
     );
+}
+
+/// SC-A20-10. S21 with two repos: converting one moves only its own outstanding amount
+/// from `cr` to `ovn`, adding to what is already there, so the second conversion leaves
+/// both in `ovn` and the collateral still bounds the bank's credit (ADR-0014).
+#[test]
+fn converting_one_of_two_repos_moves_only_its_own_amount() {
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(0);
+    let first = client.open_repo(setup.bank(0), &60);
+    setup.at(10);
+    let second = client.open_repo(setup.bank(0), &40);
+
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&first);
+    assert_eq!(client.credit(setup.bank(0)), credit(40, 60, 100));
+
+    setup.at(default_config().repo_term_secs + 11);
+    client.convert_overdue(&second);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 100, 100));
+    assert_eq!(
+        client.try_open_repo(setup.bank(0), &1),
+        Err(Ok(Error::CreditExceedsCollateral))
+    );
+}
+
+/// SC-A20-11. ADR-0014's term without overflow: a term that would take
+/// `opened_at + repo_term_secs` past `u64::MAX` saturates, so the repo never becomes
+/// overdue, rather than wrapping round to a time already past.
+#[test]
+fn a_term_that_would_overflow_never_passes() {
+    let setup = Setup::with_config(
+        1,
+        0,
+        Config {
+            repo_term_secs: u64::MAX,
+            ..default_config()
+        },
+    );
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(10);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.at(u64::MAX);
+    assert_eq!(client.try_convert_overdue(&id), Err(Ok(Error::NotOverdue)));
+}
+
+/// SC-A20-12. A13 and A20 side by side: a bank with a penalty repo and an intraday repo
+/// repays each from its own side of the position, the intraday repo from `cr` and the
+/// penalty repo from `ovn`, chosen by the repo's status and not by what the bank owes
+/// (S21, ADR-0014).
+#[test]
+fn each_repo_is_repaid_from_its_own_side_of_the_credit() {
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let penalty = client.open_repo(setup.bank(0), &60);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&penalty);
+    let intraday = client.open_repo(setup.bank(0), &40);
+
+    client.repay(setup.bank(0), &intraday, &40);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 60, 100));
+    client.repay(setup.bank(0), &penalty, &60);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
+    setup.assert_conserved();
 }

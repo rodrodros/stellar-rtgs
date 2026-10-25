@@ -136,6 +136,44 @@ fn a_repo_extends_the_instance_and_its_entries_to_thirty_days() {
     assert_every_entry_lives_until(&setup, later + BUMP_AMOUNT);
 }
 
+/// The ledger the contract's entry under `key` lives until.
+fn live_until(setup: &Setup, key: &LedgerKey) -> u32 {
+    our_entries(setup)
+        .into_iter()
+        .find_map(|(owned, live_until)| (owned == *key).then_some(live_until))
+        .expect("the contract has this entry")
+}
+
+/// SC-ST-16. ADR-0014: converting an overdue repo extends what it writes, the instance,
+/// the repo and the bank's credit, to `BUMP_AMOUNT` ledgers from the call. The repo was
+/// opened so long before that every entry is below the threshold again, so an entry the
+/// conversion forgot to extend would still live until the open's extension.
+#[test]
+fn converting_an_overdue_repo_extends_the_instance_the_repo_and_the_credit() {
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    setup.env.ledger().set_sequence_number(1_000);
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+
+    let later = 1_000 + (BUMP_AMOUNT - BUMP_THRESHOLD) + 1;
+    setup.env.ledger().set_sequence_number(later);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&id);
+
+    for key in [
+        instance_key(&setup),
+        persistent_key(&setup, DataKey::Repo(id)),
+        persistent_key(&setup, DataKey::Credit(setup.bank(0).clone())),
+    ] {
+        assert_eq!(
+            live_until(&setup, &key),
+            later + BUMP_AMOUNT,
+            "entry {key:?}"
+        );
+    }
+}
+
 /// An entry is extended again once its remaining TTL falls below `BUMP_THRESHOLD`, and
 /// not before, so a busy entry is not rewritten on every call.
 #[test]

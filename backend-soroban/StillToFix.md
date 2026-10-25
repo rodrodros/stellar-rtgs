@@ -399,7 +399,7 @@ Added in Flow 18, and green:
 
 - [x] `unit::credit::a_burn_the_token_refuses_is_reported` (SC-A13-10): `props.rs` demands a refused SAC burn come back as a contract error, so `repay` reports it as `TokenTransferFailed`. Added in review, so it was shown red against hand mutants rather than a stub.
 
-## Flow 19: the penalty repo, ADR-0014 and A20 (9)
+## Flow 19: the penalty repo, ADR-0014 and A20 (13)
 
 `convert_overdue` needs no authorization. It refuses with:
 - `NotOverdue` while `now <= opened_at + repo_term_secs`, and for a repaid repo;
@@ -408,21 +408,30 @@ Added in Flow 18, and green:
 
 Converting a repo moves its outstanding amount from `cr` to `ovn` and records the rate, with a `RepoPenalised` event. `repay` then lowers `ovn` for a penalty repo, and the collateral checks count `ovn`.
 
-- [ ] `unit::credit::an_overdue_repo_becomes_a_penalty_repo` (SC-A20-01)
-- [ ] `unit::credit::a_repo_exactly_at_its_term_is_not_overdue` (SC-A20-02)
-- [ ] `unit::credit::the_term_and_the_penalty_rate_are_configurable` (SC-A20-03)
-- [ ] `unit::credit::a_penalty_repo_cannot_be_converted_again` (SC-A20-04)
-- [ ] `unit::credit::a_repaid_repo_is_never_overdue` (SC-A20-05)
-- [ ] `unit::credit::converting_an_unknown_repo_is_refused` (SC-A20-06)
-- [ ] `unit::credit::a_penalty_repo_is_repaid_by_a_burn` (SC-A20-07)
-- [ ] `unit::credit::penalty_repos_stay_collateralised` (SC-A20-08). Until it is green, dropping `ovn` from `open_repo`'s or `set_collateral`'s collateral check survives (Flow 17); check that both mutants now fail.
-- [ ] `auth::convert_overdue_needs_no_authorization` (SC-A20-09)
+- [x] `unit::credit::an_overdue_repo_becomes_a_penalty_repo` (SC-A20-01)
+- [x] `unit::credit::a_repo_exactly_at_its_term_is_not_overdue` (SC-A20-02)
+- [x] `unit::credit::the_term_and_the_penalty_rate_are_configurable` (SC-A20-03)
+- [x] `unit::credit::a_penalty_repo_cannot_be_converted_again` (SC-A20-04)
+- [x] `unit::credit::a_repaid_repo_is_never_overdue` (SC-A20-05)
+- [x] `unit::credit::converting_an_unknown_repo_is_refused` (SC-A20-06)
+- [x] `unit::credit::a_penalty_repo_is_repaid_by_a_burn` (SC-A20-07)
+- [x] `unit::credit::penalty_repos_stay_collateralised` (SC-A20-08). Dropping `ovn` from `open_repo`'s or `set_collateral`'s collateral check now fails it, under the pinned seed and seeds 1–4.
+- [x] `auth::convert_overdue_needs_no_authorization` (SC-A20-09)
+
+Added in Flow 19, and green:
+
+- [x] `unit::credit::converting_one_of_two_repos_moves_only_its_own_amount` (SC-A20-10): every other test converts a bank's only repo, where `cr = 0` and `ovn = outstanding` pass for `cr -= outstanding` and `ovn += outstanding`. With two repos they don't. SC-P-01 and SC-P-02 rarely reach that case.
+- [x] `unit::credit::a_term_that_would_overflow_never_passes` (SC-A20-11): the term saturates, so a term near `u64::MAX` never passes, where a wrapping sum would make the repo overdue at once.
+- [x] `unit::credit::each_repo_is_repaid_from_its_own_side_of_the_credit` (SC-A20-12): every other test that repays meets one side only, a bank with only intraday repos or one repaying its only, penalty repo, so choosing the side by the bank's `ovn` rather than the repo's status passed them all. Added in review, so it was shown red against that hand mutant, `owed_by_ovn`, killed under the pinned seed and seeds 1–4.
+- [x] `unit::storage::converting_an_overdue_repo_extends_the_instance_the_repo_and_the_credit` (SC-ST-16): SC-ST-03 runs `convert_overdue` in the ledger where `open_repo` already extended the repo, the credit and the instance, so it cannot see a conversion that extends none of them. This test converts once they are below the threshold again. Added in review, so it was shown red against hand mutants rather than a stub.
 
 ## Flow 20: every entry point extends every entry it writes (1)
 
 The last unit test, since it calls every entry point.
 
 - [ ] `unit::storage::every_entry_point_extends_every_entry_it_writes` (SC-ST-03)
+
+It passes since Flow 19, which gave `convert_overdue` its code. But it runs every entry point in one ledger, so an entry point that writes an entry an earlier call already extended in that ledger passes without extending it. Flow 19's review found this for `convert_overdue` (now SC-ST-16) and `repay`. What is left is to make SC-ST-03 see it.
 
 ## Flow 21: the property and state-machine tests over random call sequences (2)
 
@@ -431,12 +440,14 @@ They call every entry point and every view, so they turn green last. A failure p
 - [ ] `props::the_safety_invariants_hold_for_any_call_sequence` (SC-P-01)
 - [ ] `state_machine::the_contract_refines_the_reference_model` (SC-P-02)
 
+Both pass since Flow 19. What is left is to check them against hand mutants (TESTING.md) and tick them. Flow 19's review found that neither reliably converts two repos of one bank, nor fully repays a penalty repo, nor repays an intraday repo beside a penalty repo: SC-A20-10, SC-A20-07 and SC-A20-12 catch those mutants at unit level, the property tests do not. `owed_by_ovn` survives SC-P-01 under every seed and is killed by SC-P-02 under the pinned seed and one of seeds 1–4.
+
 ## Totals
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 18) | 186 |
-| Still to fix (Flows 19 to 21) | 12 |
-| All | 198 |
+| Already green (Flows 0 to 19) | 199 |
+| Still to fix (Flows 20 to 21) | 3 |
+| All | 202 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, and Flow 18 added SC-A13-10.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, Flow 18 added SC-A13-10, and Flow 19 added SC-A20-10 to SC-A20-12 and SC-ST-16.

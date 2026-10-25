@@ -5,12 +5,13 @@
 //! covered payment at once unless the sender has one queued ahead of it, queues any
 //! other, and refuses one still queued after the eager closure when the queue was already
 //! full), `revoke`, `reprioritise`, `expire`, `set_collateral`, `open_repo` (which mints
-//! the repo into the contract), `repay` (which burns the repayment from it), the eager
+//! the repo into the contract), `repay` (which burns the repayment from it),
+//! `convert_overdue` (which turns a repo past its term into a penalty repo), the eager
 //! closure (gross settlement, then the LSM offset) after every deposit, submission,
 //! revocation, reprioritisation, expiry or repo, and the `balance`, `payment`, `queue`,
-//! `queued_count`, `credit`, `repo`, `config` and `central_bank` views. The other entry
-//! points are stubs whose unit tests (`src/tests/`) are written and red; they are
-//! implemented test first (TESTING.md).
+//! `queued_count`, `credit`, `repo`, `config` and `central_bank` views. That is every
+//! entry point; each was implemented test first against its unit tests (`src/tests/`,
+//! TESTING.md).
 #![no_std]
 
 extern crate alloc;
@@ -347,6 +348,16 @@ fn put<V: IntoVal<Env, Val>>(env: &Env, key: &DataKey, value: &V) {
 /// Records the bank's settlement balance and extends its entry.
 fn set_balance(env: &Env, bank: &Address, balance: i128) {
     put(env, &DataKey::Balance(bank.clone()), &balance);
+}
+
+/// The part of a bank's credit position that counts a repo's outstanding amount: `ovn`
+/// for a penalty repo, `cr` for an intraday one (§4.4, ADR-0014).
+fn owed(credit: &mut Credit, status: RepoStatus) -> &mut i128 {
+    if status == RepoStatus::Penalty {
+        &mut credit.ovn
+    } else {
+        &mut credit.cr
+    }
 }
 
 /// A2: moves the payment's amount from its sender's balance, `from_balance`, to its
@@ -999,9 +1010,9 @@ impl Settlement {
         Ok(id)
     }
 
-    /// A13 under Repo with MintBurn: the bank, or the central bank on its behalf, repays
-    /// `amount` of a repo, debiting the bank's balance and burning the cash from the
-    /// contract (ADR-0011).
+    /// A13 under Repo with MintBurn, or A20 for a penalty repo: the bank, or the central
+    /// bank on its behalf, repays `amount` of a repo, debiting the bank's balance and
+    /// burning the cash from the contract (ADR-0011, ADR-0014).
     ///
     /// The actor authorizes it alone (S6). An amount of 0 or less is refused with
     /// `InvalidAmount`. Then, in SC-P-02's order: an id never issued is `UnknownRepo`, an
@@ -1009,10 +1020,10 @@ impl Settlement {
     /// more than the outstanding amount is `RepayExceedsRepo` (so a repaid repo takes
     /// nothing more), and more than the bank's balance is `InsufficientFunds` (A13 with
     /// `lim` = 0). A burn the SAC refuses is `TokenTransferFailed`. The repayment lowers
-    /// the repo's outstanding amount and the bank's `cr`, the repo is `Repaid` once
-    /// nothing is outstanding, and `RepoRepaid` records it. A repayment only lowers a
-    /// balance, so it covers no queue head and makes no offset feasible: no eager closure
-    /// follows.
+    /// the repo's outstanding amount and the bank's `cr`, or its `ovn` for a penalty repo
+    /// (A20); the repo is `Repaid` once nothing is outstanding, and `RepoRepaid` records
+    /// it. A repayment only lowers a balance, so it covers no queue head and makes no
+    /// offset feasible: no eager closure follows.
     pub fn repay(env: Env, actor: Address, repo_id: u64, amount: i128) -> Result<(), Error> {
         actor.require_auth();
         if amount <= 0 {
@@ -1031,14 +1042,14 @@ impl Settlement {
         }
         set_balance(&env, &repo.bank, balance - amount);
         burn(&env, amount)?;
+        let mut credit = Self::credit(env.clone(), repo.bank.clone());
+        *owed(&mut credit, repo.status) -= amount;
+        put(&env, &DataKey::Credit(repo.bank.clone()), &credit);
         repo.outstanding -= amount;
         if repo.outstanding == 0 {
             repo.status = RepoStatus::Repaid;
         }
         put(&env, &DataKey::Repo(repo_id), &repo);
-        let mut credit = Self::credit(env.clone(), repo.bank.clone());
-        credit.cr -= amount;
-        put(&env, &DataKey::Credit(repo.bank), &credit);
         RepoRepaid {
             id: repo_id,
             amount,
@@ -1049,8 +1060,44 @@ impl Settlement {
     }
 
     /// ADR-0014: anyone turns a repo past its term into a penalty repo.
-    pub fn convert_overdue(_env: Env, _repo_id: u64) -> Result<(), Error> {
-        todo!()
+    ///
+    /// It is the system's step, so it needs no authorization and any keeper may trigger it
+    /// (S6). An id never issued is `UnknownRepo`, a repaid repo is `NotOverdue`, a penalty
+    /// repo is `AlreadyPenalty`, and an intraday repo is `NotOverdue` until its term has
+    /// passed: at `opened_at + repo_term_secs` exactly it is not yet overdue, which holds
+    /// when two ledgers share a timestamp (CAP-88). A term that would overflow `u64`
+    /// saturates, so such a repo never becomes overdue. The repo's outstanding amount moves
+    /// from the bank's `cr` to its `ovn`, still counted against its collateral (S21); the
+    /// repo records the configured penalty rate, and `RepoPenalised` records it. No money
+    /// moves, so no eager closure follows.
+    pub fn convert_overdue(env: Env, repo_id: u64) -> Result<(), Error> {
+        let mut repo = Self::repo(env.clone(), repo_id).ok_or(Error::UnknownRepo)?;
+        match repo.status {
+            RepoStatus::Repaid => return Err(Error::NotOverdue),
+            RepoStatus::Penalty => return Err(Error::AlreadyPenalty),
+            RepoStatus::Intraday => {}
+        }
+        let config = Self::config(env.clone());
+        if env.ledger().timestamp() <= repo.opened_at.saturating_add(config.repo_term_secs) {
+            return Err(Error::NotOverdue);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        let mut credit = Self::credit(env.clone(), repo.bank.clone());
+        // `ovn` cannot overflow: by S21, `cr + ovn` is at most the collateral.
+        credit.cr -= repo.outstanding;
+        credit.ovn += repo.outstanding;
+        put(&env, &DataKey::Credit(repo.bank.clone()), &credit);
+        repo.status = RepoStatus::Penalty;
+        repo.rate_bps = config.penalty_rate_bps;
+        put(&env, &DataKey::Repo(repo_id), &repo);
+        RepoPenalised {
+            id: repo_id,
+            rate_bps: repo.rate_bps,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// The bank's settlement balance; 0 for a bank that never deposited.
