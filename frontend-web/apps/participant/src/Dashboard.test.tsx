@@ -103,8 +103,13 @@ describe("Dashboard", () => {
     await waitFor(() => expect(within(urgent).getByText(/#0/)).toBeTruthy());
     expect(within(screen.getByLabelText("Normal queue")).getByText("Empty.")).toBeTruthy();
 
+    const queues = panel(/your queues/i);
+    expect(await within(queues).findByText("#0 is now urgent.")).toBeTruthy();
+
     fireEvent.click(within(urgent).getByRole("button", { name: "Revoke" }));
     await waitFor(() => expect(within(screen.getByLabelText("Urgent queue")).getByText("Empty.")).toBeTruthy());
+    expect(await within(queues).findByText("#0 revoked.")).toBeTruthy();
+    expect(within(panel(/payment orders/i)).queryByText("#0 revoked.")).toBeNull();
     const row = screen.getByTestId("payment-0");
     expect(within(row).getByText("Revoked")).toBeTruthy();
     expect(within(row).queryByRole("button", { name: "Revoke" })).toBeNull();

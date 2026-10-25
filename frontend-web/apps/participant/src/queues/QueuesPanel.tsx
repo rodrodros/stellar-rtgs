@@ -2,17 +2,18 @@
 // what blocks it, and every queued payment order's expiry (ADR-0015).
 import { expiresAt, isExpired, type Config, type Payment, type QueueAnalysis } from "@rtgs/core";
 import { useCapabilities, useLedgerClock, useSession, useSnapshot } from "@rtgs/core/react";
-import { QueuedActions } from "../payments/QueuedActions.tsx";
+import { ActionOutcome, QueuedActions } from "../payments/QueuedActions.tsx";
 import { expiryNote, headNote } from "../payments/describe.ts";
 import { useBankData } from "../session/BankData.tsx";
 import { amountText, countdown, ledgerTime } from "../ui/format.ts";
 
 export function QueuesPanel() {
-  const { view, error } = useBankData();
+  const { view, viewError: error } = useBankData();
   const config = useSnapshot((s) => s.config);
   return (
     <section className="panel wide" aria-labelledby="queues-title">
       <h2 id="queues-title">Your queues</h2>
+      <ActionOutcome origin="queues" />
       {!view ? (
         <p className={error ? "tx tx-error" : "note"}>{error ? `${error.title}: ${error.detail}` : "Loading…"}</p>
       ) : (
@@ -50,7 +51,7 @@ function Queue(props: { title: string; payments: Payment[]; analysis: QueueAnaly
                   Submitted {ledgerTime(p.submittedAt)}
                   {props.config && <Expiry payment={p} config={props.config} />}
                 </div>
-                <QueuedActions payment={p} />
+                <QueuedActions payment={p} origin="queues" />
               </li>
             ))}
           </ol>

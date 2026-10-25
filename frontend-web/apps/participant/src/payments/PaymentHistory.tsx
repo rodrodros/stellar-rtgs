@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useBankData } from "../session/BankData.tsx";
 import { amountText, ledgerTime } from "../ui/format.ts";
 import { PriorityBadge, StatusBadge } from "../ui/StatusBadge.tsx";
-import { QueuedActions } from "./QueuedActions.tsx";
+import { ActionOutcome, QueuedActions } from "./QueuedActions.tsx";
 import { settledVia } from "./describe.ts";
 
 type Direction = "all" | "outgoing" | "incoming";
@@ -102,6 +102,7 @@ export function PaymentHistory() {
   return (
     <section className="panel wide" aria-labelledby="history-title">
       <h2 id="history-title">Payment orders</h2>
+      <ActionOutcome origin="history" />
       <div className="row filters">
         <label>
           Direction
@@ -159,7 +160,7 @@ export function PaymentHistory() {
                     {via && <span className="meta"> {via}</span>}
                   </td>
                   <td className="meta">{ledgerTime(p.settledAt ?? p.submittedAt)}</td>
-                  <td>{out && <QueuedActions payment={p} />}</td>
+                  <td>{out && <QueuedActions payment={p} origin="history" />}</td>
                 </tr>
               );
             })}
