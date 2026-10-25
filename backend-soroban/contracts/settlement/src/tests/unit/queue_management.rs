@@ -222,6 +222,7 @@ fn promoting_a_blocked_covered_payment_settles_it() {
         ]
     );
     assert_eq!(setup.queue(0, NORMAL), std::vec![head]);
+    assert_eq!(client.queued_count(), 1);
     assert_eq!(setup.balances(), std::vec![40, 10]);
 }
 
@@ -240,11 +241,13 @@ fn demoting_an_uncovered_urgent_payment_releases_older_normal_ones() {
 
     assert_eq!(client.payment(&normal).unwrap().status, Status::Settled);
     assert_eq!(setup.queue(0, NORMAL), std::vec![urgent]);
+    assert_eq!(client.queued_count(), 1);
     assert_eq!(setup.balances(), std::vec![0, 10]);
 }
 
 /// SC-A08-05. Moving a payment to the priority it already has is refused with
-/// `SamePriority`, and nothing changes.
+/// `SamePriority`, and nothing changes. This refines A8, whose guard allows π' = π as a
+/// no-op; the Quint spec refuses it too.
 #[test]
 fn reprioritising_to_the_same_priority_is_refused() {
     let setup = Setup::new(2, 0);
@@ -279,6 +282,84 @@ fn reprioritising_an_unknown_payment_is_refused() {
         setup.client().try_reprioritise(&7, &URGENT),
         Err(Ok(Error::UnknownPayment))
     );
+}
+
+/// SC-A08-09. S3, S5: a revoked payment gives `NotQueued` too, whichever priority it is
+/// moved to, keeps its priority and stays out of every queue. Added in Flow 10, since
+/// SC-A08-06's payment is settled; it fails if the guard refuses only a settled payment
+/// and lets a revoked one back into a queue, or if `SamePriority` is checked before
+/// `NotQueued`, against the Quint spec's order.
+#[test]
+fn a_revoked_payment_cannot_be_reprioritised() {
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL);
+    client.revoke(&id);
+
+    assert_eq!(
+        client.try_reprioritise(&id, &URGENT),
+        Err(Ok(Error::NotQueued))
+    );
+    assert_eq!(
+        client.try_reprioritise(&id, &NORMAL),
+        Err(Ok(Error::NotQueued))
+    );
+
+    let payment = client.payment(&id).unwrap();
+    assert_eq!(
+        (payment.priority, payment.status),
+        (NORMAL, Status::Revoked)
+    );
+    assert!(setup.queue(0, URGENT).is_empty());
+    assert!(setup.queue(0, NORMAL).is_empty());
+    assert_eq!(client.queued_count(), 0);
+}
+
+/// SC-A08-10. A8, S7: a promoted covered payment goes behind the bank's older urgent
+/// payment, so it waits while that one is uncovered (ADR-0008, ADR-0009). The A8
+/// counterpart of SC-A01-17, added in Flow 10; it fails if the moved payment settles
+/// because it is covered, past an older uncovered urgent head (S7).
+#[test]
+fn a_promoted_payment_waits_behind_an_older_uncovered_urgent_one() {
+    let setup = Setup::funded(&[50, 0]);
+    let client = setup.client();
+    let urgent = client.submit(setup.bank(0), setup.bank(1), &60, &URGENT);
+    let normal = client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL);
+
+    client.reprioritise(&normal, &URGENT);
+
+    assert_eq!(
+        setup.our_events(),
+        std::vec![setup.ev(Reprioritised {
+            id: normal,
+            priority: URGENT,
+        })]
+    );
+    assert_eq!(setup.queue(0, URGENT), std::vec![urgent, normal]);
+    assert_eq!(client.payment(&normal).unwrap().status, Status::Queued);
+    assert_eq!(client.queued_count(), 2);
+    assert_eq!(setup.balances(), std::vec![50, 0]);
+}
+
+/// SC-A08-11. A8 has no cut-off: a payment queued long past its expiry time, but not yet
+/// expired by anyone, can still be moved, keeping its place by age. As in the model, A8
+/// has no time guard: a payment past its expiry stays queued until `expire` (A5) runs
+/// (ADR-0015, as in `quint/settlement.qnt`), and the model's A18 close, which would have
+/// rejected it, is gone under ADR-0013. Added in Flow 10; it fails if `reprioritise`
+/// refuses a payment past its expiry.
+#[test]
+fn a_payment_past_its_expiry_can_still_be_reprioritised() {
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    setup.at(1_000);
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    setup.at(1_000 + 10 * default_config().expiry_secs);
+
+    client.reprioritise(&id, &URGENT);
+
+    let payment = client.payment(&id).unwrap();
+    assert_eq!((payment.priority, payment.status), (URGENT, Status::Queued));
+    assert_eq!(setup.queue(0, URGENT), std::vec![id]);
 }
 
 // ---------------------------------------------------------------------------------------

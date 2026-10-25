@@ -3,10 +3,11 @@
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other up to the queue cap), `revoke`, the eager closure after every balance increase or
-//! revocation, and the `balance`, `payment`, `queue`, `queued_count`, `config` and
-//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
-//! are written and red; they are implemented test first (TESTING.md).
+//! other up to the queue cap), `revoke`, `reprioritise`, the eager closure after every
+//! balance increase, revocation or reprioritisation, and the `balance`, `payment`,
+//! `queue`, `queued_count`, `config` and `central_bank` views. The other entry points are
+//! stubs whose unit tests (`src/tests/`) are written and red; they are implemented test
+//! first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -160,8 +161,8 @@ enum DataKey {
     /// How many payments are queued, across all banks.
     QueuedCount,
     Payment(u64),
-    /// The ids `bank` has queued at a priority, head first (ADR-0008, ADR-0009); no entry
-    /// while the queue is empty.
+    /// The ids `bank` has queued at a priority, head first and so in id order (ADR-0008,
+    /// ADR-0009); no entry while the queue is empty.
     Queue(Address, Priority),
 }
 
@@ -328,15 +329,31 @@ fn enqueue(env: &Env, payment: &Payment) {
     put(env, &DataKey::QueuedCount, &count);
 }
 
+/// `remove_from_queue`, and one fewer in `QueuedCount`.
+fn dequeue(env: &Env, payment: &Payment) {
+    remove_from_queue(env, payment);
+    let count = Settlement::queued_count(env.clone()) - 1;
+    put(env, &DataKey::QueuedCount, &count);
+}
+
 /// Takes the queued payment out of its sender's queue for its priority, wherever it
 /// stands, keeping the others in order. A queued payment is always in that queue.
-fn dequeue(env: &Env, payment: &Payment) {
+fn remove_from_queue(env: &Env, payment: &Payment) {
     let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
     let i = queue.first_index_of(payment.id).unwrap();
     queue.remove(i);
     put_queue(env, &payment.from, payment.priority, &queue);
-    let count = Settlement::queued_count(env.clone()) - 1;
-    put(env, &DataKey::QueuedCount, &count);
+}
+
+/// Puts the queued payment into its sender's queue for its priority at its place by age.
+/// Ids are sequence numbers (S11) and every queue is kept in id order, so its place is
+/// where its id sorts (A8 with `toEnd = false`, decided with the user on 2026-10-24). The
+/// payment is in no queue of its sender's yet.
+fn insert_by_age(env: &Env, payment: &Payment) {
+    let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
+    let i = queue.binary_search(payment.id).unwrap_err();
+    queue.insert(i, payment.id);
+    put_queue(env, &payment.from, payment.priority, &queue);
 }
 
 /// The eager closure (§4.6, S9; ADR-0010): settles every covered head of `banks`, urgent
@@ -557,9 +574,34 @@ impl Settlement {
         Ok(())
     }
 
-    /// A8: the sender moves a queued payment to the other priority, keeping its place.
-    pub fn reprioritise(_env: Env, _id: u64, _priority: Priority) -> Result<(), Error> {
-        todo!()
+    /// A8 with `toEnd = false`: the sender moves a queued payment to the other priority
+    /// (ADR-0009), keeping its place by age (decided with the user on 2026-10-24), then
+    /// settles eagerly.
+    ///
+    /// An id never issued is refused with `UnknownPayment`. The sender authorizes it alone
+    /// (S6). A payment no longer queued is refused with `NotQueued` (S3, S5), and a move to
+    /// the priority it already has with `SamePriority`. The payment keeps its id, so it
+    /// goes into the other queue where its id sorts, not at the end. Both of its sender's
+    /// queue heads may change, so the eager closure follows (S7, S9, ADR-0010).
+    pub fn reprioritise(env: Env, id: u64, priority: Priority) -> Result<(), Error> {
+        let mut payment = Self::payment(env.clone(), id).ok_or(Error::UnknownPayment)?;
+        payment.from.require_auth();
+        if payment.status != Status::Queued {
+            return Err(Error::NotQueued);
+        }
+        if payment.priority == priority {
+            return Err(Error::SamePriority);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        remove_from_queue(&env, &payment);
+        payment.priority = priority;
+        insert_by_age(&env, &payment);
+        put(&env, &DataKey::Payment(id), &payment);
+        Reprioritised { id, priority }.publish(&env);
+        eager_closure(&env, Vec::from_array(&env, [payment.from]));
+        Ok(())
     }
 
     /// A5: anyone rejects a queued payment whose expiry has passed (ADR-0015).

@@ -272,16 +272,17 @@ fn revocation_op() -> impl Strategy<Value = RevocationOp> {
     ]
 }
 
-/// A6, S3: a call changes a payment queued before it only by settling it, apart from the
-/// one it revokes. A settled payment keeps every other field.
+/// A6, A8, S3: a call changes a payment queued before it only by settling it, apart from
+/// the one it revokes or reprioritises, `acted_on`. A settled payment keeps every other
+/// field.
 fn queued_kept_or_settled(
     before: &BTreeMap<u64, Payment>,
     after: &BTreeMap<u64, Payment>,
-    revoked: Option<u64>,
+    acted_on: Option<u64>,
 ) -> Result<(), TestCaseError> {
     let untouched = before
         .values()
-        .filter(|payment| payment.status == Status::Queued && Some(payment.id) != revoked);
+        .filter(|payment| payment.status == Status::Queued && Some(payment.id) != acted_on);
     for payment in untouched {
         let now = &after[&payment.id];
         let settled = Payment {
@@ -291,12 +292,153 @@ fn queued_kept_or_settled(
         };
         prop_assert!(
             now == payment || (now == &settled && now.settled_at.is_some()),
-            "A6: queued payment {} changed to {:?}",
+            "A6, A8: queued payment {} changed to {:?}",
             payment.id,
             now
         );
     }
     Ok(())
+}
+
+/// A6, A8: a call that moves no money of its own changes each balance from `balances`
+/// only by the payments that settle in it, between `before` and `after`.
+fn booked_only_settlements(
+    setup: &Setup,
+    balances: &[i128],
+    before: &BTreeMap<u64, Payment>,
+    after: &BTreeMap<u64, Payment>,
+) -> Result<(), TestCaseError> {
+    let index = |address: &Address| setup.banks.iter().position(|bank| bank == address).unwrap();
+    let mut expected = balances.to_vec();
+    let newly = after.values().filter(|payment| {
+        payment.status == Status::Settled && before[&payment.id].status == Status::Queued
+    });
+    for payment in newly {
+        expected[index(&payment.from)] -= payment.amount;
+        expected[index(&payment.to)] += payment.amount;
+    }
+    prop_assert_eq!(setup.balances(), expected, "moved money of its own");
+    Ok(())
+}
+
+/// The checks every call of SC-P-13 and SC-P-14 must pass, `acted_on` being the payment it
+/// revoked or reprioritised: final payments unchanged (S3, S5); every other queued payment
+/// unchanged or settled; S7's order of what settled; `queued_count` from the records; the
+/// queue views in `≺` order, so ids within each priority ascend (S7, ADR-0009); and no
+/// bank's head in `≺` covered (S9, gross).
+fn queues_at_rest_in_order(
+    setup: &Setup,
+    before: &BTreeMap<u64, Payment>,
+    after: &BTreeMap<u64, Payment>,
+    acted_on: Option<u64>,
+) -> Result<(), TestCaseError> {
+    let client = setup.client();
+    for (id, payment) in before {
+        if is_final(payment.status) {
+            prop_assert_eq!(
+                Some(payment),
+                after.get(id),
+                "S3: final payment {} changed",
+                id
+            );
+        }
+    }
+    queued_kept_or_settled(before, after, acted_on)?;
+    settled_in_order(before, after)?;
+    let queued = after
+        .values()
+        .filter(|payment| payment.status == Status::Queued)
+        .count();
+    prop_assert_eq!(client.queued_count() as usize, queued, "queued_count");
+    for bank in 0..BANKS {
+        let in_order = queued_in_order(setup, after, bank);
+        let mut views = setup.queue(bank, Priority::Urgent);
+        views.extend(setup.queue(bank, Priority::Normal));
+        prop_assert_eq!(&views, &in_order, "queue of bank {}", bank);
+        if let Some(head) = in_order.first() {
+            let (amount, balance) = (after[head].amount, client.balance(setup.bank(bank)));
+            prop_assert!(
+                amount > balance,
+                "S9: bank {}'s head {} ({}) is covered by {}",
+                bank,
+                head,
+                amount,
+                balance
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A call of the reprioritisation property: a deposit, withdrawal, submission, time step,
+/// revocation or reprioritisation by id, or one resolved against the state when it runs:
+/// - `Block` as in `RevocationOp`: a covered payment queued behind an uncovered one;
+/// - `MoveAimed` moves to the other priority a payment whose move can release a queue,
+///   picked by `Index`: a covered normal payment behind its bank's head, which a
+///   promotion may settle, or an uncovered urgent payment ahead of its bank's normal
+///   ones, which a demotion may release. With none, any queued payment;
+/// - `MoveQueued` moves any queued payment, picked by `Index`, to `Priority`: half the
+///   time its own, which is `SamePriority`;
+/// - `RevokeQueued` revokes any queued payment, picked by `Index`;
+/// - `MoveFinal` moves a settled or revoked payment, picked by `Index`, to `Priority`:
+///   `NotQueued` whichever it is. A blind id seldom lands on a revoked payment.
+#[derive(Clone, Debug)]
+enum ReprioritisationOp {
+    Call(Op),
+    Block(usize, usize, i128, i128, Priority),
+    MoveAimed(prop::sample::Index),
+    MoveQueued(prop::sample::Index, Priority),
+    RevokeQueued(prop::sample::Index),
+    MoveFinal(prop::sample::Index, Priority),
+}
+
+/// The queued payments whose move to the other priority can release a queue: a covered
+/// normal payment behind its bank's head, which a promotion may settle, or an uncovered
+/// urgent payment ahead of its bank's normal ones, which a demotion may release. `queues`
+/// holds each bank's queued ids in `≺` order, read from `known`.
+fn releasing_moves(setup: &Setup, known: &BTreeMap<u64, Payment>, queues: &[Vec<u64>]) -> Vec<u64> {
+    let client = setup.client();
+    let mut moves = Vec::new();
+    for (bank, queue) in queues.iter().enumerate() {
+        let balance = client.balance(setup.bank(bank));
+        let has_normal = queue
+            .iter()
+            .any(|id| known[id].priority == Priority::Normal);
+        for (place, id) in queue.iter().enumerate() {
+            let payment = &known[id];
+            let promotes =
+                payment.priority == Priority::Normal && place > 0 && payment.amount <= balance;
+            let demotes =
+                payment.priority == Priority::Urgent && has_normal && payment.amount > balance;
+            if promotes || demotes {
+                moves.push(*id);
+            }
+        }
+    }
+    moves
+}
+
+/// Calls aimed at the queues, for the same reason as `revocation_op`: a blind id rarely
+/// hits a payment whose move releases anything. Blind ids still reach `UnknownPayment`,
+/// `NotQueued` and `SamePriority`. Time steps reach past the default expiry, so that a
+/// payment is moved after it: A8 has no cut-off.
+fn reprioritisation_op() -> impl Strategy<Value = ReprioritisationOp> {
+    use ReprioritisationOp::*;
+    let expiry = default_config().expiry_secs;
+    prop_oneof![
+        2 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Deposit(bank, amount))),
+        1 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Withdraw(bank, amount))),
+        3 => (0..BANKS, 0..BANKS, amount(), priority())
+            .prop_map(|(from, to, amount, priority)| Call(Op::Submit(from, to, amount, priority))),
+        2 => (0..BANKS, 0..BANKS, 1i128..=100, 0i128..=100, priority())
+            .prop_map(|(from, to, over, under, priority)| Block(from, to, over, under, priority)),
+        1 => prop_oneof![Just(1u64), Just(expiry + 1), 0u64..=2 * expiry].prop_map(|step| Call(Op::Tick(step))),
+        2 => (id(), priority()).prop_map(|(id, priority)| Call(Op::Reprioritise(id, priority))),
+        3 => any::<prop::sample::Index>().prop_map(MoveAimed),
+        1 => (any::<prop::sample::Index>(), priority()).prop_map(|(pick, priority)| MoveQueued(pick, priority)),
+        1 => any::<prop::sample::Index>().prop_map(RevokeQueued),
+        1 => (any::<prop::sample::Index>(), priority()).prop_map(|(pick, priority)| MoveFinal(pick, priority)),
+    ]
 }
 
 proptest! {
@@ -729,7 +871,6 @@ proptest! {
         for bank in 0..BANKS {
             client.deposit(setup.bank(bank), &(FUNDING / 2));
         }
-        let index = |address: &Address| setup.banks.iter().position(|bank| bank == address).unwrap();
         let mut before = payments(&setup);
         let mut now = 0u64;
 
@@ -798,43 +939,163 @@ proptest! {
                             prop_assert_eq!(&after, &before, "a refusal records nothing");
                         }
                         prop_assert_eq!(after.len(), before.len(), "A6 records no payment");
-                        let mut expected = balances.clone();
-                        let newly = after.values().filter(|payment| {
-                            payment.status == Status::Settled && before[&payment.id].status == Status::Queued
-                        });
-                        for payment in newly {
-                            expected[index(&payment.from)] -= payment.amount;
-                            expected[index(&payment.to)] += payment.amount;
-                        }
-                        prop_assert_eq!(setup.balances(), expected, "A6 moved money of its own");
+                        booked_only_settlements(&setup, &balances, &before, &after)?;
                     }
                     _ => unreachable!(),
                 }
 
                 setup.assert_conserved();
                 let after = payments(&setup);
-                for (id, payment) in &before {
-                    if is_final(payment.status) {
-                        prop_assert_eq!(Some(payment), after.get(id), "S3: final payment {} changed", id);
-                    }
+                queues_at_rest_in_order(&setup, &before, &after, revoked)?;
+                before = after;
+            }
+        }
+    }
+
+    /// Reprioritisation changes the moved payment's priority alone, keeps its place by
+    /// age, then lets the closure settle what that releases, over any sequence of
+    /// deposits, withdrawals, submissions, time steps, revocations and reprioritisations,
+    /// valid or not (A8 with `toEnd = false`; ADR-0009):
+    /// - A8: an id never issued is refused with `UnknownPayment`, a payment already final,
+    ///   settled or revoked, with `NotQueued` whatever the priority asked (S3, S5), and a
+    ///   queued payment moved to its own priority with `SamePriority`, in the Quint spec's
+    ///   order. A refusal moves and records nothing;
+    /// - A8, A19: any other queued payment is moved, even past its expiry: as in the model,
+    ///   A8 has no time guard, and a payment past its expiry stays queued until `expire`
+    ///   (A5) runs (ADR-0015, as in `quint/settlement.qnt`); the model's A18 close, which
+    ///   would have rejected it, is gone under ADR-0013. Only its priority changes, so it
+    ///   keeps its id; it stays queued, or settles in the same call with every other field
+    ///   kept;
+    /// - A8: a reprioritisation moves no money of its own: each balance changes only by
+    ///   the payments that settle in the call, and no payment is recorded;
+    /// - A8, S3: every other payment queued before a call is unchanged, or settled with
+    ///   every other field kept;
+    /// - S7 under F2: the queue views list each bank's queued payments in `≺` order, so a
+    ///   moved payment sits where its id sorts in its new priority, not at the end, and
+    ///   what settles in a call is, per bank, a `≺`-prefix of its queue (ADR-0008,
+    ///   ADR-0009);
+    /// - A2, S9, gross: between calls no bank's head in `≺` is covered, so the closure
+    ///   settles whatever a move releases in the same call (ADR-0010);
+    /// - S3, S5: a final payment never changes, and `queued_count` counts the payments
+    ///   queued, from their records;
+    /// - A11, S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    ///
+    /// Each bank starts with half its holding deposited, and `reprioritisation_op` aims
+    /// the moves at payments whose move releases a queue. A refused deposit, withdrawal,
+    /// submission or revocation is skipped. The calls need no later entry point, so this
+    /// checks reprioritisation before SC-P-01 and SC-P-02 can. Nothing is expired here, so
+    /// `NotQueued` for an expired payment is left to Flow 11.
+    #[test]
+    fn reprioritisation_moves_only_the_priority(ops in prop::collection::vec(reprioritisation_op(), 1..30)) {
+        let setup = Setup::new(BANKS, FUNDING);
+        let client = setup.client();
+        // Half of each holding, so that `Block` has a balance to queue a covered payment under.
+        for bank in 0..BANKS {
+            client.deposit(setup.bank(bank), &(FUNDING / 2));
+        }
+        let mut before = payments(&setup);
+        let mut now = 0u64;
+
+        for op in ops {
+            let queues: Vec<Vec<u64>> = (0..BANKS).map(|bank| queued_in_order(&setup, &before, bank)).collect();
+            let queued: Vec<u64> = queues.concat();
+            let other = |priority: Priority| match priority {
+                Priority::Urgent => Priority::Normal,
+                Priority::Normal => Priority::Urgent,
+            };
+            let unknown = before.len() as u64;
+            let calls = match op {
+                ReprioritisationOp::Call(op) => vec![op],
+                ReprioritisationOp::Block(from, to, over, under, priority) => {
+                    let balance = client.balance(setup.bank(from));
+                    vec![
+                        Op::Submit(from, to, balance + over, priority),
+                        Op::Submit(from, to, balance - under, priority),
+                    ]
                 }
-                queued_kept_or_settled(&before, &after, revoked)?;
-                settled_in_order(&before, &after)?;
-                let queued = after.values().filter(|payment| payment.status == Status::Queued).count();
-                prop_assert_eq!(client.queued_count() as usize, queued, "queued_count");
-                for bank in 0..BANKS {
-                    let in_order = queued_in_order(&setup, &after, bank);
-                    let mut views = setup.queue(bank, Priority::Urgent);
-                    views.extend(setup.queue(bank, Priority::Normal));
-                    prop_assert_eq!(&views, &in_order, "queue of bank {}", bank);
-                    if let Some(head) = in_order.first() {
-                        let (amount, balance) = (after[head].amount, client.balance(setup.bank(bank)));
-                        prop_assert!(
-                            amount > balance,
-                            "S9: bank {}'s head {} ({}) is covered by {}", bank, head, amount, balance
-                        );
-                    }
+                ReprioritisationOp::MoveAimed(pick) if !queued.is_empty() => {
+                    let aimed = releasing_moves(&setup, &before, &queues);
+                    let pool = if aimed.is_empty() { &queued } else { &aimed };
+                    let id = *pick.get(pool);
+                    vec![Op::Reprioritise(id, other(before[&id].priority))]
                 }
+                ReprioritisationOp::MoveQueued(pick, priority) if !queued.is_empty() => {
+                    vec![Op::Reprioritise(*pick.get(&queued), priority)]
+                }
+                ReprioritisationOp::RevokeQueued(pick) if !queued.is_empty() => vec![Op::Revoke(*pick.get(&queued))],
+                ReprioritisationOp::MoveFinal(pick, priority) => {
+                    let finals: Vec<u64> = before
+                        .values()
+                        .filter(|payment| is_final(payment.status))
+                        .map(|payment| payment.id)
+                        .collect();
+                    let id = if finals.is_empty() { unknown } else { *pick.get(&finals) };
+                    vec![Op::Reprioritise(id, priority)]
+                }
+                // Nothing is queued: an id one past the last is unknown.
+                _ => vec![Op::Reprioritise(unknown, Priority::Urgent)],
+            };
+            for op in calls {
+                let balances = setup.balances();
+                let mut acted_on = None;
+                match op {
+                    Op::Deposit(bank, amount) => {
+                        let _ = typed(client.try_deposit(setup.bank(bank), &amount));
+                    }
+                    Op::Withdraw(bank, amount) => {
+                        let _ = typed(client.try_withdraw(setup.bank(bank), &amount));
+                    }
+                    Op::Submit(from, to, amount, priority) => {
+                        let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
+                    }
+                    Op::Tick(step) => {
+                        now += step;
+                        setup.at(now);
+                    }
+                    Op::Revoke(id) => {
+                        if typed(client.try_revoke(&id)).is_ok() {
+                            acted_on = Some(id);
+                        }
+                    }
+                    Op::Reprioritise(id, priority) => {
+                        let result = typed(client.try_reprioritise(&id, &priority));
+                        let after = payments(&setup);
+                        match before.get(&id) {
+                            None => prop_assert_eq!(result, Err(Error::UnknownPayment), "A8: unknown {}", id),
+                            Some(payment) if is_final(payment.status) => {
+                                prop_assert_eq!(result, Err(Error::NotQueued), "A8: final {}", id);
+                            }
+                            Some(payment) if payment.priority == priority => {
+                                prop_assert_eq!(result, Err(Error::SamePriority), "A8: {} to its own priority", id);
+                            }
+                            Some(payment) => {
+                                prop_assert_eq!(result, Ok(()), "A8: queued {} refused", id);
+                                let moved = Payment { priority, ..payment.clone() };
+                                let now = &after[&id];
+                                let settled = Payment {
+                                    status: Status::Settled,
+                                    settled_at: now.settled_at,
+                                    ..moved.clone()
+                                };
+                                prop_assert!(
+                                    now == &moved || (now == &settled && now.settled_at.is_some()),
+                                    "A8: {} moved to {:?}", id, now
+                                );
+                                acted_on = Some(id);
+                            }
+                        }
+                        if result.is_err() {
+                            prop_assert_eq!(&after, &before, "a refusal records nothing");
+                        }
+                        prop_assert_eq!(after.len(), before.len(), "A8 records no payment");
+                        booked_only_settlements(&setup, &balances, &before, &after)?;
+                    }
+                    _ => unreachable!(),
+                }
+
+                setup.assert_conserved();
+                let after = payments(&setup);
+                queues_at_rest_in_order(&setup, &before, &after, acted_on)?;
                 before = after;
             }
         }

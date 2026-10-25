@@ -169,7 +169,7 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 - [x] `auth::only_the_sender_can_revoke` (SC-A06-10)
 - [x] `props::revocation_takes_out_only_the_revoked_payment` (SC-P-13). Added in Flow 9: SC-P-01 and SC-P-02 check revocation too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals, submissions, time steps and revocations alone. Each bank starts with half its holding deposited. Left to random amounts and ids, a bank rarely has a covered payment queued behind an uncovered head, and a revocation rarely hits that head, so a revocation that skips the closure goes unseen. So some calls are resolved against the state when they run: a pair of submissions from one bank, one over its balance and one at most its balance, which S7 queues behind the first; the revocation of a head, preferring one with a covered payment behind it; and the revocation of any queued payment. Blind ids still reach `UnknownPayment` and `NotQueued`, and time steps reach past the default expiry. The no-closure mutant below fails under each of seeds 1 to 20. It fails against each of these revocations, and each shrunk case is one a unit test already pins: with no closure, a revoked head whose covered successor stays queued (SC-A06-07); with no removal from the queue, or with `queued_count` left as it was, a revoked payment still counted (SC-A06-01); with no `NotQueued` check, a settled payment revoked, which traps in the host (SC-A06-03); removing the head instead of the revoked payment, so that the payment behind the head settles rather than being revoked (SC-A06-09); with a cut-off at the expiry, a payment refused once its expiry has passed (SC-A06-02); and revoking the last payment of the queue as well, a covered successor revoked instead of settled (SC-A06-07).
 
-## Flow 10: reprioritise, A8 (9)
+## Flow 10: reprioritise, A8 (13)
 
 The payment keeps its place by id. `reprioritise` needs:
 - the sender's authorization;
@@ -177,15 +177,19 @@ The payment keeps its place by id. `reprioritise` needs:
 - the `Reprioritised` event;
 - then the closure.
 
-- [ ] `unit::queue_management::a_promoted_payment_keeps_its_place_by_age` (SC-A08-01)
-- [ ] `unit::queue_management::a_demoted_payment_keeps_its_place_by_age` (SC-A08-02)
-- [ ] `unit::queue_management::promoting_a_blocked_covered_payment_settles_it` (SC-A08-03)
-- [ ] `unit::queue_management::demoting_an_uncovered_urgent_payment_releases_older_normal_ones` (SC-A08-04)
-- [ ] `unit::queue_management::reprioritising_to_the_same_priority_is_refused` (SC-A08-05)
-- [ ] `unit::queue_management::a_settled_payment_cannot_be_reprioritised` (SC-A08-06)
-- [ ] `unit::queue_management::reprioritising_an_unknown_payment_is_refused` (SC-A08-07)
-- [ ] `auth::reprioritise_is_authorized_by_the_sender` (SC-A08-08)
-- [ ] `auth::only_the_sender_can_reprioritise` (SC-A08-08)
+- [x] `unit::queue_management::a_promoted_payment_keeps_its_place_by_age` (SC-A08-01)
+- [x] `unit::queue_management::a_demoted_payment_keeps_its_place_by_age` (SC-A08-02)
+- [x] `unit::queue_management::promoting_a_blocked_covered_payment_settles_it` (SC-A08-03)
+- [x] `unit::queue_management::demoting_an_uncovered_urgent_payment_releases_older_normal_ones` (SC-A08-04)
+- [x] `unit::queue_management::reprioritising_to_the_same_priority_is_refused` (SC-A08-05)
+- [x] `unit::queue_management::a_settled_payment_cannot_be_reprioritised` (SC-A08-06)
+- [x] `unit::queue_management::reprioritising_an_unknown_payment_is_refused` (SC-A08-07)
+- [x] `auth::reprioritise_is_authorized_by_the_sender` (SC-A08-08)
+- [x] `auth::only_the_sender_can_reprioritise` (SC-A08-08)
+- [x] `unit::queue_management::a_revoked_payment_cannot_be_reprioritised` (SC-A08-09). Added in Flow 10, since SC-A08-06's payment is settled; it fails if the guard refuses only a settled payment, or checks `SamePriority` before `NotQueued`.
+- [x] `unit::queue_management::a_promoted_payment_waits_behind_an_older_uncovered_urgent_one` (SC-A08-10). Added in Flow 10, as the A8 counterpart of SC-A01-17; it fails if the moved payment settles because it is covered, past an older uncovered urgent head (S7).
+- [x] `unit::queue_management::a_payment_past_its_expiry_can_still_be_reprioritised` (SC-A08-11). Added in Flow 10, as the A8 counterpart of SC-A06-02; it fails if `reprioritise` refuses a payment past its expiry that nobody has expired.
+- [x] `props::reprioritisation_moves_only_the_priority` (SC-P-14). Added in Flow 10: SC-P-01 and SC-P-02 check reprioritisation too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals, submissions, time steps, revocations and reprioritisations alone. Time steps reach past the default expiry, so that a payment is moved after it. Each bank starts with half its holding deposited. As in SC-P-13, some calls are resolved against the state when they run: a pair of submissions from one bank that queues a covered payment behind an uncovered one; a move to the other priority aimed at a covered normal payment behind its bank's head, which a promotion may settle, or at an uncovered urgent payment ahead of normal ones, which a demotion may release; a move of any queued payment to a random priority, half the time its own; a revocation of any queued payment; and a move of a settled or revoked payment, which a blind id seldom reaches. `make mutate` kills each of these mutants under the pinned seed and seeds 1 to 4 (TESTING.md, "Hand mutants"), and each case is one a unit test already pins: with no closure, a promoted covered payment left queued (SC-A08-03); with no `NotQueued` check, a settled payment moved, which traps in the host (SC-A08-06); with `SamePriority` checked before `NotQueued`, a final payment moved to its own priority (SC-A08-09); with no `SamePriority` check, a move to its own priority accepted (SC-A08-05); with the payment's record not rewritten, its queue and its priority disagree (SC-A08-01); with the moved payment put at the end of its new queue, the queue out of id order (SC-A08-01); with a cut-off at the expiry, a payment refused once its expiry has passed (SC-A08-11); and with a guard that refuses only a settled payment, a revoked payment moved, which traps in the host (SC-A08-09).
 
 ## Flow 11: expire, A5 under ADR-0015 (10)
 
@@ -356,8 +360,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 9) | 74 |
-| Still to fix (Flows 10 to 21) | 87 |
-| All | 161 |
+| Already green (Flows 0 to 10) | 87 |
+| Still to fix (Flows 11 to 21) | 78 |
+| All | 165 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, and Flow 9 added SC-P-13.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, and Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14.
