@@ -14,7 +14,7 @@ The central bank's app: the RTGS's **operator** and **settlement agent**. A stat
 
 ```sh
 pnpm install
-make -C ../../../stellar-implementation devnet-up    # http://localhost:8300/rpc
+make -C ../../../backend-soroban devnet-up    # http://localhost:8300/rpc
 pnpm --filter @rtgs/central-bank dev                 # http://localhost:5174, then Setup → Bootstrap
 ```
 
@@ -39,7 +39,7 @@ Switching network drops the signer. A signer that isn't the contract's `central_
 
 ```sh
 pnpm --filter @rtgs/central-bank test         # unit and component tests (jsdom, fake core session)
-make -C ../../../stellar-implementation devnet-up     # or IMPL_NAME=… IMPL_PORT=… for a devnet of your own
+make -C ../../../backend-soroban devnet-up     # or IMPL_NAME=… IMPL_PORT=… for a devnet of your own
 pnpm --filter @rtgs/central-bank test:e2e            # RTGS_DEVNET_RPC=http://localhost:<port>/rpc for another port
 ```
 

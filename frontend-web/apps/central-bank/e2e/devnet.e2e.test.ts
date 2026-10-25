@@ -1,6 +1,6 @@
-// The central bank's work end to end against a running devnet (stellar-implementation's
+// The central bank's work end to end against a running devnet (backend-soroban's
 // `make devnet-up`), through the same core calls and app logic the UI uses:
-//   make -C ../stellar-implementation devnet-up        # http://localhost:8300/rpc
+//   make -C ../backend-soroban devnet-up        # http://localhost:8300/rpc
 //   pnpm --filter @rtgs/central-bank test:e2e
 // For a devnet of your own, pass IMPL_NAME and IMPL_PORT to make, and RTGS_DEVNET_RPC here.
 // Each run uses a fresh seed, so it bootstraps its own central bank, banks and contract.

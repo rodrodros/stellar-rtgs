@@ -1,7 +1,7 @@
 // The observer's pipeline end to end against a running devnet: core's session, store and event
 // feed, then the observer's own models (timeline causes, flows). Writes happen in this test
 // only, through core's devnet identities; the app itself never signs.
-//   IMPL_NAME=impl-fe-observer IMPL_PORT=8380 make -C ../stellar-implementation devnet-up
+//   IMPL_NAME=impl-fe-observer IMPL_PORT=8380 make -C ../backend-soroban devnet-up
 //   RTGS_DEVNET_RPC=http://localhost:8380/rpc pnpm --filter @rtgs/observer test:e2e
 import {
   bootstrapDevnet,

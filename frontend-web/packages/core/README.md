@@ -94,7 +94,7 @@ Names come from the ledger registry first, then config, then the devnet label. E
 ## Bindings
 
 ```sh
-pnpm bindings            # regenerate src/generated/settlement.ts and wasm/ from ../stellar-implementation
+pnpm bindings            # regenerate src/generated/settlement.ts and wasm/ from ../backend-soroban
 pnpm bindings --build    # run make build there first
 pnpm bindings:check      # fails if wasm/ doesn't match meta.json, or is older than the implementation's Wasm
 ```
@@ -105,7 +105,7 @@ The script runs `stellar contract bindings typescript`, which stellar-cli 28.1.0
 
 ```sh
 pnpm test                # unit tests, including Wasm drift guards, recorded devnet events and a Vite browser build
-IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../stellar-implementation devnet-up
+IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../backend-soroban devnet-up
 RTGS_DEVNET_RPC=http://localhost:8350/rpc pnpm test:e2e   # bootstraps a fresh deployment each run
 docker rm -f impl-fe-core
 ```

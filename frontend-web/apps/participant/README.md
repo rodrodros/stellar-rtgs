@@ -15,7 +15,7 @@ All chain access goes through `@rtgs/core`; the app holds UI and UI state only.
 
 ```sh
 pnpm install
-IMPL_NAME=impl-fe-bank IMPL_PORT=8360 make -C ../../../stellar-implementation devnet-up
+IMPL_NAME=impl-fe-bank IMPL_PORT=8360 make -C ../../../backend-soroban devnet-up
 RTGS_DEVNET_RPC_URL=http://localhost:8360/rpc pnpm devnet:bootstrap   # from the workspace root
 VITE_RTGS_DEVNET_RPC_URL=http://localhost:8360/rpc pnpm -F @rtgs/participant dev
 ```

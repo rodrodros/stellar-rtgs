@@ -1,5 +1,5 @@
-// End to end against a running devnet (stellar-implementation's `make devnet-up`):
-//   IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../stellar-implementation devnet-up
+// End to end against a running devnet (backend-soroban's `make devnet-up`):
+//   IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../backend-soroban devnet-up
 //   RTGS_DEVNET_RPC=http://localhost:8350/rpc pnpm test:e2e
 // Each run uses a fresh seed, so it bootstraps its own central bank, banks and contract.
 import { writeFileSync } from "node:fs";

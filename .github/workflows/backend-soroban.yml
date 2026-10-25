@@ -1,13 +1,15 @@
 # Mirrors `make lint test build`, plus `make integration` on Quickstart.
 # Never run on GitHub yet (this repo is not pushed); checked locally with action-validator.
-# Adapted from the testing track's recipe (stellar-research/stellar/testing/lab/ci/contracts.yml).
-# Add a job per test layer as TESTING.md introduces it.
-name: ci
+# Adapted from the testing track's recipe (../stellar-research/stellar/testing/lab/ci/contracts.yml).
+# Add a job per test layer as backend-soroban/TESTING.md introduces it.
+name: backend-soroban
 
 on:
   pull_request:
+    paths: ["backend-soroban/**", ".github/workflows/backend-soroban.yml"]
   push:
     branches: [main]
+    paths: ["backend-soroban/**", ".github/workflows/backend-soroban.yml"]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +22,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+defaults:
+  run:
+    working-directory: backend-soroban
+
 jobs:
   test:
     name: Lint, test, build
@@ -31,6 +37,8 @@ jobs:
       - name: Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-soroban
       # Installs the stellar-cli release that matches the action's ref.
       - uses: stellar/stellar-cli@v28.1.0
       - name: Lint
@@ -68,6 +76,8 @@ jobs:
       - name: Rust toolchain
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-soroban
       - uses: stellar/stellar-cli@v28.1.0
       # Quickstart's own action at the commit the testing lab read (lab/ci/contracts.yml),
       # with the image pinned in devnet/common.sh. It serves on port 8000 and waits until

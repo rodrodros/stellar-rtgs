@@ -1,8 +1,8 @@
-# stellar-implementation
+# backend-soroban
 
 The RTGS (real-time gross settlement system) on Stellar, built test first. It implements the formal definition and the ratified decisions of the research foundation:
-- **The research foundation:** `../stellar-research/`. Start with its `README.md`.
-- **The decisions:** `../docs/adr/`.
+- **The research foundation:** `../../stellar-research/`. Start with its `README.md`.
+- **The decisions:** `../../docs/adr/`.
 
 **Status, 2026-10-25.** What exists so far:
 - the workspace, with toolchain pins;
@@ -49,7 +49,7 @@ The devnet targets read `IMPL_NAME` and `IMPL_PORT` (defaults `impl-local`, 8300
 Prerequisites:
 - `make check-env` lists the tools needed and their versions: rustc 1.99.1 with `wasm32v1-none`, stellar-cli 28.1.0 and Docker, plus quint and the cargo plugins for later test layers.
 - `rust-toolchain.toml` makes rustup install the right Rust.
-- Installing anything else is up to you. Commands and pins are in `../stellar-research/handbook/01-toolchain.md`.
+- Installing anything else is up to you. Commands and pins are in `../../stellar-research/handbook/01-toolchain.md`.
 
 ## Layout
 

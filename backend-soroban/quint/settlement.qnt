@@ -7,7 +7,7 @@
 // against the contract, comparing the outcome and the resulting state.
 //
 // The rules are κ-proto's (rtgs-definition.md §4.11) as the ADRs amend them. This model
-// departs from ../stellar-research/definition/model/rtgs.qnt in these ways:
+// departs from ../../stellar-research/definition/model/rtgs.qnt in these ways:
 // - No A17 `Open`, A18 `Close`, business day or value dates. The system runs 24/7, so
 //   every queued payment is eligible (ADR-0013).
 // - No τ_rej or τ_qc. A queued payment instead expires `EXPIRY` seconds after it was

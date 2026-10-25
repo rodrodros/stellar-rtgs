@@ -11,7 +11,7 @@ This repo implements an RTGS on Stellar as Soroban contracts, test first. Read `
   - No production code without a failing test first.
   - Commit red and green separately when that makes the history clearer.
 - **Name what each test checks.** Every test names the model IDs it checks, in its name or its doc comment:
-  - actions A1–A20, invariants S1–S23, liveness L1–L3 and results R*n*, from `../stellar-research/definition/rtgs-definition.md` §4;
+  - actions A1–A20, invariants S1–S23, liveness L1–L3 and results R*n*, from `../../stellar-research/definition/rtgs-definition.md` §4;
   - the ADR it enforces.
 - **Before handing work back, run `make lint test build`.** All three must pass.
 - **No single-letter names.**
@@ -28,11 +28,11 @@ This repo implements an RTGS on Stellar as Soroban contracts, test first. Read `
 - **Test snapshots stay off.** `Setup` builds its `Env` with `capture_snapshot_at_drop: false`: writing a snapshot per proptest case took nearly all of a property test's time. Build any new `Env` the same way.
 - **Mutate a copy, never the worktree.** Run hand mutants with `make mutate` (TESTING.md, "Hand mutants"), which leaves the worktree and its `target/` free for other work. A sweep is the pinned seed plus seeds 1–4; run more only when a reviewer asks.
 - **Never save task-specific guidance to Claude's memory.** It is shared by every agent in this repo.
-- **Issues and specs** live in `../.scratch/<feature>/`. The vocabulary is in `../GLOSSARY.md`, and the decisions are in `../docs/adr/`.
+- **Issues and specs** live in `../../.scratch/<feature>/`. The vocabulary is in `../../GLOSSARY.md`, and the decisions are in `../../docs/adr/`.
 
 ## What to implement against
 
-**The ratified decisions** are ADR-0001 to ADR-0013 in `../docs/adr/`. For the contract, the ones that matter most:
+**The ratified decisions** are ADR-0001 to ADR-0013 in `../../docs/adr/`. For the contract, the ones that matter most:
 
 | ADR | What it means here |
 |---|---|
@@ -51,15 +51,15 @@ This repo implements an RTGS on Stellar as Soroban contracts, test first. Read `
 - **0017:** no timed or future-dated orders.
 - **0018:** no reservations or limits.
 
-**The model in `../stellar-research/definition/` still has a business day**: A17 `Open`, A18 `Close`, value dates and $\tau_{\mathrm{rc}}$/$\tau_{\mathrm{qc}}$. Where it differs from ADR-0013 to ADR-0016, the ADRs win, and the difference must be written down in the test that meets it.
+**The model in `../../stellar-research/definition/` still has a business day**: A17 `Open`, A18 `Close`, value dates and $\tau_{\mathrm{rc}}$/$\tau_{\mathrm{qc}}$. Where it differs from ADR-0013 to ADR-0016, the ADRs win, and the difference must be written down in the test that meets it.
 
 ## Where the research lives
 
 | Need | Read |
 |---|---|
-| How to develop on Stellar protocol 29: pins, dev loop, gotchas | `../stellar-research/handbook/` (start with its `README.md`) |
-| Which Stellar feature serves which RTGS need | `../stellar-research/handbook/09-rtgs-specific.md`, `../stellar-research/stellar/contracts/rtgs-mapping.md` |
-| The formal model: state, actions, invariants | `../stellar-research/definition/rtgs-definition.md` §4 |
-| The executable Quint model and its configurations | `../stellar-research/definition/model/` (`rtgs.qnt`, `README.md`) |
-| A worked contract with every test layer | `../stellar-research/stellar/testing/lab/` |
-| Claims cited as C-XX-nnn | `rg -n '^### C-HB-130' ../stellar-research` |
+| How to develop on Stellar protocol 29: pins, dev loop, gotchas | `../../stellar-research/handbook/` (start with its `README.md`) |
+| Which Stellar feature serves which RTGS need | `../../stellar-research/handbook/09-rtgs-specific.md`, `../../stellar-research/stellar/contracts/rtgs-mapping.md` |
+| The formal model: state, actions, invariants | `../../stellar-research/definition/rtgs-definition.md` §4 |
+| The executable Quint model and its configurations | `../../stellar-research/definition/model/` (`rtgs.qnt`, `README.md`) |
+| A worked contract with every test layer | `../../stellar-research/stellar/testing/lab/` |
+| Claims cited as C-XX-nnn | `rg -n '^### C-HB-130' ../../stellar-research` |

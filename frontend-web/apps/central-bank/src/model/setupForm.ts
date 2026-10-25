@@ -11,7 +11,7 @@ const U32_MAX = 4_294_967_295;
 /**
  * The largest queue cap the implementation has priced: above it, the eager closure over a full
  * queue can exceed Mainnet's per-transaction limits, and the deposit or submission that
- * triggers it always fails (stellar-implementation's README, Flows 14 and 22).
+ * triggers it always fails (backend-soroban's README, Flows 14 and 22).
  */
 export const MAX_QUEUE_CAP = 62;
 

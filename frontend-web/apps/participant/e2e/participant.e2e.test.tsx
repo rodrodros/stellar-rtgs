@@ -1,5 +1,5 @@
-// End to end against a running devnet (stellar-implementation's `make devnet-up`):
-//   IMPL_NAME=impl-fe-bank IMPL_PORT=8360 make -C ../../../stellar-implementation devnet-up
+// End to end against a running devnet (backend-soroban's `make devnet-up`):
+//   IMPL_NAME=impl-fe-bank IMPL_PORT=8360 make -C ../../../backend-soroban devnet-up
 //   RTGS_DEVNET_RPC=http://localhost:8360/rpc pnpm test:e2e
 // Each run bootstraps its own central bank, banks and contract from a fresh seed, then drives
 // two copies of the app side by side: one acting as Bank 1, one as Bank 2.

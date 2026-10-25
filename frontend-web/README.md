@@ -1,6 +1,6 @@
-# stellar-front
+# frontend-web
 
-The interactive front end for the RTGS settlement contract in `../stellar-implementation/`: three static React apps on one shared package, in a pnpm workspace, plus a headless simulation that keeps the devnet busy.
+The interactive front end for the RTGS settlement contract in `../backend-soroban/`: three static React apps on one shared package, in a pnpm workspace, plus a headless simulation that keeps the devnet busy.
 
 | Path | Package | Who uses it | Dev URL |
 |---|---|---|---|
@@ -17,7 +17,7 @@ Every app runs against the **devnet** (a local Stellar quickstart), **testnet**,
 You need:
 - **Node 26 or later** and **corepack**. Node 26 no longer bundles corepack; pnpm 11.28.5 is pinned in `package.json`.
 - **Docker**, plus `jq` and `curl`, for the devnet scripts.
-- `stellar-implementation` checked out next to this folder (`../stellar-implementation`). Its devnet scripts start the local network.
+- `../backend-soroban`, in this same repo. Its devnet scripts start the local network.
 
 ```sh
 # 1. Install
@@ -25,7 +25,7 @@ npm install -g corepack && corepack enable
 pnpm install
 
 # 2. Start the local network: one Docker container, RPC on http://localhost:8300/rpc (~20 s)
-make -C ../stellar-implementation devnet-up
+make -C ../backend-soroban devnet-up
 
 # 3. Deploy the cash token and the settlement contract, and onboard 3 funded banks (~30 s)
 pnpm devnet:bootstrap
@@ -62,7 +62,7 @@ To run one app only: `pnpm dev:central-bank`, `pnpm dev:participant` or `pnpm de
 ### Stopping, and after a devnet reset
 
 ```sh
-make -C ../stellar-implementation devnet-down    # removes the container and its ledger
+make -C ../backend-soroban devnet-down    # removes the container and its ledger
 ```
 
 The devnet keeps no state across a restart. After `devnet-up` again, run `pnpm devnet:bootstrap` again (or Setup → Bootstrap), then reload the apps. On a devnet that is still running, a rerun of the bootstrap resumes or reuses the deployment and adds no money; `pnpm devnet:bootstrap --fresh` deploys a new contract.
@@ -117,18 +117,18 @@ Each app can also change its deployment at runtime, per network, without a rebui
 To run a devnet of your own next to someone else's:
 
 ```sh
-IMPL_NAME=impl-mine IMPL_PORT=8400 make -C ../stellar-implementation devnet-up
+IMPL_NAME=impl-mine IMPL_PORT=8400 make -C ../backend-soroban devnet-up
 pnpm devnet:bootstrap --rpc http://localhost:8400/rpc
 echo 'VITE_RTGS_DEVNET_RPC_URL=http://localhost:8400/rpc' >> .env
 pnpm dev
 docker rm -f impl-mine                          # when you're done
 ```
 
-Remove only your own container. `make devnet-down` also deletes `../stellar-implementation/.devnet/`, the stellar-cli identities that every devnet on the machine shares.
+Remove only your own container. `make devnet-down` also deletes `../backend-soroban/.devnet/`, the stellar-cli identities that every devnet on the machine shares.
 
 ## Testnet and mainnet
 
-The bootstrap is devnet only, so on testnet the cash token and the settlement contract must already be deployed (with stellar-cli, following `../stellar-implementation`). Then:
+The bootstrap is devnet only, so on testnet the cash token and the settlement contract must already be deployed (with stellar-cli, following `../backend-soroban`). Then:
 
 1. Set `VITE_RTGS_TESTNET_CONTRACT_ID=C…` in `.env`, or paste the id into each app's deployment settings.
 2. Select **testnet** in the app. Signing goes through Stellar Wallets Kit (Freighter and the other wallets it supports): **Connect wallet**.
@@ -136,7 +136,7 @@ The bootstrap is devnet only, so on testnet the cash token and the settlement co
 
 The central bank's actions are disabled unless the connected signer is the contract's `central_bank()`; keeper actions work with any signer. The observer never signs, on any network.
 
-`open_repo` mints the repo's cash into the settlement contract, and the mint is authorized in the same transaction by the cash token's SAC admin. So the central bank's account must also be the cash token's issuer, as on the devnet; otherwise every repo is refused with `TokenTransferFailed`. Who holds the SAC admin role is still an open decision in `../stellar-implementation` (its README).
+`open_repo` mints the repo's cash into the settlement contract, and the mint is authorized in the same transaction by the cash token's SAC admin. So the central bank's account must also be the cash token's issuer, as on the devnet; otherwise every repo is refused with `TokenTransferFailed`. Who holds the SAC admin role is still an open decision in `../backend-soroban` (its README).
 
 **Mainnet** is listed only when `VITE_RTGS_ENABLE_MAINNET=true` and `VITE_RTGS_MAINNET_RPC_URL` are both set. Each app asks you to confirm every time you select it (the central bank and participant apps make you type it), and none starts on it.
 
@@ -160,7 +160,7 @@ pnpm test                 # unit and component tests for core and the three apps
 The end-to-end suites run against a real devnet. Each bootstraps its own deployment from a fresh seed, so they don't touch the demo deployment, and each skips itself with a notice if no devnet answers.
 
 ```sh
-make -C ../stellar-implementation devnet-up
+make -C ../backend-soroban devnet-up
 pnpm test:e2e                                         # core, then each app; about 3 minutes
 RTGS_DEVNET_RPC=http://localhost:8400/rpc pnpm test:e2e   # a devnet on another port
 pnpm --filter @rtgs/participant test:e2e              # one suite
@@ -175,13 +175,13 @@ The generated client (`packages/core/src/generated/settlement.ts`) and the settl
 When the contract changes:
 
 ```sh
-pnpm bindings:check       # fails if wasm/ is older than ../stellar-implementation's built Wasm
+pnpm bindings:check       # fails if wasm/ is older than ../backend-soroban's built Wasm
 pnpm bindings             # regenerate the client and copy the Wasm (needs stellar-cli 28.1.0)
 pnpm bindings --build     # run make build in the implementation first (needs its Rust toolchain)
 pnpm typecheck && pnpm test
 ```
 
-`RTGS_IMPL_DIR` points the script at the implementation repo if it isn't at `../stellar-implementation`. After a regeneration, rerun `pnpm devnet:bootstrap`: a published contract that runs another Wasm is replaced by a new deployment.
+`RTGS_IMPL_DIR` points the script at another backend-soroban checkout instead of `../backend-soroban`. After a regeneration, rerun `pnpm devnet:bootstrap`: a published contract that runs another Wasm is replaced by a new deployment.
 
 ## Troubleshooting
 
@@ -193,12 +193,12 @@ pnpm typecheck && pnpm test
 | `e2e: skipped, no healthy devnet RPC at …` | No devnet on that port. Start one, or set `RTGS_DEVNET_RPC`. |
 | A port is already in use | Vite takes the next free port and prints it. To choose one: `pnpm dev:participant --port 5185`. |
 | `pnpm` isn't found, or is the wrong version | `npm install -g corepack && corepack enable`, from this folder. |
-| `make devnet-up` says the container exists | A devnet with that name is already up: use it, or `make -C ../stellar-implementation devnet-down` first. |
+| `make devnet-up` says the container exists | A devnet with that name is already up: use it, or `make -C ../backend-soroban devnet-down` first. |
 
 ## Layout
 
 ```
-stellar-front/
+frontend-web/
 ├── package.json            workspace scripts
 ├── pnpm-workspace.yaml     packages, and the catalog: one version of each shared dependency
 ├── .env.example            every VITE_RTGS_* setting
@@ -213,4 +213,4 @@ stellar-front/
 
 Shared dependency versions live once, in the catalog in `pnpm-workspace.yaml`: a package writes `"react": "catalog:"`. pnpm won't install a release younger than 7 days.
 
-The shared brief and the tickets this was built from are in `../.scratch/rtgs-frontend/`. The domain terms (participant, operator, settlement agent, payment order, queue, offset, repo) follow `../GLOSSARY.md`, and the design decisions are in `../docs/adr/`.
+The shared brief and the tickets this was built from are in `../../.scratch/rtgs-frontend/`. The domain terms (participant, operator, settlement agent, payment order, queue, offset, repo) follow `../../GLOSSARY.md`, and the design decisions are in `../../docs/adr/`.

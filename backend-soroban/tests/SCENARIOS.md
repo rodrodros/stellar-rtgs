@@ -1,6 +1,6 @@
 # Scenario catalogue
 
-Every behaviour the system must show, with the tests that run it (TESTING.md, "Scenario catalogue"). Scenarios are numbered by the model action they exercise (`../stellar-research/definition/rtgs-definition.md` §4.6), so a family with no rows is an action with no test.
+Every behaviour the system must show, with the tests that run it (TESTING.md, "Scenario catalogue"). Scenarios are numbered by the model action they exercise (`../../stellar-research/definition/rtgs-definition.md` §4.6), so a family with no rows is an action with no test.
 
 - Deposit and withdraw are A11 (definition §5.5): a transfer between a bank's trustline holding of the cash token and its settlement balance in the contract.
 - `storage::` rows (SC-ST) are about the ledger, not the model: storage lifetime and transaction cost.

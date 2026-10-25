@@ -3,7 +3,7 @@
 A headless simulation for the devnet. Once the devnet is set up, it keeps the banks transacting with each other until you stop it. The central bank, participant and observer apps then always have live traffic to show. It is a Node CLI on `@rtgs/core`, with no UI of its own.
 
 ```sh
-make -C ../stellar-implementation devnet-up   # the local network
+make -C ../backend-soroban devnet-up   # the local network
 pnpm devnet:bootstrap                         # the contract, the cash token and 3 funded banks
 pnpm simulate                                 # runs until Ctrl-C
 pnpm dev                                      # in another terminal: watch it in the apps

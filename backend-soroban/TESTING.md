@@ -2,12 +2,12 @@
 
 How to add each kind of test. Four layers exist today: unit and auth tests (§1), property and state-machine tests (§2), model-based tests (§3) and integration tests on the devnet (§4). Every other layer gets its folder and its Makefile and CI targets from whoever adds its first test, following the section below.
 
-All commands come from the research handbook, which ran each of them on this machine: `../stellar-research/handbook/04-testing.md`. A worked example of every layer is in `../stellar-research/stellar/testing/lab/`. Copy from it, but keep this repo's names.
+All commands come from the research handbook, which ran each of them on this machine: `../../stellar-research/handbook/04-testing.md`. A worked example of every layer is in `../../stellar-research/stellar/testing/lab/`. Copy from it, but keep this repo's names.
 
 ## Rules for every layer
 
 - **Write the test first** (red), then the code (green). Then refactor. See `AGENTS.md`.
-- **Name the model IDs.** A test's name or doc comment names what it checks: the actions (A*n*), invariants (S*n*), liveness properties (L*n*) or results (R*n*) of `../stellar-research/definition/rtgs-definition.md` §4, and the ADR it enforces. Example: `/// A1 then A2: a covered payment settles at once (S4, ADR-0008).`
+- **Name the model IDs.** A test's name or doc comment names what it checks: the actions (A*n*), invariants (S*n*), liveness properties (L*n*) or results (R*n*) of `../../stellar-research/definition/rtgs-definition.md` §4, and the ADR it enforces. Example: `/// A1 then A2: a covered payment settles at once (S4, ADR-0008).`
 - **Cover every input and output.** Each new contract entry point gets tests for:
   - its success case;
   - each error it can return;
@@ -94,7 +94,7 @@ make mutate TEST=reprioritisation_moves_only_the_priority MUTANTS="$SCRATCH/*.pa
 - **`quint/`:** the spec and `quint/traces/*.itf.json`, which are committed.
 - **The replay:** `contracts/settlement/src/tests/itf_replay.rs`.
 
-**The spec.** `../stellar-research/definition/model/rtgs.qnt` is the full model, and its `init_proto` is κ-proto, the prototype's configuration. It still has a business day (A17, A18 and value dates), which ADR-0013 to ADR-0016 replace. Do one of these:
+**The spec.** `../../stellar-research/definition/model/rtgs.qnt` is the full model, and its `init_proto` is κ-proto, the prototype's configuration. It still has a business day (A17, A18 and value dates), which ADR-0013 to ADR-0016 replace. Do one of these:
 - Write a contract-level spec in `quint/settlement.qnt`, as the testing lab did. Its actions mirror the contract's entry points, and κ-proto's rules apply.
 - Or take `rtgs.qnt` after the model's third round, which removes the day.
 

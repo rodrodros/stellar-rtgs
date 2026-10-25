@@ -35,7 +35,7 @@ Settings come from `VITE_RTGS_*` env vars (see `../../.env.example` and `package
 
 ```sh
 pnpm --filter @rtgs/observer test       # models, components (jsdom, fake session), and the no-signer guard
-IMPL_NAME=impl-fe-observer IMPL_PORT=8380 make -C ../stellar-implementation devnet-up
+IMPL_NAME=impl-fe-observer IMPL_PORT=8380 make -C ../backend-soroban devnet-up
 RTGS_DEVNET_RPC=http://localhost:8380/rpc pnpm --filter @rtgs/observer test:e2e
 ```
 

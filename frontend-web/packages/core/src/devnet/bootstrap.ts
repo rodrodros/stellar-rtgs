@@ -1,5 +1,5 @@
 // One-call devnet setup, in the browser (the central bank app's one-click bootstrap) or in
-// Node (`pnpm devnet:bootstrap`). It follows stellar-implementation's integration/lib.sh:
+// Node (`pnpm devnet:bootstrap`). It follows backend-soroban's integration/lib.sh:
 //
 //   1. fund the central bank and the banks through friendbot;
 //   2. the issuer sets AUTH_REQUIRED, AUTH_REVOCABLE and CLAWBACK_ENABLED before any
