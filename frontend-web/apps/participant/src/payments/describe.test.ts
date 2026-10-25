@@ -21,7 +21,7 @@ describe("describeSubmit", () => {
 });
 
 describe("headNote", () => {
-  const analysis = (a: Partial<QueueAnalysis>): QueueAnalysis => ({ priority: "normal", length: 1, head, covered: false, expired: false, ...a });
+  const analysis = (a: Partial<QueueAnalysis>): QueueAnalysis => ({ priority: "normal", length: 1, head, covered: false, ...a });
 
   it("explains an uncovered head with its shortfall", () => {
     expect(headNote(analysis({ blockedBy: "uncovered" }), 20_000_000n, "USD")).toMatch(/^Blocked queue head: .* 3 USD more is needed/);
@@ -32,16 +32,15 @@ describe("headNote", () => {
   });
 
   it("says nothing for an empty queue", () => {
-    expect(headNote({ priority: "urgent", length: 0, covered: false, expired: false }, 0n)).toBeUndefined();
+    expect(headNote({ priority: "urgent", length: 0, covered: false }, 0n)).toBeUndefined();
   });
 });
 
 describe("expiryNote", () => {
   it("follows the expire capability once the expiry has passed", () => {
-    expect(expiryNote(100, 50, "available")).toEqual({ past: false, text: "Expires" });
-    expect(expiryNote(100, 100, "available")).toEqual({ past: false, text: "Expires" });
-    expect(expiryNote(100, 101, "stub").text).toBe("Past expiry; not enforced by this contract version");
-    expect(expiryNote(100, 120, "available").text).toBe("Past expiry; a keeper may reject it");
+    expect(expiryNote(false, "available")).toEqual({ past: false, text: "Expires" });
+    expect(expiryNote(true, "stub").text).toBe("Past expiry; not enforced by this contract version");
+    expect(expiryNote(true, "available").text).toBe("Past expiry; a keeper may reject it");
   });
 });
 

@@ -46,7 +46,8 @@ export function App(props: { env?: Env; bank?: string }) {
   const saved = useMemo<NetworkOverrides>(() => overrides.load(base.id), [overrides, base, version]);
   const network = useMemo(() => withOverrides(base, saved), [base, saved]);
   const options = useMemo(() => ({ env, ...(netId === "mainnet" && mainnetAck ? { acknowledgeMainnet: true as const } : {}) }), [env, netId, mainnetAck]);
-  const connection = useConnection(netId === "mainnet" && !mainnetAck ? undefined : network, options);
+  // `version` forces a reconnect on "Save and reconnect" even when the values didn't change.
+  const connection = useConnection(netId === "mainnet" && !mainnetAck ? undefined : network, options, version);
 
   return (
     <div className="app">

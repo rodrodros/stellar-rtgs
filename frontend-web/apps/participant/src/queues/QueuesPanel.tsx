@@ -1,6 +1,6 @@
 // The bank's own queues, urgent first, each in queue order (ADR-0008, ADR-0009): the head,
 // what blocks it, and every queued payment order's expiry (ADR-0015).
-import { expiresAt, type Config, type Payment, type QueueAnalysis } from "@rtgs/core";
+import { expiresAt, isExpired, type Config, type Payment, type QueueAnalysis } from "@rtgs/core";
 import { useCapabilities, useLedgerClock, useSession, useSnapshot } from "@rtgs/core/react";
 import { QueuedActions } from "../payments/QueuedActions.tsx";
 import { expiryNote, headNote } from "../payments/describe.ts";
@@ -48,7 +48,7 @@ function Queue(props: { title: string; payments: Payment[]; analysis: QueueAnaly
                 </div>
                 <div className="meta">
                   Submitted {ledgerTime(p.submittedAt)}
-                  {props.config && <Expiry at={expiresAt(p, props.config)} />}
+                  {props.config && <Expiry payment={p} config={props.config} />}
                 </div>
                 <QueuedActions payment={p} />
               </li>
@@ -60,10 +60,11 @@ function Queue(props: { title: string; payments: Payment[]; analysis: QueueAnaly
   );
 }
 
-function Expiry({ at }: { at: number }) {
+function Expiry({ payment, config }: { payment: Payment; config: Config }) {
   const { now } = useLedgerClock();
   const caps = useCapabilities();
-  const note = expiryNote(at, now, caps.expire);
+  const at = expiresAt(payment, config);
+  const note = expiryNote(now !== undefined && isExpired(payment, config, now), caps.expire);
   return (
     <span className={note.past ? "expired" : ""}>
       {" · "}

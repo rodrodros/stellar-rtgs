@@ -254,7 +254,7 @@ export function createFakeSession(options: FakeOptions = {}) {
       urgent: queue(address, "urgent").map((id) => payments.get(id)!),
       normal: queue(address, "normal").map((id) => payments.get(id)!),
     };
-    const view: BankView = { address, balance: balance(address), queues: qs, analysis: analyseQueues(balance(address), qs, config, closeTime) };
+    const view: BankView = { address, balance: balance(address), queues: qs, analysis: analyseQueues(balance(address), qs, config) };
     if (capabilities.credit !== "stub") view.credit = { intraday: 0n, penalty: 0n, collateral: USD(1000) };
     return view;
   }

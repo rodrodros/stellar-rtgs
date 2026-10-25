@@ -1,9 +1,9 @@
 // Who the app acts as. On the devnet: one of the demo identities, switched with one click and
 // pinned per tab by `?bank=2`. On testnet and mainnet: a wallet. The provider sits under the
 // session, which is keyed on the network, so a switch drops the signer with it.
-import { connectWallet, devnetIdentities, toRtgsError, type RtgsActor, type RtgsError, type Signer } from "@rtgs/core";
+import { connectWallet, devnetIdentities, disconnectWallet, toRtgsError, type RtgsActor, type RtgsError, type Signer } from "@rtgs/core";
 import { useBankRegistry, useSession } from "@rtgs/core/react";
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 
 export interface ActingBank {
   signer?: Signer;
@@ -83,12 +83,16 @@ export function ActingBankProvider(props: { initialBank?: string; children: Reac
   const [signer, setSigner] = useState<Signer | undefined>(() =>
     matchIdentity(props.initialBank ?? urlBank() ?? readStored(net.id), all),
   );
+  const current = useRef(signer);
+  current.current = signer;
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<RtgsError>();
 
   const choose = useCallback(
     (next: Signer | undefined) => {
       setError(undefined);
+      // Leaving a wallet: forget it in the kit too, so the next connect asks again.
+      if (current.current?.kind === "wallet" && current.current !== next) void disconnectWallet().catch(() => {});
       setSigner(next);
       if (net.id === "devnet") remember(net.id, next, next ? all.findIndex((s) => s.address === next.address) : -1);
     },
