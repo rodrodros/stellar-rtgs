@@ -1,9 +1,9 @@
 //! Property tests for the pure rules (TESTING.md, "Property and state-machine tests").
 //!
 //! The oracle enumerates every prefix vector of small instances and keeps the feasible
-//! ones (F1 with `lim` = 0, §4.5). An account whose outflow sum overflows `i128` is
-//! infeasible; an inflow that overflows is more than any outflow can need, so it never is.
-//! That keeps the feasible vectors closed under join (R4) even at the `i128` edges.
+//! ones (F1 with `lim` = 0, §4.5), decided over the integers: queued sums can exceed
+//! `i128`, and an overflow must never decide feasibility. Then the feasible vectors are
+//! closed under join (R4) and R5 holds at every amount, the `i128` edges included.
 extern crate std;
 
 use alloc::vec::Vec;
@@ -40,7 +40,7 @@ struct Instance {
 /// the contract (S1), every balance a feasible offset leaves fits in `i128`.
 fn instance_with(amount: BoxedStrategy<i128>) -> impl Strategy<Value = Instance> {
     (2usize..=4).prop_flat_map(move |n| {
-        let candidate = (1..n, amount.clone()).prop_map(|(offset, amount)| (offset, amount));
+        let candidate = (1..n, amount.clone());
         (
             prop::collection::vec(0i128..=60, n),
             prop::collection::vec(prop::collection::vec(candidate, 0..=3), n),
@@ -80,29 +80,41 @@ fn edgy() -> BoxedStrategy<i128> {
 }
 
 /// F1 with `lim` = 0: every account ends non-negative when the first `k[a]` candidates
-/// of every account `a` settle, i.e. its outflow is at most its balance plus its inflow.
-/// An outflow sum that overflows is infeasible; an inflow sum that overflows covers any
-/// outflow.
+/// of every account `a` settle, i.e. its outflow is at most its balance plus its inflow,
+/// over the integers.
 fn feasible(i: &Instance, k: &[usize]) -> bool {
     (0..i.balances.len()).all(|a| {
-        let Some(out) = i.queues[a][..k[a]]
-            .iter()
-            .try_fold(0i128, |s, c| s.checked_add(c.amount))
-        else {
-            return false;
-        };
+        let outflow = i.queues[a][..k[a]].iter().map(|c| c.amount);
         let inflow = i
             .queues
             .iter()
             .enumerate()
             .flat_map(|(p, q)| &q[..k[p]])
             .filter(|c| c.to == a)
-            .try_fold(0i128, |s, c| s.checked_add(c.amount));
-        match inflow.and_then(|x| i.balances[a].checked_add(x)) {
-            Some(available) => available >= out,
-            None => true,
-        }
+            .map(|c| c.amount);
+        net_is_non_negative(i.balances[a], inflow, outflow)
     })
+}
+
+/// Whether `balance + Σ inflow − Σ outflow ≥ 0`, decided exactly. The sums can exceed
+/// `i128`, so each amount is split into 64-bit halves, whose sums cannot overflow.
+fn net_is_non_negative(
+    balance: i128,
+    inflow: impl Iterator<Item = i128>,
+    outflow: impl Iterator<Item = i128>,
+) -> bool {
+    const HALF: i128 = 1 << 64;
+    let (mut hi, mut lo) = (balance.div_euclid(HALF), balance.rem_euclid(HALF));
+    for a in inflow {
+        hi += a.div_euclid(HALF);
+        lo += a.rem_euclid(HALF);
+    }
+    for a in outflow {
+        hi -= a.div_euclid(HALF);
+        lo -= a.rem_euclid(HALF);
+    }
+    // The net is `hi · 2^64 + lo`; with `lo` carried into [0, 2^64), its sign is `hi`'s.
+    hi + lo.div_euclid(HALF) >= 0
 }
 
 /// The balances after the first `k[a]` candidates of every `a` settle. Only for small
@@ -180,9 +192,9 @@ fn after(i: &Instance, k: &[usize]) -> Instance {
 proptest! {
     #![proptest_config(config(512))]
 
-    /// §4.5 `cov` with no credit line and no reservations: covered exactly when
-    /// `bal − a ≥ 0`, over the whole `i128` range and without overflow (ADR-0011,
-    /// ADR-0018).
+    /// A2's guard §4.5 `cov`, which keeps S2, with no credit line and no reservations:
+    /// covered exactly when `bal − a ≥ 0`, over the whole `i128` range and without overflow
+    /// (ADR-0011, ADR-0018).
     /// Uniform `i128` pairs almost never meet, so the boundary is drawn on purpose:
     /// `amount` is `balance`, one more or one less, as often as it is random.
     #[test]
@@ -199,7 +211,8 @@ proptest! {
         prop_assert_eq!(covers(balance, amount), balance >= amount);
     }
 
-    /// k* has one entry per account and never exceeds an account's queue (§4.5, Spec O).
+    /// R4, S10: k* has one entry per account and never exceeds an account's queue (§4.5,
+    /// Spec O; ADR-0010).
     #[test]
     fn the_prefix_is_within_every_queue(i in instance_with(small())) {
         let k = greatest_feasible_prefix(&i.balances, &i.queues);
@@ -209,14 +222,14 @@ proptest! {
         }
     }
 
-    /// The prefix the offset settles is feasible: F1 with `lim` = 0 (S10, S2).
+    /// The prefix the offset settles is feasible: F1 with `lim` = 0 (S10, S2; ADR-0010).
     #[test]
     fn the_prefix_is_feasible(i in instance_with(small())) {
         let k = greatest_feasible_prefix(&i.balances, &i.queues);
         prop_assert!(feasible(&i, &k), "infeasible k = {:?}", k);
     }
 
-    /// R4 and R9: the feasible prefix vectors are closed under join, so a greatest one
+    /// R4: the feasible prefix vectors are closed under join, so a greatest one
     /// exists and is unique, and the rule returns it. Checked against every prefix vector
     /// (ADR-0010).
     #[test]
@@ -235,7 +248,7 @@ proptest! {
     }
 
     /// R4: k* is defined by the accounts, not their order. Relabelling the accounts
-    /// relabels k* the same way.
+    /// relabels k* the same way (ADR-0010).
     #[test]
     fn the_prefix_does_not_depend_on_the_account_order(
         (i, perm) in instance_with(small()).prop_flat_map(|i| {
@@ -262,7 +275,7 @@ proptest! {
     }
 
     /// R4: more liquidity never settles less. Raising one balance gives a k* at least as
-    /// great in every account.
+    /// great in every account (ADR-0010).
     #[test]
     fn more_liquidity_never_shrinks_the_prefix(
         i in instance_with(small()),
@@ -277,7 +290,7 @@ proptest! {
     }
 
     /// R6: strict FIFO gross processing alone stops at `k_seq ≤ k*`, so the offset never
-    /// settles less than gross processing would (R7 shows it can settle more).
+    /// settles less than gross processing would (R7 shows it can settle more; ADR-0010).
     #[test]
     fn gross_processing_never_beats_the_offset(i in instance_with(small())) {
         let k = greatest_feasible_prefix(&i.balances, &i.queues);
@@ -286,7 +299,7 @@ proptest! {
     }
 
     /// R5 and S23: after the offset of k*, the greatest feasible prefix of what is left
-    /// is zero, so the queues are at rest until something external happens.
+    /// is zero, so the queues are at rest until something external happens (ADR-0010).
     #[test]
     fn after_the_offset_nothing_more_is_feasible(i in instance_with(small())) {
         let k = greatest_feasible_prefix(&i.balances, &i.queues);
@@ -317,15 +330,35 @@ proptest! {
         }
     }
 
-    /// Amounts at the `i128` limit: the rule never panics, an outflow that overflows is
-    /// infeasible, and it still returns the greatest feasible prefix (S2, S10, R4;
+    /// Amounts at the `i128` limit: the rule never panics, decides F1 exactly although the
+    /// sums exceed `i128`, and returns the greatest feasible prefix (S2, S10, R4;
     /// ADR-0010).
     #[test]
-    fn overflowing_sums_are_infeasible_not_a_panic(i in instance_with(edgy())) {
+    fn sums_beyond_i128_are_decided_exactly_not_a_panic(i in instance_with(edgy())) {
         let k = greatest_feasible_prefix(&i.balances, &i.queues);
         prop_assert!(feasible(&i, &k), "infeasible k = {:?}", k);
         for p in all_prefixes(&i).iter().filter(|p| feasible(&i, p)) {
             prop_assert!(le(p, &k), "feasible {:?} is not below k* {:?}", p, k);
         }
     }
+}
+
+/// F1 and R5 beyond `i128` (SC-A03-11; ADR-0010). With every balance 0, A queues A→B
+/// and A→C, B queues B→A and C queues C→A, all `i128::MAX`: A's outflow, 2 · `i128::MAX`,
+/// is met by its inflow, so k* = (2, 1, 1) in one offset. And with A at 1, A→B twice
+/// `i128::MAX / 2 + 1` against B→A `i128::MAX`, A ends at 0 and B at 1: k* = (2, 1).
+/// An overflow-based rule would settle the first only in two offsets, (1, 1, 0) and then
+/// (1, 0, 1), which breaks R5; it would settle nothing at all in the second.
+#[test]
+fn at_the_i128_limit_sums_are_decided_exactly() {
+    let c = |to, amount| Candidate { to, amount };
+    let (max, h) = (i128::MAX, i128::MAX / 2 + 1);
+    let edge = [
+        std::vec![c(1, max), c(2, max)],
+        std::vec![c(0, max)],
+        std::vec![c(0, max)],
+    ];
+    assert_eq!(greatest_feasible_prefix(&[0, 0, 0], &edge), [2, 1, 1]);
+    let halves = [std::vec![c(1, h), c(1, h)], std::vec![c(0, max)]];
+    assert_eq!(greatest_feasible_prefix(&[1, 0], &halves), [2, 1]);
 }

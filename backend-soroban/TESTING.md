@@ -54,7 +54,7 @@ All commands come from the research handbook, which ran each of them on this mac
 ## 2. Property and state-machine tests (proptest)
 
 **When:**
-- **Property tests:** for any rule over many inputs. Examples: conservation (S1), no negative balance beyond the limit (S2), FIFO order (S7), and that the greatest feasible prefix is unique (R9).
+- **Property tests:** for any rule over many inputs. Examples: conservation (S1), no negative balance beyond the limit (S2), FIFO order (S7), and that the greatest feasible prefix is unique (R4).
 - **State-machine tests:** for sequences of contract calls.
 
 **Where:**

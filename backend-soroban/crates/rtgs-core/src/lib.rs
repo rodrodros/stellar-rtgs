@@ -3,7 +3,8 @@
 //! This crate has no soroban-sdk dependency and no `Env`, so its rules can be tested
 //! natively, property-tested and proved with Kani, which cannot compile the soroban-sdk
 //! test host (C-ST-059). The settlement contract calls it. Its rules are stubs whose
-//! unit tests (below) are written and red; see TESTING.md, "Property and state-machine tests".
+//! unit tests (below) and property tests (`props.rs`) are written and red; see TESTING.md,
+//! "Property and state-machine tests".
 #![no_std]
 
 extern crate alloc;
@@ -29,10 +30,11 @@ pub fn covers(_balance: i128, _amount: i128) -> bool {
 /// Returns `k`, where `k[a]` is how many of `a`'s first candidates the offset settles. A
 /// prefix vector is feasible if every account ends non-negative (F1 with `lim` = 0).
 ///
-/// Overflow: an account's outgoing sum that overflows `i128` makes its prefix infeasible.
-/// An incoming sum that overflows saturates at `i128::MAX`, which is feasible, so an
-/// incoming overflow never rules a prefix out. In the contract neither can be reached
-/// with real balances, since S1 bounds every sum by the tokens it holds.
+/// Overflow: F1 is decided over the integers, never by an overflow. S1 bounds the
+/// balances, but not the queued amounts: a bank can queue payments it can't cover
+/// (SC-A01-07), so an account's incoming or outgoing sum can exceed `i128` while every
+/// balance the offset leaves fits. Treating an overflowing sum as infeasible would miss
+/// feasible prefixes and leave the queues gridlocked (SC-A03-11).
 pub fn greatest_feasible_prefix(_balances: &[i128], _queues: &[Vec<Candidate>]) -> Vec<usize> {
     todo!()
 }
@@ -146,12 +148,11 @@ mod tests {
         assert_eq!(k, vec![0, 0]);
     }
 
-    /// F1 and R4 at the `i128` limit (ADR-0010): B's two candidates of `i128::MAX`
-    /// overflow B's outgoing sum, so that prefix is infeasible rather than a panic. A's
-    /// incoming sum, two `i128::MAX`, saturates instead, so A's prefix stays feasible
-    /// while B's is cut back, and k* = (1, 1).
+    /// F1 and R4 at the `i128` limit (ADR-0010): B's two candidates of `i128::MAX` add up
+    /// to more than `i128` holds, without a panic. Against A's one `i128::MAX`, B would end
+    /// at −`i128::MAX`, so B's prefix is cut back to one, and k* = (1, 1).
     #[test]
-    fn an_overflowing_sum_is_infeasible() {
+    fn a_prefix_that_leaves_an_account_negative_is_cut_back_at_the_i128_limit() {
         let k = greatest_feasible_prefix(
             &[0, 0],
             &[

@@ -13,18 +13,21 @@
 //!   A queued payment expires `expiry_secs` after submission (A5, ADR-0013, ADR-0015);
 //!   revocation has no cut-off (A6, ADR-0016); a repo past its term becomes a penalty repo,
 //!   still collateralised, in place of A18's overnight credit (A20, ADR-0014).
-//! - expiry is enforced only by `expire` (A5). ADR-0015 lets any call that meets an expired
-//!   head reject it; v1 does not take that option. A payment past its expiry stays queued,
-//!   blocks its queue (SC-A05-04) and can still settle or be revoked (SC-A06-02) until
-//!   someone calls `expire`, and the at-rest check (S23) counts it as a candidate. This is
-//!   a choice under a provisional ADR; it also departs from S12, whose τ_rej would forbid
-//!   settling after the expiry.
+//! - expiry follows `quint/settlement.qnt`, which the replay (SC-MB-01) already pins: only
+//!   `expire` (A5) expires a payment. A payment past its expiry stays queued, blocks its
+//!   queue and can still settle or be revoked until someone calls `expire`, and the at-rest
+//!   check (S23) counts it as a candidate. ADR-0015 lets a call that meets an expired head
+//!   reject it, and S12's τ_rej would forbid settling it. Whether v1 should do either is
+//!   still open (README, "Decide whether an expired payment can still settle"); if it
+//!   should, change this model's `settle` and `expire`, SC-P-01 and `settlement.qnt`
+//!   together.
 //!
 //! Where an input breaks several guards at once, the model fixes the order of the errors:
 //! unknown id, then final status, then the specific guard. For `repay`: `UnknownRepo`,
 //! `NotAuthorized`, `RepayExceedsRepo`, `InsufficientFunds`; for `reprioritise`:
 //! `UnknownPayment`, `NotQueued`, `SamePriority`; for `expire`: `UnknownPayment`,
-//! `NotQueued`, `NotExpired`. The unit tests leave that order open.
+//! `NotQueued`, `NotExpired`. The unit tests leave that order open; `quint/settlement.qnt`
+//! (SC-MB-01) already fixes it for `reprioritise` and `expire`, so `repay`'s is new here.
 use std::collections::BTreeMap;
 use std::vec;
 use std::vec::Vec;
@@ -79,7 +82,7 @@ pub struct ModelRepo {
 pub struct Model {
     cfg: Config,
     /// Cash tokens each bank holds outside the contract.
-    reserve: [i128; N],
+    holding: [i128; N],
     /// `bal`.
     balances: [i128; N],
     /// `ord`, keyed by sequence number `q`.
@@ -218,7 +221,7 @@ impl ReferenceStateMachine for Reference {
     fn init_state() -> BoxedStrategy<Model> {
         Just(Model {
             cfg: test_config(),
-            reserve: [FUNDING; N],
+            holding: [FUNDING; N],
             balances: [0; N],
             payments: BTreeMap::new(),
             next_id: 0,
@@ -247,10 +250,11 @@ impl ReferenceStateMachine for Reference {
         let repo = (0..s.repos.len() as u64 + 2).boxed();
         let amount = || 1i128..=300;
         let priority = || prop_oneof![Just(Priority::Normal), Just(Priority::Urgent)];
-        // Random amounts rarely hit a boundary, so the exact holding, balance and
-        // outstanding amount, one over the holding and the balance, and the expiry and
-        // term are drawn on purpose.
-        let (reserve, balances) = (s.reserve, s.balances);
+        // Random inputs rarely hit a boundary or reach the credit and expiry paths, so these
+        // are drawn on purpose: the exact holding, balance, collateral headroom and
+        // outstanding amount, one over the holding, the balance and the headroom, and the
+        // payments and repos past their expiry or term.
+        let (holding, balances) = (s.holding, s.balances);
         let outstanding: Vec<(u64, usize, i128)> = s
             .repos
             .iter()
@@ -258,21 +262,60 @@ impl ReferenceStateMachine for Reference {
             .filter(|(_, r)| r.outstanding > 0)
             .map(|(i, r)| (i as u64, r.bank, r.outstanding))
             .collect();
-        let exact_repay = if outstanding.is_empty() {
-            Just(Transition::Tick { secs: 0 }).boxed()
-        } else {
-            prop::sample::select(outstanding)
-                .prop_map(|(repo, bank, amount)| Transition::Repay {
-                    actor: bank,
-                    repo,
-                    amount,
-                })
+        // With no case to draw from, each one falls back to the call that brings it into
+        // reach: collateral for a repo, a repo for a repayment, time for the expiry and term.
+        let collateral = || {
+            (0..N, 1i128..=400)
+                .prop_map(|(bank, value)| Transition::SetCollateral { bank, value })
                 .boxed()
         };
+        let past = || Just(Transition::Tick { secs: 101 }).boxed();
+        let exact_repay = pick(outstanding, collateral(), |(repo, bank, amount)| {
+            Transition::Repay {
+                actor: bank,
+                repo,
+                amount,
+            }
+        });
+        let headroom: Vec<(usize, i128)> = (0..N)
+            .map(|bank| {
+                let c = s.credit(bank);
+                (bank, c.coll - c.cr - c.ovn)
+            })
+            .filter(|(_, h)| *h > 0)
+            .collect();
+        let exact_repo = pick(headroom.clone(), collateral(), |(bank, amount)| {
+            Transition::OpenRepo { bank, amount }
+        });
+        let over_repo = pick(headroom, collateral(), |(bank, amount)| {
+            Transition::OpenRepo {
+                bank,
+                amount: amount + 1,
+            }
+        });
+        let past_expiry: Vec<u64> = s
+            .payments
+            .iter()
+            .filter(|(_, p)| p.status == Status::Queued)
+            .filter(|(_, p)| s.now > p.submitted_at + s.cfg.expiry_secs)
+            .map(|(id, _)| *id)
+            .collect();
+        let due_expire = pick(past_expiry, past(), |id| Transition::Expire { id });
+        let past_term: Vec<u64> = s
+            .repos
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.status == RepoStatus::Intraday)
+            .filter(|(_, r)| s.now > r.opened_at + s.cfg.repo_term_secs)
+            .map(|(i, _)| i as u64)
+            .collect();
+        let due_convert = pick(past_term, past(), |repo| Transition::ConvertOverdue {
+            repo,
+        });
         prop_oneof![
             3 => (0..N, amount()).prop_map(|(bank, amount)| Transition::Deposit { bank, amount }),
-            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: reserve[bank].max(1) }),
-            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: reserve[bank] + 1 }),
+            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank].max(1) }),
+            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank] + 1 }),
             1 => (0..N, amount()).prop_map(|(bank, amount)| Transition::Withdraw { bank, amount }),
             1 => (0..N).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank].max(1) }),
             1 => (0..N).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank] + 1 }),
@@ -281,14 +324,18 @@ impl ReferenceStateMachine for Reference {
             2 => id.clone().prop_map(|id| Transition::Revoke { id }),
             2 => (id.clone(), priority()).prop_map(|(id, priority)| Transition::Reprioritise { id, priority }),
             1 => id.prop_map(|id| Transition::Expire { id }),
+            2 => due_expire,
             2 => prop_oneof![Just(1u64), Just(100), Just(101), 0u64..=150]
                 .prop_map(|secs| Transition::Tick { secs }),
-            1 => (0..N, 0i128..=400).prop_map(|(bank, value)| Transition::SetCollateral { bank, value }),
+            2 => (0..N, 0i128..=400).prop_map(|(bank, value)| Transition::SetCollateral { bank, value }),
             1 => (0..N, amount()).prop_map(|(bank, amount)| Transition::OpenRepo { bank, amount }),
+            3 => exact_repo,
+            1 => over_repo,
             1 => (0..=CB, repo.clone(), amount())
                 .prop_map(|(actor, repo, amount)| Transition::Repay { actor, repo, amount }),
-            1 => exact_repay,
+            2 => exact_repay,
             1 => repo.prop_map(|repo| Transition::ConvertOverdue { repo }),
+            2 => due_convert,
         ]
         .boxed()
     }
@@ -296,10 +343,10 @@ impl ReferenceStateMachine for Reference {
     fn apply(mut s: Model, t: &Transition) -> Model {
         s.last = match *t {
             Transition::Deposit { bank, amount } => {
-                if s.reserve[bank] < amount {
+                if s.holding[bank] < amount {
                     Err(Error::TokenTransferFailed)
                 } else {
-                    s.reserve[bank] -= amount;
+                    s.holding[bank] -= amount;
                     s.balances[bank] += amount;
                     s.settle();
                     Ok(0)
@@ -312,7 +359,7 @@ impl ReferenceStateMachine for Reference {
                     // No reservations: a withdrawal may spend what a queued payment needs
                     // (ADR-0018), and it settles nothing.
                     s.balances[bank] -= amount;
-                    s.reserve[bank] += amount;
+                    s.holding[bank] += amount;
                     Ok(0)
                 }
             }
@@ -439,6 +486,19 @@ impl ReferenceStateMachine for Reference {
     }
 }
 
+/// One of `cases`, made into a transition, or `fallback` when there is none.
+fn pick<T: Clone + core::fmt::Debug + 'static>(
+    cases: Vec<T>,
+    fallback: BoxedStrategy<Transition>,
+    f: impl Fn(T) -> Transition + 'static,
+) -> BoxedStrategy<Transition> {
+    if cases.is_empty() {
+        fallback
+    } else {
+        prop::sample::select(cases).prop_map(f).boxed()
+    }
+}
+
 /// The call's outcome as the model writes it; anything but a contract error is a failure.
 fn outcome<T: Into<i128>, C: core::fmt::Debug, I: core::fmt::Debug>(
     r: Result<Result<T, C>, Result<Error, I>>,
@@ -524,8 +584,8 @@ impl StateMachineTest for SettlementMachine {
                 );
                 assert_eq!(
                     sut.token().balance(sut.bank(i)),
-                    model.reserve[i],
-                    "reserve of bank {i}"
+                    model.holding[i],
+                    "holding of bank {i}"
                 );
                 assert_eq!(c.credit(sut.bank(i)), model.credit(i), "credit of bank {i}");
                 for priority in [Priority::Urgent, Priority::Normal] {
@@ -588,7 +648,7 @@ prop_state_machine! {
     #![proptest_config(config(32))]
 
     /// The contract refines the reference model: every call's outcome, every balance,
-    /// reserve, queue, payment record and repo match it (A1, A2, A3, A5, A6, A8, A12–A14,
+    /// holding, queue, payment record and repo match it (A1, A2, A3, A5, A6, A8, A11–A14,
     /// A19, A20; S1–S5, S7, S9–S11, S13, S17, S21, S23; R4, R6; ADR-0004, ADR-0005,
     /// ADR-0008 to ADR-0011, ADR-0013 to ADR-0018).
     #[test]

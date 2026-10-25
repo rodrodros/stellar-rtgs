@@ -6,13 +6,15 @@
 //!
 //! The model's business day (A17, A18, value dates, τ_rc, τ_qc) does not exist here: time
 //! only moves forward (A19), payments expire from submission (ADR-0013, ADR-0015) and
-//! repos turn into penalty repos at their term (ADR-0014). A payment past its expiry stays
-//! queued until `expire` is called (see `state_machine.rs`), so S23 counts it.
+//! repos turn into penalty repos at their term (ADR-0014). As in `quint/settlement.qnt`, a
+//! payment past its expiry stays queued and can still settle until `expire` is called, so
+//! S23 counts it as a candidate and S7 orders it like any other (see `state_machine.rs`).
 //!
-//! Two things this property demands that no unit test states, for whoever implements the
-//! contract:
-//! - settling must debit before it credits, or book net amounts: crediting first
-//!   overflows on opposite `i128::MAX` payments;
+//! Two things this property demands, for whoever implements the contract:
+//! - an offset must book each bank's net change, computed exactly (for example with the
+//!   64-bit split of `reference::net_is_non_negative`). By S1 every end balance fits in
+//!   `i128`, but neither booking payment by payment nor applying every debit first stays in
+//!   range: both overflow at the `i128` limit (SC-A03-11, SC-A03-12);
 //! - a refused SAC call, such as an `open_repo` mint that would overflow the contract's
 //!   holding, must come back as a contract error, not a host abort.
 use std::collections::BTreeMap;
@@ -64,6 +66,7 @@ fn amount() -> impl Strategy<Value = i128> {
         1 => Just(FUNDING),
         1 => Just(FUNDING + 1),
         1 => Just(i128::MAX),
+        1 => Just(i128::MAX / 2 + 1),
         1 => Just(i128::MIN),
     ]
 }
@@ -77,6 +80,12 @@ fn id() -> impl Strategy<Value = u64> {
     0u64..24
 }
 
+/// Repo ids: a run opens a few repos at most, so a small range hits them often and still
+/// tries unknown ones.
+fn repo_id() -> impl Strategy<Value = u64> {
+    0u64..4
+}
+
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         3 => (0..N, amount()).prop_map(|(b, a)| Op::Deposit(b, a)),
@@ -85,11 +94,11 @@ fn op() -> impl Strategy<Value = Op> {
         1 => id().prop_map(Op::Revoke),
         1 => (id(), priority()).prop_map(|(i, p)| Op::Reprioritise(i, p)),
         1 => id().prop_map(Op::Expire),
-        1 => prop_oneof![Just(1u64), Just(100), Just(101), 0u64..=250].prop_map(Op::Tick),
+        2 => prop_oneof![Just(1u64), Just(100), Just(101), 0u64..=250].prop_map(Op::Tick),
         1 => (0..N, amount()).prop_map(|(b, a)| Op::SetCollateral(b, a)),
-        1 => (0..N, amount()).prop_map(|(b, a)| Op::OpenRepo(b, a)),
-        1 => (0..=N, 0u64..6, amount()).prop_map(|(who, r, a)| Op::Repay(who, r, a)),
-        1 => (0u64..6).prop_map(Op::ConvertOverdue),
+        2 => (0..N, amount()).prop_map(|(b, a)| Op::OpenRepo(b, a)),
+        2 => (0..=N, repo_id(), amount()).prop_map(|(who, r, a)| Op::Repay(who, r, a)),
+        2 => repo_id().prop_map(Op::ConvertOverdue),
     ]
 }
 
@@ -148,6 +157,12 @@ proptest! {
         let s = Setup::with_config(N, FUNDING, cfg.clone());
         let c = s.client();
         let actor = |who: usize| if who == N { s.cb.clone() } else { s.bank(who).clone() };
+        // Ops are drawn before the run, so an `OpenRepo` rarely follows a `SetCollateral` for
+        // the same bank. Every bank starts with collateral, so repos, repayments and penalty
+        // repos are reached; `SetCollateral` can still take it to zero.
+        for b in 0..N {
+            typed(c.try_set_collateral(s.bank(b), &FUNDING)).unwrap();
+        }
         // S1's right-hand side: the money that entered the ledger, less what left it.
         let mut issued: i128 = 0;
         let mut before = payments(&s);

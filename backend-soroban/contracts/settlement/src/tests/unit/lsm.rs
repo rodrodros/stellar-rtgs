@@ -146,11 +146,11 @@ fn a_deposit_can_make_an_offset_feasible() {
     s.assert_conserved();
 }
 
-/// SC-A03-07. Sums at the `i128` limit: B's two queued payments of `i128::MAX` add up to
-/// more than `i128` holds. The contract treats that prefix as infeasible rather than
-/// panicking, and settles the feasible one (R4, F1).
+/// SC-A03-07. Sums at the `i128` limit: B's two `i128::MAX` sum past `i128` without a
+/// panic. With both, B would end at −`i128::MAX`, so its prefix is cut back to one, and
+/// the feasible offset settles (R4, F1).
 #[test]
-fn an_outflow_that_overflows_i128_is_infeasible_not_a_panic() {
+fn at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative() {
     let s = Setup::new(2, 0);
     let c = s.client();
     let b1 = c.submit(s.bank(1), s.bank(0), &i128::MAX, &N);
@@ -180,5 +180,54 @@ fn after_an_offset_the_queues_are_at_rest() {
 
     assert_eq!(s.queue(0, N), std::vec![1]);
     assert_eq!(s.queue(2, N), std::vec![3]);
+    s.assert_conserved();
+}
+
+/// SC-A03-11. F1 is decided exactly, even where the sums exceed `i128` (ADR-0010). A
+/// has 1 and B nothing. A queues A→B twice `i128::MAX / 2 + 1`, whose sum is one more than
+/// `i128::MAX`, and B then submits B→A `i128::MAX`. A ends at 0 and B at 1, so k* = (2, 1)
+/// and all three settle in that submission. A rule that treats A's overflowing outflow as
+/// infeasible would find no feasible prefix and leave them gridlocked (S23).
+#[test]
+fn an_offset_whose_sums_exceed_i128_still_settles() {
+    let s = Setup::funded(&[1, 0]);
+    let c = s.client();
+    let h = i128::MAX / 2 + 1;
+    let a1 = c.submit(s.bank(0), s.bank(1), &h, &N);
+    let a2 = c.submit(s.bank(0), s.bank(1), &h, &N);
+    assert_eq!(c.queued_count(), 2);
+
+    let b1 = c.submit(s.bank(1), s.bank(0), &i128::MAX, &N);
+
+    for id in [a1, a2, b1] {
+        assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
+    }
+    assert_eq!(c.queued_count(), 0);
+    assert_eq!(s.balances(), std::vec![0, 1]);
+    s.assert_conserved();
+}
+
+/// SC-A03-12. The offset books each bank's net change exactly (A3, S1, S2; ADR-0010).
+/// With every balance 0, A→B, A→C and C→A queue, all `i128::MAX`, and B→A `i128::MAX`
+/// then makes k* = (2, 1, 1). A's outflow and inflow are each 2 · `i128::MAX`: debiting
+/// first, or payment by payment in id order, takes A to −2 · `i128::MAX`. All four settle
+/// and every balance ends at 0.
+#[test]
+fn an_offset_books_each_banks_net_change_exactly() {
+    let s = Setup::new(3, 0);
+    let c = s.client();
+    let max = i128::MAX;
+    let ab = c.submit(s.bank(0), s.bank(1), &max, &N);
+    let ac = c.submit(s.bank(0), s.bank(2), &max, &N);
+    let ca = c.submit(s.bank(2), s.bank(0), &max, &N);
+    assert_eq!(c.queued_count(), 3);
+
+    let ba = c.submit(s.bank(1), s.bank(0), &max, &N);
+
+    for id in [ca, ab, ac, ba] {
+        assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
+    }
+    assert_eq!(c.queued_count(), 0);
+    assert_eq!(s.balances(), std::vec![0, 0, 0]);
     s.assert_conserved();
 }

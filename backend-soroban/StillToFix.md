@@ -1,14 +1,15 @@
 # Still to fix
 
-This file lists every unit, auth, kernel and replay test, grouped into **execution flows**. A flow is one code path or one rule, and implementing it turns a set of tests green together. The flows are in order: each one needs only what the flows before it built.
+This file lists every unit, auth, kernel, property and replay test, grouped into **execution flows**. A flow is one code path or one rule, and implementing it turns a set of tests green together. The flows are in order: each one needs only what the flows before it built.
 
-**Baseline, 2026-10-24.** There are 132 tests: 9 pass and 123 fail, against the `todo!()` stubs in `contracts/settlement/src/lib.rs` and `crates/rtgs-core/src/lib.rs`, and against `deposit`'s missing guards. To reproduce this, run `make build`, then `cargo test --workspace --locked --no-fail-fast`. Plain `make test` stops at the first crate that fails.
+**Baseline, 2026-10-24.** There are 132 tests: 9 pass and 123 fail, against the `todo!()` stubs in `contracts/settlement/src/lib.rs` and `crates/rtgs-core/src/lib.rs`, and against `deposit`'s missing guards. To reproduce this, run `make build`, then `cargo test --workspace --locked --no-fail-fast`. Plain `make test` stops at the first crate that fails. The property and state-machine tests came after the baseline and add 17 more: 15 red (11 in Flows 4 and 12, 2 in Flow 13 and 2 in Flow 21) and 2 green in Flow 0, which check the reference rule those tests are judged by.
 
 Test paths follow `tests/SCENARIOS.md`:
 - `unit::…` stands for `tests::unit::…`;
 - `auth::…` for `tests::auth::…`;
 - `itf_replay::…` for `tests::itf_replay::…`, all in the `settlement` crate;
-- `core::…` for `rtgs_core::tests::…`.
+- `core::…` for `rtgs_core::tests::…`, and `core::props::…` for `rtgs_core::props::…`;
+- `props::…`, `state_machine::…` and `reference::…` for `tests::props::…`, `tests::state_machine::…` and `tests::reference::…`.
 
 The ID in brackets is the test's row in `tests/SCENARIOS.md`.
 
@@ -22,7 +23,7 @@ The ID in brackets is the test's row in `tests/SCENARIOS.md`.
   - Extending in the constructor would also turn SC-ST-01 and SC-ST-02 red. The test host constructs at ledger 0, so at their deposit on ledger 1,000 the instance is still above the threshold and is not extended again.
 - **When a test goes green,** tick its box. When a flow is done, update the status lines in `tests/SCENARIOS.md` and `README.md`.
 
-## Flow 0: already green (9)
+## Flow 0: already green (11)
 
 Keep these green.
 
@@ -35,6 +36,8 @@ Keep these green.
 - [x] `unit::storage::an_entry_is_extended_again_only_below_the_threshold` (SC-ST-02)
 - [x] `itf_replay::quint_traces_decode_and_cover_the_paths_the_replay_checks` (SC-MB-02)
 - [x] `itf_replay::settlement_events_match_as_a_set_with_each_offset_before_its_own_settlements` (SC-MB-01, pure helper)
+- [x] `reference::checks::the_reference_descent_is_the_greatest_feasible_prefix` (SC-P-09, test helper)
+- [x] `reference::checks::the_reference_descent_resolves_r7_and_cascades` (SC-P-09, test helper)
 
 ## Flow 1: the constructor records the config and the central bank (1)
 
@@ -71,11 +74,12 @@ After this flow, `integration/pending/deposit-failures.sh` and `integration/pend
 - [x] `auth::withdraw_is_authorized_by_the_bank_alone` (SC-A11-12)
 - [x] `auth::withdraw_without_the_banks_authorization_fails` (SC-A11-12)
 
-## Flow 4: the kernel's `covers` (1)
+## Flow 4: the kernel's `covers` (2)
 
 A pure rule in `rtgs-core`, which the contract then calls.
 
 - [ ] `core::covers_is_balance_minus_amount_at_least_zero` (SC-A03-10)
+- [ ] `core::props::covers_is_exactly_balance_at_least_amount` (SC-P-03)
 
 ## Flow 5: submit records a payment, then settles it at once or queues it (11)
 
@@ -155,7 +159,7 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 
 The payment keeps its place by id. `reprioritise` needs:
 - the sender's authorization;
-- `SamePriority`, `NotQueued` and `UnknownPayment`;
+- `SamePriority`, `NotQueued` and `UnknownPayment`, checked in the order SC-P-02 expects: `UnknownPayment`, `NotQueued`, `SamePriority`;
 - the `Reprioritised` event;
 - then the closure.
 
@@ -171,7 +175,7 @@ The payment keeps its place by id. `reprioritise` needs:
 
 ## Flow 11: expire, A5 under ADR-0015 (10)
 
-`expire` needs no authorization. While `now <= submitted_at + expiry_secs`, it refuses with `NotExpired`. It also needs `NotQueued`, `UnknownPayment`, the `Expired` event and then the closure.
+`expire` needs no authorization. While `now <= submitted_at + expiry_secs`, it refuses with `NotExpired`. It also needs `NotQueued`, `UnknownPayment`, the `Expired` event and then the closure. When several guards fail, SC-P-02 expects `UnknownPayment`, then `NotQueued`, then `NotExpired`.
 
 - [ ] `unit::queue_management::a_payment_past_its_expiry_can_be_expired` (SC-A05-01)
 - [ ] `unit::queue_management::a_payment_exactly_at_its_expiry_has_not_expired` (SC-A05-02)
@@ -184,11 +188,11 @@ The payment keeps its place by id. `reprioritise` needs:
 - [ ] `unit::queue_management::an_expired_payment_cannot_be_revoked` (SC-A06-05)
 - [ ] `auth::expire_needs_no_authorization` (SC-A05-09)
 
-One decision is still open (README): whether a payment can still settle once its expiry has passed but before anyone has expired it. No test decides it.
+One decision is still open (README): whether a payment can still settle once its expiry has passed but before anyone has expired it. No unit test decides it, but `quint/settlement.qnt` and the tests built on it assume it can: the replay (SC-MB-01) and the property tests (SC-P-01, SC-P-02).
 
-## Flow 12: the kernel's greatest feasible prefix (9)
+## Flow 12: the kernel's greatest feasible prefix (19)
 
-A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, where an outgoing sum that overflows makes a prefix infeasible. It depends on nothing, so it can be done at any time before Flow 13.
+A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, with F1 decided over the integers: queued sums can exceed `i128`, and an overflow must not make a prefix infeasible (SC-A03-11). It depends on nothing, so it can be done at any time before Flow 13.
 
 - [ ] `core::the_prefix_of_empty_queues_is_zero` (SC-A03-09)
 - [ ] `core::when_everything_fits_the_prefix_is_every_candidate` (SC-A03-09)
@@ -198,13 +202,23 @@ A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, where an outgoing sum th
 - [ ] `core::r7_cycle_has_prefix_one_one_one` (SC-A03-01)
 - [ ] `core::the_descent_drops_the_last_candidate_of_a_violating_account` (SC-A03-03)
 - [ ] `core::the_prefix_never_skips_an_earlier_candidate` (SC-A03-04)
-- [ ] `core::an_overflowing_sum_is_infeasible` (SC-A03-07)
+- [ ] `core::a_prefix_that_leaves_an_account_negative_is_cut_back_at_the_i128_limit` (SC-A03-07)
+- [ ] `core::props::the_prefix_is_within_every_queue` (SC-P-04)
+- [ ] `core::props::the_prefix_is_feasible` (SC-P-04)
+- [ ] `core::props::the_prefix_is_the_greatest_feasible_one` (SC-P-04)
+- [ ] `core::props::the_prefix_does_not_depend_on_the_account_order` (SC-P-05)
+- [ ] `core::props::more_liquidity_never_shrinks_the_prefix` (SC-P-05)
+- [ ] `core::props::gross_processing_never_beats_the_offset` (SC-P-06)
+- [ ] `core::props::after_the_offset_nothing_more_is_feasible` (SC-P-06)
+- [ ] `core::props::a_candidate_no_inflow_can_cover_blocks_its_queue` (SC-P-07)
+- [ ] `core::props::sums_beyond_i128_are_decided_exactly_not_a_panic` (SC-P-08)
+- [ ] `core::props::at_the_i128_limit_sums_are_decided_exactly` (SC-A03-11)
 
-## Flow 13: the LSM offset in the contract, A3 eager (8)
+## Flow 13: the LSM offset in the contract, A3 eager (10)
 
 Build on Flows 8 and 12. Once gross settlement is at rest:
 1. Build each bank's candidates in `≺` order: urgent first, then by id.
-2. Apply k*.
+2. Apply k*, booking each bank's net change exactly: payment by payment, or every debit first, overflows at the `i128` limit (SC-A03-11, SC-A03-12).
 3. Publish the `Offset` event, then one `Settled` event for each payment in it.
 4. Run the closure again.
 
@@ -214,8 +228,10 @@ Build on Flows 8 and 12. Once gross settlement is at rest:
 - [ ] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04)
 - [ ] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05)
 - [ ] `unit::lsm::a_deposit_can_make_an_offset_feasible` (SC-A03-06)
-- [ ] `unit::lsm::an_outflow_that_overflows_i128_is_infeasible_not_a_panic` (SC-A03-07)
+- [ ] `unit::lsm::at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative` (SC-A03-07)
 - [ ] `unit::lsm::after_an_offset_the_queues_are_at_rest` (SC-A03-08)
+- [ ] `unit::lsm::an_offset_whose_sums_exceed_i128_still_settles` (SC-A03-11)
+- [ ] `unit::lsm::an_offset_books_each_banks_net_change_exactly` (SC-A03-12)
 
 ## Flow 14: the offset's cost at the queue cap (1)
 
@@ -268,7 +284,7 @@ One decision is still open (README): who holds the SAC admin role. For now, the 
 ## Flow 18: repay, A13 with a burn (12)
 
 The actor, either the bank or the central bank, authorizes the call. Anyone else is refused with `NotAuthorized`. `repay` also needs:
-- `InvalidAmount`, `UnknownRepo`, `RepayExceedsRepo` and `InsufficientFunds`;
+- `InvalidAmount`, `UnknownRepo`, `RepayExceedsRepo` and `InsufficientFunds`. When several guards fail, SC-P-02 expects `UnknownRepo`, then `NotAuthorized`, then `RepayExceedsRepo`, then `InsufficientFunds`;
 - the debit and the burn from the contract;
 - the status `Repaid` once nothing is outstanding;
 - the `RepoRepaid` event.
@@ -307,14 +323,21 @@ Converting a repo moves its outstanding amount from `cr` to `ovn` and records th
 
 ## Flow 20: every entry point extends every entry it writes (1)
 
-The final check, since it calls every entry point.
+The last unit test, since it calls every entry point.
 
 - [ ] `unit::storage::every_entry_point_extends_every_entry_it_writes` (SC-ST-03)
+
+## Flow 21: the property and state-machine tests over random call sequences (2)
+
+They call every entry point and every view, so they turn green last. A failure prints a shrunk call sequence; turn it into a unit test before fixing it. The requirements they add, and what they assume about expiry, are in `tests/SCENARIOS.md`, "Properties over many inputs".
+
+- [ ] `props::the_safety_invariants_hold_for_any_call_sequence` (SC-P-01)
+- [ ] `state_machine::the_contract_refines_the_reference_model` (SC-P-02)
 
 ## Totals
 
 | | Tests |
 |---|---|
-| Already green (Flow 0) | 9 |
-| Still to fix (Flows 1 to 20) | 123 |
-| All | 132 |
+| Already green (Flows 0 to 3) | 24 |
+| Still to fix (Flows 4 to 21) | 125 |
+| All | 149 |
