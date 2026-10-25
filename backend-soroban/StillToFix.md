@@ -325,17 +325,21 @@ Flow 14's third and fourth reviews then made the cost tests' banks Stellar accou
 - [x] `unit::storage::a_submission_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-10). Added in Flow 15; red first, since the closing payment was refused with `QueueFull`.
 - [x] `unit::storage::a_submission_refused_at_the_cap_fits_in_one_transaction` (SC-ST-11). Added in Flow 15, since a refused submission now pays for the closure; it passed before the change, when the refusal came first, and fails if a refusal at the cap goes over Mainnet's limits instead of returning `QueueFull`.
 
-## Flow 16: collateral, A14 (4)
+## Flow 16: collateral, A14 (5)
 
 Implement the `credit()` view, and `set_collateral` with:
 - the central bank's authorization;
 - `InvalidAmount`;
-- the `CollateralSet` event.
+- the `CollateralSet` event;
+- the extension of the instance and of the bank's `Credit` entry.
 
-- [ ] `unit::credit::the_central_bank_sets_a_banks_collateral` (SC-A14-01)
-- [ ] `unit::credit::collateral_can_be_zero_but_not_negative` (SC-A14-02)
-- [ ] `auth::set_collateral_is_authorized_by_the_central_bank` (SC-A14-04)
-- [ ] `auth::only_the_central_bank_can_set_collateral` (SC-A14-04)
+Each bank's credit position is its own persistent entry, `Credit(bank)`, as its balance is.
+
+- [x] `unit::credit::the_central_bank_sets_a_banks_collateral` (SC-A14-01)
+- [x] `unit::credit::collateral_can_be_zero_but_not_negative` (SC-A14-02)
+- [x] `auth::set_collateral_is_authorized_by_the_central_bank` (SC-A14-04)
+- [x] `auth::only_the_central_bank_can_set_collateral` (SC-A14-04). It also pins the order: authorization before the guard `x ≥ 0`.
+- [x] `unit::storage::setting_collateral_extends_the_instance_and_the_credit_to_thirty_days` (SC-ST-12). Added in Flow 16, red first: `set_collateral` did not extend the instance. Flow 20's test can't catch that, since its first call is a deposit, which extends the instance in the same ledger. It also checks that the contract owns exactly the instance and one persistent `Credit(bank)` entry, so credit kept in the instance or in temporary storage fails.
 
 ## Flow 17: open a repo, A12 with a mint (9)
 
@@ -347,9 +351,9 @@ Implement the `credit()` view, and `set_collateral` with:
 - the `RepoOpened` event;
 - then the closure.
 
-`set_collateral` also gains its `CollateralBelowCredit` check.
+`set_collateral` also gains its `CollateralBelowCredit` check. SC-A14-03 also forces `set_collateral` to keep the bank's `cr` and `ovn` when it rewrites `Credit(bank)`: until repos exist they are always 0, so no Flow 16 test does.
 
-`open_repo` runs the closure, so a repo can make a full queue's offset feasible. At the cap of 62, full queues use up to 194 of the 200 writes, and 392 of the test host's 400 footprint entries, for a covered `submit` (SC-ST-08), and up to 16,280 of the 16,384 bytes of events and return value for a `submit` that completes an offset (SC-ST-10), with Stellar accounts as banks; `open_repo` writes more entries and publishes more events of its own (its own event and the SAC's mint), so price both. Price it at the cap, and lower the cap if it doesn't fit.
+`open_repo` runs the closure, so a repo can make a full queue's offset feasible. At the cap of 62, full queues use up to 194 of the 200 writes, and 392 of the test host's 400 footprint entries, for a covered `submit` (SC-ST-08), and up to 16,280 of the 16,384 bytes of events and return value for a `submit` that completes an offset (SC-ST-10), with Stellar accounts as banks; `open_repo` writes more entries and publishes more events of its own (its own event and the SAC's mint), so price both. Price it at the cap, and lower the cap if it doesn't fit. Flow 16's review priced a throwaway `open_repo` (mint, `Credit(bank)`, a global repo counter, `Repo(id)`, the balance, then the closure) on the old cap of 63: 400 of the 400 entries on SC-ST-07's tree, 4 more than a deposit on the same queue, and 399 on SC-ST-05's path. Expect the same margin over a deposit at 62. Any further entry `open_repo` writes, such as a per-bank repo index, must be priced too.
 
 - [ ] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
 - [ ] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
@@ -420,8 +424,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 15) | 155 |
-| Still to fix (Flows 16 to 21) | 37 |
-| All | 192 |
+| Already green (Flows 0 to 16) | 160 |
+| Still to fix (Flows 17 to 21) | 33 |
+| All | 193 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, and Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, and Flow 16 added SC-ST-12.

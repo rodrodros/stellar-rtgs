@@ -412,7 +412,9 @@ fn set_collateral_is_authorized_by_the_central_bank() {
 }
 
 /// SC-A14-04. S6 for A14: neither the bank's authorization nor none at all can set the
-/// bank's collateral; the central bank's can.
+/// bank's collateral; the central bank's can. Authorization comes before A14's guard
+/// `x ≥ 0`, as in `deposit` and `submit`: an unauthorized negative value is an auth
+/// failure, not `InvalidAmount`.
 #[test]
 fn only_the_central_bank_can_set_collateral() {
     let setup = Setup::new(1, 0);
@@ -427,6 +429,11 @@ fn only_the_central_bank_can_set_collateral() {
     setup.env.set_auths(&[]);
     assert_eq!(
         host_error(&setup, "set_collateral", args.clone()),
+        auth_failure()
+    );
+    let negative: Vec<Val> = (setup.bank(0).clone(), -1_i128).into_val(&setup.env);
+    assert_eq!(
+        host_error(&setup, "set_collateral", negative),
         auth_failure()
     );
     assert_eq!(client.credit(setup.bank(0)).coll, 0);

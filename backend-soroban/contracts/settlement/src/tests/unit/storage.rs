@@ -16,6 +16,7 @@
 use soroban_sdk::{
     testutils::Ledger as _,
     xdr::{self, LedgerKey, Limits, ScAddress, WriteXdr},
+    IntoVal, TryFromVal, Val,
 };
 
 use crate::tests::support::{default_config, Setup};
@@ -43,6 +44,36 @@ fn our_entries(setup: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
         .collect()
 }
 
+/// The ledger key of the contract's instance.
+fn instance_key(setup: &Setup) -> LedgerKey {
+    LedgerKey::ContractData(xdr::LedgerKeyContractData {
+        contract: ScAddress::from(&setup.contract),
+        key: xdr::ScVal::LedgerKeyContractInstance,
+        durability: xdr::ContractDataDurability::Persistent,
+    })
+}
+
+/// The ledger key of the contract's persistent entry under `key`.
+fn persistent_key(setup: &Setup, key: DataKey) -> LedgerKey {
+    let key: Val = key.into_val(&setup.env);
+    LedgerKey::ContractData(xdr::LedgerKeyContractData {
+        contract: ScAddress::from(&setup.contract),
+        key: xdr::ScVal::try_from_val(&setup.env, &key).unwrap(),
+        durability: xdr::ContractDataDurability::Persistent,
+    })
+}
+
+/// Asserts that the contract owns exactly the entries under `keys`, in any order, so an
+/// entry kept in the wrong storage (the instance, or temporary storage) fails.
+fn assert_owns_exactly(setup: &Setup, keys: &[LedgerKey]) {
+    let mut owned: std::vec::Vec<LedgerKey> =
+        our_entries(setup).into_iter().map(|(key, _)| key).collect();
+    let mut expected = keys.to_vec();
+    owned.sort();
+    expected.sort();
+    assert_eq!(owned, expected);
+}
+
 /// Asserts that every entry the contract owns lives until exactly `until`.
 fn assert_every_entry_lives_until(setup: &Setup, until: u32) {
     let entries = our_entries(setup);
@@ -62,6 +93,27 @@ fn a_deposit_extends_the_instance_and_the_balance_to_thirty_days() {
     setup.client().deposit(setup.bank(0), &600);
 
     assert_every_entry_lives_until(&setup, 1_000 + BUMP_AMOUNT);
+}
+
+/// SC-ST-12. A14 (ADR-0011): setting a bank's collateral, with nothing else called,
+/// extends the instance and the bank's credit entry to `BUMP_AMOUNT` ledgers from the
+/// call. The credit entry is the bank's own persistent entry, so it is archived rather
+/// than deleted if its TTL ever lapses, and not loaded with the instance on every call.
+#[test]
+fn setting_collateral_extends_the_instance_and_the_credit_to_thirty_days() {
+    let setup = Setup::new(1, 0);
+    setup.env.ledger().set_sequence_number(5_000);
+
+    setup.client().set_collateral(setup.bank(0), &100);
+
+    assert_owns_exactly(
+        &setup,
+        &[
+            instance_key(&setup),
+            persistent_key(&setup, DataKey::Credit(setup.bank(0).clone())),
+        ],
+    );
+    assert_every_entry_lives_until(&setup, 5_000 + BUMP_AMOUNT);
 }
 
 /// An entry is extended again once its remaining TTL falls below `BUMP_THRESHOLD`, and

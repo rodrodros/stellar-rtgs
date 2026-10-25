@@ -26,10 +26,11 @@ fn credit(cr: i128, ovn: i128, coll: i128) -> Credit {
 // A14 set_collateral
 
 /// SC-A14-01. A14: the central bank sets a bank's collateral value; a bank with none has
-/// an all-zero credit position.
+/// an all-zero credit position. Collateral is per bank: setting one bank's leaves
+/// another's as it was.
 #[test]
 fn the_central_bank_sets_a_banks_collateral() {
-    let setup = Setup::new(1, 0);
+    let setup = Setup::new(2, 0);
     let client = setup.client();
     assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 0));
 
@@ -43,6 +44,11 @@ fn the_central_bank_sets_a_banks_collateral() {
         })]
     );
     assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
+    assert_eq!(client.credit(setup.bank(1)), credit(0, 0, 0));
+
+    client.set_collateral(setup.bank(1), &40);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
+    assert_eq!(client.credit(setup.bank(1)), credit(0, 0, 40));
 }
 
 /// SC-A14-02. A14's guard `x ≥ 0`: zero releases all collateral; a negative value is

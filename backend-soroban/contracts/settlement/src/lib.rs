@@ -178,6 +178,9 @@ enum DataKey {
     /// queues that exist, as gross settlement does; no entry while no payment is queued at
     /// that priority.
     QueuedBanks(Priority),
+    /// One key per bank, as `Balance` is. No entry until the central bank first sets the
+    /// bank's collateral; `credit()` reads a missing entry as all zero.
+    Credit(Address),
 }
 
 #[contractevent]
@@ -874,9 +877,24 @@ impl Settlement {
         Ok(())
     }
 
-    /// A14: the central bank sets a bank's collateral value, after haircuts.
-    pub fn set_collateral(_env: Env, _bank: Address, _value: i128) -> Result<(), Error> {
-        todo!()
+    /// A14: the central bank sets a bank's collateral value, after haircuts (ADR-0011).
+    ///
+    /// The central bank authorizes it alone (S6). A value below 0 is refused with
+    /// `InvalidAmount`; 0 releases all collateral. The value replaces the old one, and
+    /// `CollateralSet` records it.
+    pub fn set_collateral(env: Env, bank: Address, value: i128) -> Result<(), Error> {
+        Self::central_bank(env.clone()).require_auth();
+        if value < 0 {
+            return Err(Error::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        let mut credit = Self::credit(env.clone(), bank.clone());
+        credit.coll = value;
+        put(&env, &DataKey::Credit(bank.clone()), &credit);
+        CollateralSet { bank, value }.publish(&env);
+        Ok(())
     }
 
     /// A12: the central bank opens a repo, minting `amount` against the bank's collateral.
@@ -923,8 +941,15 @@ impl Settlement {
     }
 
     /// The bank's credit position; all zero for a bank with none.
-    pub fn credit(_env: Env, _bank: Address) -> Credit {
-        todo!()
+    pub fn credit(env: Env, bank: Address) -> Credit {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Credit(bank))
+            .unwrap_or(Credit {
+                cr: 0,
+                ovn: 0,
+                coll: 0,
+            })
     }
 
     pub fn repo(_env: Env, _id: u64) -> Option<Repo> {
