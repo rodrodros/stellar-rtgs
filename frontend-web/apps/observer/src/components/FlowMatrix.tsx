@@ -10,8 +10,8 @@ type Mode = "settled" | "net" | "queued";
 
 const MODES: { mode: Mode; label: string; note: string }[] = [
   { mode: "settled", label: "Settled", note: "Gross amounts settled in the loaded window." },
-  { mode: "net", label: "Settled, net", note: "For each pair, what the larger payer paid beyond what it received, in the loaded window." },
-  { mode: "queued", label: "Queued", note: "Payment orders waiting in the queues now: where an offset could help." },
+  { mode: "net", label: "Bilateral position", note: "For each pair, what the larger payer paid beyond what it received, in the loaded window." },
+  { mode: "queued", label: "Queued", note: "Payment orders waiting in the queues now: where liquidity is held up." },
 ];
 
 export function FlowMatrix() {

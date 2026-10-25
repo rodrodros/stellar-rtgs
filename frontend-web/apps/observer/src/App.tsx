@@ -8,6 +8,7 @@ import { ChainStatus, ConnectBar, MainnetConfirm, PaymentSearch, RetentionBar } 
 import { BanksTable, CapabilityNote, CreditPanel, QueueGauge, QueueLanes } from "./components/System.tsx";
 import { Timeline } from "./components/Timeline.tsx";
 import { toFeedStart } from "./model/retention.ts";
+import { CLEAR_ON_NETWORK_CHANGE } from "./state/query.tsx";
 import { QueryProvider, useQuery } from "./state/query.tsx";
 
 function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefined; onRetry?: () => void; onDismiss?: () => void }) {
@@ -39,6 +40,7 @@ function Dashboard(props: { onReconnect: () => void }) {
   const { network } = useSession();
   const status = useSnapshot((s) => s.status);
   const error = useSnapshot((s) => s.error);
+  const registryError = useSnapshot((s) => s.registryError);
   // Core clears the store's error once a read succeeds again; until then it can be dismissed.
   const [dismissed, setDismissed] = useState<RtgsError>();
   return (
@@ -51,6 +53,12 @@ function Dashboard(props: { onReconnect: () => void }) {
       <CapabilityNote />
       {error && error !== dismissed && (
         <ErrorBanner error={error} network={network} onRetry={props.onReconnect} onDismiss={() => setDismissed(error)} />
+      )}
+      {registryError && (
+        <div className="banner banner-warn" role="status">
+          Couldn't read the bank registry from the central bank's account ({registryError.detail}), so banks registered only there may be
+          missing. It is read again every 30 seconds.
+        </div>
       )}
       {status === "loading" && <p className="loading">Reading balances, queues and recent payment orders…</p>}
       <main className="grid">
@@ -112,7 +120,7 @@ function Observer(props: { env: Env }) {
       {query.network && !network && (
         <div className="banner banner-error" role="alert">
           {query.network === "mainnet"
-            ? "Mainnet isn't enabled in this build: it needs VITE_RTGS_ENABLE_MAINNET=true and VITE_RTGS_MAINNET_RPC_URL."
+            ? "Mainnet isn't enabled in this build: it needs VITE_RTGS_ENABLE_MAINNET=true (and VITE_RTGS_MAINNET_RPC_URL to connect)."
             : `There is no network "${query.network}" in this build.`}{" "}
           Choose a network above.
         </div>
@@ -127,7 +135,7 @@ function Observer(props: { env: Env }) {
         <MainnetConfirm
           onConfirm={() => setMainnetConfirmed(true)}
           onCancel={() =>
-            update({ network: defaultNetwork(networks, env).id, contract: undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined })
+            update({ network: defaultNetwork(networks, env).id, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "retention" as const } : {}) })
           }
         />
       )}

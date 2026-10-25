@@ -3,10 +3,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { ledgerUrl, toRtgsError, txUrl, useLedgerClock, useSession, useSnapshot, type LifecycleStep, type Payment, type PaymentRecord, type RtgsError } from "../core.ts";
 import { expiryOf, formatDuration } from "../model/expiry.ts";
-import { useTruncated, useTxGroups } from "../state/groups.ts";
+import type { TxGroup } from "../model/timeline.ts";
+import { useTxGroups } from "../state/groups.ts";
 import { useNav } from "../state/query.tsx";
 import { SettlementCause } from "./EventText.tsx";
 import { Address, Amount, ExplorerLink, priorityLabel, Time, TxLink } from "./format.tsx";
+import { EXPIRE_NOTE } from "./System.tsx";
 import { TxEvents } from "./Timeline.tsx";
 
 function Drawer(props: { title: ReactNode; label: string; children: ReactNode }) {
@@ -40,10 +42,9 @@ const STEP_LABEL: Record<LifecycleStep["kind"], string> = {
 };
 
 /** A settled step's cause, from its transaction's events when they are loaded, else from core's summary. */
-function StepCause(props: { step: LifecycleStep }) {
+function StepCause(props: { step: LifecycleStep; groups: TxGroup[] }) {
   const { step } = props;
-  const groups = useTxGroups();
-  const group = groups.find((g) => g.txHash === step.txHash);
+  const group = props.groups.find((g) => g.txHash === step.txHash);
   const settlement = group?.settlements.find((s) => s.event.eventId === step.eventId);
   if (group && settlement) return <SettlementCause settlement={settlement} trigger={group.trigger} />;
   if (step.via === "at-once") return <span className="cause">settled at once on submission</span>;
@@ -85,7 +86,7 @@ function QueuePlace(props: { payment: Payment }) {
           {"'s"} {priorityLabel(payment.priority).toLowerCase()} queue.{" "}
           {index === 0 && analysis.blockedBy === "uncovered" && (
             <>
-              Blocked: the settlement balance (<Amount value={view.balance} />) doesn't cover it.
+              Uncovered: the settlement balance (<Amount value={view.balance} />) doesn't cover it.
             </>
           )}
           {index === 0 && analysis.blockedBy === "urgent-queued" && <>Held back: the sender has urgent payment orders queued.</>}
@@ -95,8 +96,7 @@ function QueuePlace(props: { payment: Payment }) {
       {expiry.kind === "running" && <p>Expires in {formatDuration(expiry.secondsLeft)}.</p>}
       {expiry.kind === "passed" && (
         <p className="warn">
-          Its expiry passed {formatDuration(expiry.secondsAgo)} ago.{" "}
-          {caps.expire === "available" ? "A keeper may reject it now." : "Expiry is not implemented in this contract yet."}
+          Its expiry passed {formatDuration(expiry.secondsAgo)} ago{EXPIRE_NOTE[caps.expire]}.
         </p>
       )}
     </div>
@@ -106,16 +106,16 @@ function QueuePlace(props: { payment: Payment }) {
 function Lifecycle(props: { record: PaymentRecord }) {
   const { record } = props;
   const feed = useSnapshot((s) => s.feed);
-  const truncated = useTruncated();
+  const groups = useTxGroups();
   const sawSubmission = record.steps.some((s) => s.kind === "submitted");
   return (
     <>
       {!sawSubmission && (
         <p className="note">
-          {truncated
-            ? "Its earlier events are older than the events kept in memory"
-            : `Submitted before the loaded events${feed.startLedger !== undefined ? `, which start at ledger ${feed.startLedger.toLocaleString()}` : ""}`}
-          , so they aren't shown. Its status comes from the contract.
+          {feed.state === "backfilling"
+            ? "Older events are still loading, so its submission may not be shown yet."
+            : `Submitted before the loaded events${feed.startLedger !== undefined ? `, which start at ledger ${feed.startLedger.toLocaleString()}` : ""}, so its submission isn't shown.`}{" "}
+          Its status comes from the contract.
         </p>
       )}
       <ol className="lifecycle">
@@ -126,7 +126,7 @@ function Lifecycle(props: { record: PaymentRecord }) {
             {step.kind === "settled" && (
               <>
                 {" — "}
-                <StepCause step={step} />
+                <StepCause step={step} groups={groups} />
               </>
             )}
             <div className="step-meta">
@@ -134,7 +134,7 @@ function Lifecycle(props: { record: PaymentRecord }) {
             </div>
           </li>
         ))}
-        {record.status === "queued" && <li className="step step-waiting">Queued: waiting for cover</li>}
+        {record.status === "queued" && <li className="step step-waiting">Queued: not settled yet</li>}
       </ol>
     </>
   );

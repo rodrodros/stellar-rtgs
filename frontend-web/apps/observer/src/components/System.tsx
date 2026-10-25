@@ -28,7 +28,7 @@ function HeadStatus(props: { view: BankView }) {
   const short = (blocked.head?.amount ?? 0n) - props.view.balance;
   return (
     <span className="status status-blocked">
-      {priorityLabel(blocked.priority).toLowerCase()} head blocked: needs <Amount value={short} /> more
+      {priorityLabel(blocked.priority).toLowerCase()} head uncovered: needs <Amount value={short} /> more
     </span>
   );
 }
@@ -140,17 +140,20 @@ export function QueueGauge() {
   );
 }
 
+/** What a payment order past its expiry means, by whether the contract implements `expire`. */
+export const EXPIRE_NOTE: Record<Capabilities[keyof Capabilities], string> = {
+  available: ": a keeper may reject it",
+  stub: " (expiry not implemented in this contract yet)",
+  unknown: " (couldn't tell whether this contract implements expiry)",
+};
+
 function ExpiryText(props: { payment: Payment; now: number | undefined }) {
   const config = useSnapshot((s) => s.config);
   const caps = useSnapshot((s) => s.capabilities);
   const expiry = expiryOf(props.payment, config, props.now);
   if (expiry.kind === "unknown") return null;
   if (expiry.kind === "running") return <span className="expiry">expires in {formatDuration(expiry.secondsLeft)}</span>;
-  return (
-    <span className="expiry passed">
-      {caps.expire === "available" ? "past expiry: a keeper may reject it" : "past expiry (expiry not implemented in this contract yet)"}
-    </span>
-  );
+  return <span className="expiry passed">past expiry{EXPIRE_NOTE[caps.expire]}</span>;
 }
 
 function Lane(props: { view: BankView; priority: Priority; now: number | undefined }) {
@@ -183,7 +186,9 @@ function Lane(props: { view: BankView; priority: Priority; now: number | undefin
 }
 
 export function QueueLanes() {
-  const banks = useBanks().filter(({ view }) => view && view.queues.urgent.length + view.queues.normal.length > 0);
+  const all = useBanks();
+  const loading = all.some(({ view }) => !view);
+  const banks = all.filter(({ view }) => view && view.queues.urgent.length + view.queues.normal.length > 0);
   // One clock for every countdown on the panel.
   const { now } = useLedgerClock();
   return (
@@ -193,7 +198,7 @@ export function QueueLanes() {
         <span className="muted">queue order: urgent first, then strict FIFO within each priority class</span>
       </header>
       {banks.length === 0 ? (
-        <p className="empty">Every queue is empty: the system is at rest.</p>
+        <p className="empty">{loading ? "Reading the queues…" : "Every queue is empty: the system is at rest."}</p>
       ) : (
         banks.map(({ bank, view }) => (
           <div key={bank.address} className="bank-queues">
@@ -244,7 +249,11 @@ export function CreditPanel() {
         <header className="panel-header">
           <h2 id="credit-title">Credit</h2>
         </header>
-        <p className="empty">Credit (intraday repos) is not implemented in this contract yet.</p>
+        <p className="empty">
+          {caps.credit === "unknown"
+            ? "Couldn't tell whether this contract implements credit (intraday repos)."
+            : "Credit (intraday repos) is not implemented in this contract yet."}
+        </p>
       </section>
     );
   }

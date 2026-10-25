@@ -246,6 +246,11 @@ h3 {
   border: 1px solid var(--bad);
 }
 
+.banner-warn {
+  background: color-mix(in srgb, var(--warn) 12%, var(--panel));
+  border: 1px solid var(--warn);
+}
+
 .loading {
   color: var(--muted);
 }

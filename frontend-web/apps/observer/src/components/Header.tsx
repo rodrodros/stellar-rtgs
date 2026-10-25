@@ -5,11 +5,11 @@ import { STORE_EVENT_LIMIT, useLedgerClock, useSession, useSnapshot, type Networ
 import { formatDuration } from "../model/expiry.ts";
 import { checkStartLedger, ledgerSecondsAgo, retentionWindow, type StartChoice } from "../model/retention.ts";
 import { isContractId } from "../model/url.ts";
-import { useNav, useQuery } from "../state/query.tsx";
+import { CLEAR_ON_NETWORK_CHANGE, useNav, useQuery } from "../state/query.tsx";
 import { Time } from "./format.tsx";
 
 export function ConnectBar(props: { networks: NetworkConfig[]; selected: string | undefined; contractId: string | undefined }) {
-  const { update } = useQuery();
+  const { query, update } = useQuery();
   const [contract, setContract] = useState(props.contractId ?? "");
   const [invalid, setInvalid] = useState(false);
   useEffect(() => setContract(props.contractId ?? ""), [props.contractId]);
@@ -32,7 +32,7 @@ export function ConnectBar(props: { networks: NetworkConfig[]; selected: string 
         <select
           value={props.selected ?? ""}
           onChange={(e) =>
-            update({ network: e.target.value, contract: undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined })
+            update({ network: e.target.value, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "retention" as const } : {}) })
           }
         >
           {props.selected === undefined && <option value="">Choose…</option>}
@@ -167,6 +167,11 @@ export function RetentionBar() {
           </>
         )}
         {feed.clamped && <span className="warn">The requested start was older than the retention window, so loading starts at its oldest ledger. </span>}
+        {typeof query.from === "number" && feed.startLedger !== undefined && feed.startLedger < query.from && (
+          <span className="warn">
+            Ledger {query.from.toLocaleString()} hasn't closed yet, so loading starts at the latest ledger. Is it from another network?{" "}
+          </span>
+        )}
         {kept >= STORE_EVENT_LIMIT && (
           <span className="warn">Only the newest {STORE_EVENT_LIMIT.toLocaleString()} events are kept; older ones have left the timeline. </span>
         )}

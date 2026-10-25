@@ -9,7 +9,7 @@ A read-only watcher of the RTGS: pick a network and a settlement contract, then 
   - settled by the eager closure, after the action that released it (a deposit, a revocation, a reprioritisation) or after an earlier settlement in the same cascade credited the sender;
   - settled in an offset.
 
-  Cash token (SAC) events are hidden by default.
+  Cash token (SAC) events are hidden by default. The causes assume one call to the settlement contract per transaction, as core does; a contract that called it twice in one transaction would get the second call's causes wrong.
 - **Participants:** each bank's settlement balance, queue lengths, and why a queue head waits ("needs X more", or held back by the urgent queue). Credit columns appear once the contract implements `credit`.
 - **Central queue:** `queued_count` against `queue_cap`, and the live `config()`.
 - **Queues:** each bank's urgent and normal queues in queue order. Each shows its head, why the head is blocked, and every payment order's expiry countdown.
@@ -19,7 +19,7 @@ A read-only watcher of the RTGS: pick a network and a settlement contract, then 
 - **Transaction** (`?tx=<hash>`) and **ledger** (`?ledger=<n>`): all the events of one transaction, or every loaded transaction of one ledger, with a link to the network's explorer where core configures one (stellar.expert on testnet and mainnet; none on the devnet).
 - **Retention window:** what RPC still keeps (about 7 days by default) and where the loaded history starts. You can load from the whole window, the last hour, now, or a ledger number; while older events load, it shows how far it has read. Older history would need an indexer, which this project doesn't have. Balances, queues and payment orders are still read live from the contract.
 
-The whole view is in the URL (`?network=&contract=&from=&payment=&tx=&ledger=`), so it can be shared or put on a demo screen. A link whose network isn't offered, or whose contract id is malformed, is refused rather than shown against another network or contract.
+The whole view is in the URL (`?network=&contract=&from=&payment=&tx=&ledger=`), so it can be shared or put on a demo screen. Switching network drops the contract, any open drawer and a start ledger (ledger numbers belong to one network). A link whose network isn't offered, or whose contract id is malformed, is refused rather than shown against another network or contract.
 
 ## Running it
 
@@ -29,7 +29,7 @@ pnpm --filter @rtgs/observer dev        # http://localhost:5176
 pnpm --filter @rtgs/observer build      # static bundle in dist/
 ```
 
-Settings come from `VITE_RTGS_*` env vars (see `../../.env.example` and `packages/core/README.md`). On devnet the contract is found on the central bank's account after a bootstrap. On testnet, set `VITE_RTGS_TESTNET_CONTRACT_ID`, or paste the id into the contract field. Mainnet is listed only with `VITE_RTGS_ENABLE_MAINNET=true` and `VITE_RTGS_MAINNET_RPC_URL`, and you confirm it every time you choose it.
+Settings come from `VITE_RTGS_*` env vars (see `../../.env.example` and `packages/core/README.md`). On devnet the contract is found on the central bank's account after a bootstrap. On testnet, set `VITE_RTGS_TESTNET_CONTRACT_ID`, or paste the id into the contract field. Mainnet is listed only with `VITE_RTGS_ENABLE_MAINNET=true` (connecting also needs `VITE_RTGS_MAINNET_RPC_URL`), and you confirm it every time you choose it.
 
 ## Tests
 

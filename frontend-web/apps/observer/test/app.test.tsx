@@ -65,7 +65,7 @@ describe("system picture", () => {
   it("shows balances, the central queue and why each queue head waits", () => {
     open("");
     const banks = screen.getByRole("region", { name: "Participants" });
-    expect(within(banks).getByText("Bank C").closest("tr")!.textContent).toMatch(/200 USD.*1.*1.*urgent head blocked: needs 800 USD more/);
+    expect(within(banks).getByText("Bank C").closest("tr")!.textContent).toMatch(/200 USD.*1.*1.*urgent head uncovered: needs 800 USD more/);
     expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("2");
     expect(screen.getByRole("region", { name: "Central queue" }).textContent).toMatch(/2 \/ 16 queued/);
 
@@ -80,6 +80,21 @@ describe("system picture", () => {
     expect(screen.getByText("Credit (intraday repos) is not implemented in this contract yet.")).toBeTruthy();
     expect(screen.queryByText("Intraday credit")).toBeNull();
     expect(screen.getByText(/Not implemented in this contract yet: collateral, repos/)).toBeTruthy();
+  });
+
+  it("says when it couldn't tell whether credit and expiry are implemented, rather than calling them stubs", () => {
+    const capabilities = { ...snapshotOf().capabilities, credit: "unknown" as const, repo: "unknown" as const, expire: "unknown" as const };
+    const config = { ...snapshotOf().config!, expirySecs: 1 };
+    connection.result = { session: fakeSession(snapshotOf(undefined, { capabilities, config })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByText("Couldn't tell whether this contract implements credit (intraday repos).")).toBeTruthy();
+    expect(screen.getAllByText(/past expiry \(couldn't tell whether this contract implements expiry\)/).length).toBeGreaterThan(0);
+  });
+
+  it("says the queues are still being read rather than empty", () => {
+    connection.result = { session: fakeSession(snapshotOf(undefined, { status: "loading", banks: new Map() })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByRole("region", { name: "Queues" }).textContent).toMatch(/Reading the queues…/);
   });
 
   it("shows credit columns once the contract implements credit", () => {
@@ -131,7 +146,15 @@ describe("payment lifecycle", () => {
     fake.read.payment.mockResolvedValue({ id: 7n, from: C, to: "GBANKA", amount: u(1), priority: "normal", submittedAt: 1, status: "settled", settledAt: 2 });
     connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
     open("?payment=7");
-    expect(await screen.findByText(/Submitted before the loaded events, which start at ledger 90, so they aren't shown/)).toBeTruthy();
+    expect(await screen.findByText(/Submitted before the loaded events, which start at ledger 90, so its submission isn't shown/)).toBeTruthy();
+  });
+
+  it("says a missing submission may still arrive while older events load", async () => {
+    const fake = fakeSession(snapshotOf(undefined, { feed: { ...snapshotOf().feed, state: "backfilling" } }));
+    fake.read.payment.mockResolvedValue({ id: 7n, from: C, to: "GBANKA", amount: u(1), priority: "normal", submittedAt: 1, status: "queued" });
+    connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
+    open("?payment=7");
+    expect(await screen.findByText(/Older events are still loading, so its submission may not be shown yet/)).toBeTruthy();
   });
 
   it("opens a transaction's events from the timeline", () => {
@@ -173,8 +196,8 @@ describe("networks", () => {
     expect(window.location.search).toBe("?network=devnet");
   });
 
-  it("switching network drops the contract and any open drawer", () => {
-    open(`?contract=C${"A".repeat(55)}&payment=1`);
+  it("switching network drops the contract, any open drawer and a start ledger", () => {
+    open(`?contract=C${"A".repeat(55)}&payment=1&from=95`);
     expect(connection.calls.at(-1)!.options.contractId).toBe(`C${"A".repeat(55)}`);
     fireEvent.change(screen.getByLabelText("Network"), { target: { value: "testnet" } });
     expect(window.location.search).toBe("?network=testnet");
@@ -212,6 +235,18 @@ describe("retention window", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
     expect(window.location.search).toBe("?from=95");
     expect(connection.calls.at(-1)!.key).toBe("95");
+  });
+
+  it("keeps a start preset across a network switch", () => {
+    open("?from=now");
+    fireEvent.change(screen.getByLabelText("Network"), { target: { value: "testnet" } });
+    expect(window.location.search).toBe("?network=testnet&from=now");
+  });
+
+  it("warns when the requested start ledger hasn't closed, so loading starts at the latest", () => {
+    connection.result = { session: fakeSession(snapshotOf(undefined, { feed: { ...snapshotOf().feed, startLedger: 103 } })).session, connecting: false, reconnect: vi.fn() };
+    open("?from=500000");
+    expect(screen.getByText(/Ledger 500,000 hasn't closed yet, so loading starts at the latest ledger/)).toBeTruthy();
   });
 
   it("warns when the requested start was older than the window", () => {
@@ -275,7 +310,7 @@ describe("every contract event", () => {
     const flows = screen.getByRole("region", { name: "Liquidity flows" });
     const cells = () => [...within(flows).getAllByText("Bank A")[1]!.closest("tr")!.querySelectorAll("td")].map((td) => td.textContent);
     expect(cells()[1]).toBe("310 USD");
-    fireEvent.click(within(flows).getByRole("radio", { name: "Settled, net" }));
+    fireEvent.click(within(flows).getByRole("radio", { name: "Bilateral position" }));
     expect(cells()[1]).toBe("300 USD");
   });
 });
@@ -321,6 +356,25 @@ describe("links and the URL", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
 
+  it("closes a drawer opened over the dashboard by going back, so Back doesn't reopen it", async () => {
+    open("");
+    const start = window.history.length;
+    fireEvent.click(within(screen.getByRole("region", { name: "Queues" })).getAllByRole("button", { name: "#2" })[0]!);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Payment order 2" })).getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(window.location.search).toBe("");
+    expect(window.history.length).toBe(start + 1);
+  });
+
+  it("closes a drawer opened from a link in place", () => {
+    open("?payment=2");
+    const start = window.history.length;
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Payment order 2" })).getByRole("button", { name: /close/i }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.search).toBe("");
+    expect(window.history.length).toBe(start);
+  });
+
   it("refuses a malformed contract id in a link instead of watching another contract", () => {
     open("?contract=CABC");
     expect(screen.getByRole("alert").textContent).toMatch(/"CABC" isn't a contract id/);
@@ -361,6 +415,13 @@ describe("limits and failures after connecting", () => {
     const summary = screen.getByRole("dialog", { name: "Payment order 0" }).querySelector("dl.summary") as HTMLElement;
     expect(summary.textContent).toMatch(/Priority classreading…/);
     expect(summary.textContent).toMatch(/Submittedreading…/);
+  });
+
+  it("says when the bank registry couldn't be read", () => {
+    const registryError = new RtgsError("rpc", "RPC unreachable", "the account read timed out");
+    connection.result = { session: fakeSession(snapshotOf(undefined, { registryError })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByRole("status").textContent).toMatch(/Couldn't read the bank registry .*the account read timed out.*may be\s+missing/);
   });
 
   it("shows a later failure with the devnet hint, and lets it be dismissed or reconnected", () => {

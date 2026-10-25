@@ -1,6 +1,6 @@
 // The URL query as app state: components read it and open payment orders or transactions
-// through it, so every view has a link. Opening a drawer pushes a history entry; changing the
-// connection replaces the current one.
+// through it, so every view has a link. Opening a drawer pushes a history entry, and closing it
+// goes back to the entry it was opened over; changing the connection replaces the current one.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatQuery, parseQuery, type ObserverQuery } from "../model/url.ts";
 
@@ -9,6 +9,12 @@ interface QueryContextValue {
   /** Merges `patch` into the query; `undefined` values clear a field. */
   update(patch: Partial<ObserverQuery>, opts?: { push?: boolean }): void;
 }
+
+/** What a new network invalidates: its contract and anything open from the old one. */
+export const CLEAR_ON_NETWORK_CHANGE = { contract: undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined } as const;
+
+/** Marks a history entry that opened a drawer over the dashboard, so closing it can go back. */
+const OVER_DASHBOARD = "observer:drawer-over-dashboard";
 
 const QueryContext = createContext<QueryContextValue | undefined>(undefined);
 
@@ -30,7 +36,10 @@ export function QueryProvider(props: { children: ReactNode }) {
     const next = { ...current.current, ...patch };
     for (const key of Object.keys(patch) as (keyof ObserverQuery)[]) if (patch[key] === undefined) delete next[key];
     const url = `${window.location.pathname}${formatQuery(next)}${window.location.hash}`;
-    if (opts.push) window.history.pushState(null, "", url);
+    if (opts.push) {
+      const overDashboard = current.current.payment === undefined && current.current.tx === undefined && current.current.ledger === undefined;
+      window.history.pushState(overDashboard ? OVER_DASHBOARD : null, "", url);
+    }
     else window.history.replaceState(null, "", url);
     current.current = next;
     setQuery(next);
@@ -54,7 +63,10 @@ export function useNav() {
       openPayment: (id: bigint) => update({ payment: id, tx: undefined, ledger: undefined }, { push: true }),
       openTx: (hash: string) => update({ tx: hash, payment: undefined, ledger: undefined }, { push: true }),
       openLedger: (ledger: number) => update({ ledger, payment: undefined, tx: undefined }, { push: true }),
-      close: () => update({ payment: undefined, tx: undefined, ledger: undefined }, { push: true }),
+      close: () => {
+        if (window.history.state === OVER_DASHBOARD) window.history.back();
+        else update({ payment: undefined, tx: undefined, ledger: undefined });
+      },
     }),
     [update],
   );
