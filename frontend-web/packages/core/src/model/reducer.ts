@@ -212,7 +212,7 @@ export function applyEvents(state: ModelState, batch: readonly FeedEvent[]): Mod
     events: state.events,
     seen: new Set(state.seen),
     orphanSteps: new Map(state.orphanSteps),
-    ...(state.tx ? { tx: state.tx } : {}),
+    ...(state.tx ? { tx: { ...state.tx, offsetIds: new Set(state.tx.offsetIds) } } : {}),
   };
   const known = new Set(state.events.map((e) => e.eventId));
   const fresh = batch.filter((e) => !known.has(e.eventId));

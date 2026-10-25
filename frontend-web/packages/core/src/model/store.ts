@@ -183,7 +183,7 @@ export class RtgsStore {
       await this.loadRepos();
       await this.refreshBanks(registry.list().map((b) => b.address));
       if (!this.running) return;
-      this.update({ status: "ready" });
+      this.update({ status: "ready", error: undefined });
       this.followEvents();
     } catch (e) {
       if (!this.running) return;
@@ -311,7 +311,7 @@ export class RtgsStore {
         this.model = mergePayments(this.model, found.filter((p): p is Payment => !!p));
       }
       await this.refreshBanks(banks ?? this.session.registry.list().map((b) => b.address));
-      if (this.running) this.update({ queuedCount });
+      if (this.running) this.update({ queuedCount, error: undefined });
     } catch (e) {
       if (this.running) this.update({ error: toRtgsError(e) });
     }
