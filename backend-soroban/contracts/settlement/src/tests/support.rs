@@ -33,7 +33,10 @@ pub fn default_config() -> Config {
 /// could also claw back from, or deauthorize, the contract outside the contract's
 /// recorded paths, which would break S1 or freeze the RTGS (review finding H1). Whether
 /// an issuance controller contract should hold the admin role instead is a decision
-/// still open for the user, and these tests change with it.
+/// still open for the user, and these tests change with it. A controller would add its
+/// own entries to `open_repo`'s footprint, which has the least room at the cap (SC-ST-13),
+/// so choosing it also means pricing SC-ST-13 and SC-ST-14 again, and lowering
+/// `QUEUE_CAP_UNDER_TEST` if they no longer fit.
 pub struct Setup {
     pub env: Env,
     pub cb: Address,

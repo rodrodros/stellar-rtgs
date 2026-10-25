@@ -10,6 +10,9 @@
 //!   (ADR-0013); credit can be opened at any time.
 //! - A18 converted every repo at the close. With no close (ADR-0013), each repo converts
 //!   once its own term has passed, when anyone calls `convert_overdue` (ADR-0014).
+//! - A12's and A14's guard `p ∈ P` is not checked: the contract keeps no list of banks,
+//!   so `set_collateral` and `open_repo` accept any address, as `submit` accepts any
+//!   receiver. Still open (README, "Decide which addresses a payment may credit").
 //! - The penalty rate is recorded on the repo but not charged: decided with the user on
 //!   2026-10-24 (status and rate only, no interest accrual). Conversion therefore mints
 //!   and burns nothing.
@@ -223,6 +226,26 @@ fn a_repo_releases_the_banks_queue() {
         ]
     );
     assert_eq!(setup.balances(), std::vec![0, 50]);
+    setup.assert_conserved();
+}
+
+/// SC-A12-08. A mint the SAC refuses is a contract error, `TokenTransferFailed`, not a
+/// host abort, and nothing is recorded (S1, S17; `props.rs` demands it of SC-P-01). Here
+/// the contract already holds 1, so minting `i128::MAX` more would overflow its holding,
+/// though the collateral allows the repo.
+#[test]
+fn a_mint_the_token_refuses_is_reported() {
+    let setup = Setup::funded(&[1]);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &i128::MAX);
+
+    assert_eq!(
+        client.try_open_repo(setup.bank(0), &i128::MAX),
+        Err(Ok(Error::TokenTransferFailed))
+    );
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, i128::MAX));
+    assert_eq!(client.balance(setup.bank(0)), 1);
+    assert_eq!(client.repo(&0), None);
     setup.assert_conserved();
 }
 

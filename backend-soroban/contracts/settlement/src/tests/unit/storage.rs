@@ -116,6 +116,26 @@ fn setting_collateral_extends_the_instance_and_the_credit_to_thirty_days() {
     assert_every_entry_lives_until(&setup, 5_000 + BUMP_AMOUNT);
 }
 
+/// SC-ST-15. A12 (ADR-0011): a repo opened once the instance's TTL is below the threshold,
+/// with only the collateral set before, extends the instance, the bank's credit and
+/// balance, the repo and its id counter to `BUMP_AMOUNT` ledgers from the call. Added in
+/// Flow 17's review: it fails if `open_repo` leaves the instance to the other entry
+/// points, which SC-ST-03 cannot see, since its `set_collateral` extends the instance in
+/// the same ledger.
+#[test]
+fn a_repo_extends_the_instance_and_its_entries_to_thirty_days() {
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    setup.env.ledger().set_sequence_number(1_000);
+    client.set_collateral(setup.bank(0), &100);
+    let later = 1_000 + DAY_IN_LEDGERS + 1;
+    setup.env.ledger().set_sequence_number(later);
+
+    client.open_repo(setup.bank(0), &60);
+
+    assert_every_entry_lives_until(&setup, later + BUMP_AMOUNT);
+}
+
 /// An entry is extended again once its remaining TTL falls below `BUMP_THRESHOLD`, and
 /// not before, so a busy entry is not rewritten on every call.
 #[test]
@@ -363,14 +383,26 @@ fn covered_submit_clears_the_queue(
 // needed 16,532. SC-ST-11, a refusal, 267 entries, 6 writes, no events and about 38M
 // instructions.
 //
+// `open_repo` (Flow 17) runs the closure too and, like a deposit, settles at most the n
+// queued payments. It writes the repo, the repo id counter and the bank's credit where a
+// deposit writes the bank's token balance, and its events are `RepoOpened` and the SAC's
+// `mint` where a deposit's are `Deposited` and the `transfer`. Measured in Flow 17 at 62:
+// SC-ST-13, down SC-ST-07's tree, 394, 195 and 15,260, 4 entries and 2 writes more than
+// the deposit of SC-ST-07, and the most entries of any call at the cap; SC-ST-14, over
+// SC-ST-04's ring, 391, 193 and 16,108, or 16,120 with its return value, below SC-ST-10.
+// So the cap stays at 62.
+//
 // Each test also holds its call to what it measured, its budget, so that one needless
 // entry, or a larger event, fails the test it adds to instead of waiting for the limit.
 // The event bytes are held exactly, so that events priced too low fail too. Change a
 // budget only for an entry or an event field a flow changes on purpose, and say why.
 //
-// Not priced: the tests mock authorization. On the network, a bank that signs rather than
-// being the transaction's source account also costs a read of its account and a nonce
-// written. That is a few entries, well within the writes, but no test measures it.
+// The tests mock authorization, but the measurements include each signer's nonce: the
+// test host's transaction source is the all-zero account, never a bank or the central
+// bank, so recording mode writes a nonce for every call, as the network does for a signer
+// that is not the source. The network also reads each signer's account entry to verify
+// it, which recording mode skips; counted once, as Mainnet counts it, that leaves the
+// footprint far from its 400.
 
 /// `n` banks in a ring, bank `i` paying the next `100 - i` normal, every balance 0, so
 /// everything queues.
@@ -562,7 +594,8 @@ fn a_gross_cascade_down_a_tree_of_both_priorities_fits_in_one_transaction() {
 /// pays bank 0 what the tree needs. That is `n + 1` payments across `n + 2` accounts, one
 /// more of each than any deposit can settle. Every balance ends at 1 but the outside
 /// bank's, at 0. Added in Flow 14's review: at 392 test-host footprint entries and 194
-/// writes, it ties SC-ST-10 for the most entries of any call at the cap.
+/// writes, it ties SC-ST-10 for the most entries of any `deposit` or `submit` at the cap;
+/// since Flow 17, a repo's (SC-ST-13) uses more.
 #[test]
 fn a_covered_submission_cascading_down_a_full_tree_fits_in_one_transaction() {
     let n = QUEUE_CAP_UNDER_TEST as usize;
@@ -711,4 +744,70 @@ fn a_submission_refused_at_the_cap_fits_in_one_transaction() {
     assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
     assert_eq!(client.payment(&(n as u64)), None);
     setup.assert_conserved();
+}
+
+/// Gives bank 0 the collateral for a repo of `amount` and has the central bank open it,
+/// then checks that the repo cleared the full queue as [`assert_cleared_the_queue`] does.
+fn repo_clears_the_queue(
+    setup: &Setup,
+    amount: i128,
+    offsets: usize,
+    budget: &Budget,
+    expected: &[i128],
+) {
+    let client = setup.client();
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+    client.set_collateral(setup.bank(0), &amount);
+
+    let id = client.open_repo(setup.bank(0), &amount);
+
+    assert_cleared_the_queue(setup, &xdr::ScVal::U64(id), offsets, budget, expected);
+}
+
+/// SC-ST-13. ADR-0010's cap for a repo: `open_repo` runs the eager closure (ADR-0011), so
+/// with the queue full, the money a repo mints settles every queued payment as one gross
+/// cascade (A12, A2, S9) down SC-ST-07's tree, in one transaction within Mainnet's limits.
+/// A repo writes more of its own than a deposit, its repo, its id counter and the bank's
+/// credit, so this is `open_repo`'s worst case for the footprint. Added in Flow 17.
+#[test]
+fn a_repo_that_cascades_down_a_full_tree_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n + 1);
+    let need = submit_tree(&setup, n);
+    let mut expected = std::vec![1_i128; n + 1];
+    expected[0] = 0;
+    repo_clears_the_queue(
+        &setup,
+        need - 1,
+        0,
+        &Budget {
+            footprint: 394,
+            events: 15_260,
+        },
+        &expected,
+    );
+}
+
+/// SC-ST-14. ADR-0010's cap for a repo that makes an offset feasible: SC-ST-04's ring, and
+/// bank 0's repo of the `n - 1` it is short settles the whole ring by offset (A12, A3,
+/// S23) in one transaction within Mainnet's limits. Its events, the `Offset`, n `Settled`,
+/// the `RepoOpened` and the SAC's `mint`, and its returned id are `open_repo`'s worst case
+/// for the event bytes. Added in Flow 17.
+#[test]
+fn a_repo_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n);
+    submit_ring(&setup, n);
+    let mut expected = std::vec![1_i128; n];
+    expected[0] = 0;
+    repo_clears_the_queue(
+        &setup,
+        n as i128 - 1,
+        1,
+        &Budget {
+            footprint: 391,
+            events: 16_108,
+        },
+        &expected,
+    );
 }

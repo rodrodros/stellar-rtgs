@@ -4,11 +4,12 @@
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, queues any
 //! other, and refuses one still queued after the eager closure when the queue was already
-//! full), `revoke`, `reprioritise`, `expire`, the eager closure (gross settlement, then the
-//! LSM offset) after every deposit, submission, revocation, reprioritisation or expiry,
-//! and the `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank`
-//! views. The other entry points are stubs whose unit tests (`src/tests/`) are written and
-//! red; they are implemented test first (TESTING.md).
+//! full), `revoke`, `reprioritise`, `expire`, `set_collateral`, `open_repo` (which mints
+//! the repo into the contract), the eager closure (gross settlement, then the LSM offset)
+//! after every deposit, submission, revocation, reprioritisation, expiry or repo, and the
+//! `balance`, `payment`, `queue`, `queued_count`, `credit`, `repo`, `config` and
+//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
+//! are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 extern crate alloc;
@@ -51,7 +52,7 @@ pub struct Config {
 pub enum Error {
     /// An amount or value that must be positive (or, for collateral, non-negative) is not.
     InvalidAmount = 1,
-    /// The cash token refused a transfer into or out of the contract.
+    /// The cash token refused a transfer into or out of the contract, or a mint into it.
     TokenTransferFailed = 2,
     /// The bank's settlement balance is below the amount.
     InsufficientFunds = 3,
@@ -181,6 +182,10 @@ enum DataKey {
     /// One key per bank, as `Balance` is. No entry until the central bank first sets the
     /// bank's collateral; `credit()` reads a missing entry as all zero.
     Credit(Address),
+    /// The id the next repo gets, persistent as `NextId` is.
+    NextRepoId,
+    /// One entry per repo, by id; never removed, so a repaid repo keeps its record.
+    Repo(u64),
 }
 
 #[contractevent]
@@ -295,6 +300,22 @@ fn transfer(env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(),
 
     let token: Address = instance.get(&DataKey::Token).unwrap();
     match token::Client::new(env, &token).try_transfer(from, to, &amount) {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(Error::TokenTransferFailed),
+    }
+}
+
+/// Mints `amount` of the cash token into `to` through its SAC (ADR-0011), and extends the
+/// instance that records the token. The SAC's admin, the central bank, must have
+/// authorized the call. Whatever the SAC refuses (an overflow of `to`'s holding, a holder
+/// not authorized, a mint the admin did not authorize) is reported as
+/// `TokenTransferFailed`.
+fn mint(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
+    let instance = env.storage().instance();
+    instance.extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+
+    let token: Address = instance.get(&DataKey::Token).unwrap();
+    match token::StellarAssetClient::new(env, &token).try_mint(to, &amount) {
         Ok(Ok(())) => Ok(()),
         _ => Err(Error::TokenTransferFailed),
     }
@@ -880,7 +901,9 @@ impl Settlement {
     /// A14: the central bank sets a bank's collateral value, after haircuts (ADR-0011).
     ///
     /// The central bank authorizes it alone (S6). A value below 0 is refused with
-    /// `InvalidAmount`; 0 releases all collateral. The value replaces the old one, and
+    /// `InvalidAmount`; 0 releases all collateral. A value below the credit it backs,
+    /// `cr + ovn`, is refused with `CollateralBelowCredit` (S21); the sum cannot overflow,
+    /// since S21 already bounds it by the old value. The value replaces the old one, and
     /// `CollateralSet` records it.
     pub fn set_collateral(env: Env, bank: Address, value: i128) -> Result<(), Error> {
         Self::central_bank(env.clone()).require_auth();
@@ -891,15 +914,73 @@ impl Settlement {
             .instance()
             .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
         let mut credit = Self::credit(env.clone(), bank.clone());
+        if value < credit.cr + credit.ovn {
+            return Err(Error::CollateralBelowCredit);
+        }
         credit.coll = value;
         put(&env, &DataKey::Credit(bank.clone()), &credit);
         CollateralSet { bank, value }.publish(&env);
         Ok(())
     }
 
-    /// A12: the central bank opens a repo, minting `amount` against the bank's collateral.
-    pub fn open_repo(_env: Env, _bank: Address, _amount: i128) -> Result<u64, Error> {
-        todo!()
+    /// A12 under Repo with MintBurn: the central bank opens a repo, minting `amount` into
+    /// the contract against the bank's collateral and crediting the bank's balance
+    /// (ADR-0011), then settles eagerly. Returns the repo's id.
+    ///
+    /// The central bank authorizes it alone (S6), and, as the SAC's admin, the mint in the
+    /// same tree. There is no business day, so a repo can be opened at any time
+    /// (ADR-0013). An amount of 0 or less is refused with `InvalidAmount`, and one that
+    /// would take `cr + ovn` above the collateral with `CreditExceedsCollateral` (S17,
+    /// S21), checked without overflow. A mint the SAC refuses (an overflow of the
+    /// contract's holding, or a tree without the mint) is `TokenTransferFailed`.
+    /// The repo is recorded intraday, its term running from now (ADR-0014), and
+    /// `RepoOpened` records it. The new money may cover the bank's queue head or make an
+    /// offset feasible, so the eager closure follows (S9, S23, ADR-0010).
+    pub fn open_repo(env: Env, bank: Address, amount: i128) -> Result<u64, Error> {
+        Self::central_bank(env.clone()).require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let mut credit = Self::credit(env.clone(), bank.clone());
+        let exceeds = credit
+            .cr
+            .checked_add(credit.ovn)
+            .and_then(|used| used.checked_add(amount))
+            .is_none_or(|total| total > credit.coll);
+        if exceeds {
+            return Err(Error::CreditExceedsCollateral);
+        }
+        mint(&env, &env.current_contract_address(), amount)?;
+        let id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextRepoId)
+            .unwrap_or(0);
+        put(&env, &DataKey::NextRepoId, &(id + 1));
+        let repo = Repo {
+            id,
+            bank: bank.clone(),
+            amount,
+            outstanding: amount,
+            opened_at: env.ledger().timestamp(),
+            status: RepoStatus::Intraday,
+            rate_bps: 0,
+        };
+        put(&env, &DataKey::Repo(id), &repo);
+        credit.cr += amount;
+        put(&env, &DataKey::Credit(bank.clone()), &credit);
+        // The mint succeeded, so the contract's holding fits in `i128`, and by S1 so does
+        // the bank's balance, a part of it.
+        let balance = Self::balance(env.clone(), bank.clone()) + amount;
+        set_balance(&env, &bank, balance);
+        RepoOpened {
+            id,
+            bank: bank.clone(),
+            amount,
+        }
+        .publish(&env);
+        eager_closure(&env, Vec::from_array(&env, [bank]));
+        Ok(id)
     }
 
     /// A13, or A20 for a penalty repo: the bank or the central bank repays, burning cash.
@@ -952,8 +1033,9 @@ impl Settlement {
             })
     }
 
-    pub fn repo(_env: Env, _id: u64) -> Option<Repo> {
-        todo!()
+    /// The repo with this id; `None` if no repo has it.
+    pub fn repo(env: Env, id: u64) -> Option<Repo> {
+        env.storage().persistent().get(&DataKey::Repo(id))
     }
 
     pub fn config(env: Env) -> Config {

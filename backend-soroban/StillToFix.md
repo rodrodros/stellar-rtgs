@@ -341,7 +341,7 @@ Each bank's credit position is its own persistent entry, `Credit(bank)`, as its 
 - [x] `auth::only_the_central_bank_can_set_collateral` (SC-A14-04). It also pins the order: authorization before the guard `x ≥ 0`.
 - [x] `unit::storage::setting_collateral_extends_the_instance_and_the_credit_to_thirty_days` (SC-ST-12). Added in Flow 16, red first: `set_collateral` did not extend the instance. Flow 20's test can't catch that, since its first call is a deposit, which extends the instance in the same ledger. It also checks that the contract owns exactly the instance and one persistent `Credit(bank)` entry, so credit kept in the instance or in temporary storage fails.
 
-## Flow 17: open a repo, A12 with a mint (9)
+## Flow 17: open a repo, A12 with a mint (13)
 
 `open_repo` needs:
 - the central bank's authorization, with the SAC `mint` into the contract in the same tree;
@@ -355,15 +355,22 @@ Each bank's credit position is its own persistent entry, `Credit(bank)`, as its 
 
 `open_repo` runs the closure, so a repo can make a full queue's offset feasible. At the cap of 62, full queues use up to 194 of the 200 writes, and 392 of the test host's 400 footprint entries, for a covered `submit` (SC-ST-08), and up to 16,280 of the 16,384 bytes of events and return value for a `submit` that completes an offset (SC-ST-10), with Stellar accounts as banks; `open_repo` writes more entries and publishes more events of its own (its own event and the SAC's mint), so price both. Price it at the cap, and lower the cap if it doesn't fit. Flow 16's review priced a throwaway `open_repo` (mint, `Credit(bank)`, a global repo counter, `Repo(id)`, the balance, then the closure) on the old cap of 63: 400 of the 400 entries on SC-ST-07's tree, 4 more than a deposit on the same queue, and 399 on SC-ST-05's path. Expect the same margin over a deposit at 62. Any further entry `open_repo` writes, such as a per-bank repo index, must be priced too.
 
-- [ ] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
-- [ ] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
-- [ ] `unit::credit::a_bank_with_no_collateral_gets_no_credit` (SC-A12-03)
-- [ ] `unit::credit::a_zero_or_negative_repo_is_refused` (SC-A12-04)
-- [ ] `unit::credit::credit_at_i128_max_is_checked_without_overflow` (SC-A12-05)
-- [ ] `unit::credit::a_repo_releases_the_banks_queue` (SC-A12-06)
-- [ ] `unit::credit::collateral_cannot_fall_below_the_credit_it_backs` (SC-A14-03)
-- [ ] `auth::open_repo_is_authorized_by_the_central_bank_with_the_mint` (SC-A12-07)
-- [ ] `auth::only_the_central_bank_can_open_a_repo` (SC-A12-07)
+- [x] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
+- [x] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
+- [x] `unit::credit::a_bank_with_no_collateral_gets_no_credit` (SC-A12-03)
+- [x] `unit::credit::a_zero_or_negative_repo_is_refused` (SC-A12-04)
+- [x] `unit::credit::credit_at_i128_max_is_checked_without_overflow` (SC-A12-05)
+- [x] `unit::credit::a_repo_releases_the_banks_queue` (SC-A12-06)
+- [x] `unit::credit::collateral_cannot_fall_below_the_credit_it_backs` (SC-A14-03)
+- [x] `auth::open_repo_is_authorized_by_the_central_bank_with_the_mint` (SC-A12-07)
+- [x] `auth::only_the_central_bank_can_open_a_repo` (SC-A12-07)
+
+Added in Flow 17, and green:
+
+- [x] `unit::credit::a_mint_the_token_refuses_is_reported` (SC-A12-08): `props.rs` demands a refused SAC mint come back as a contract error, so `open_repo` reports it as `TokenTransferFailed`. Its Red failed on the `todo!()`; it fails if `open_repo` calls `mint` rather than `try_mint`, since the refused mint then aborts the host (SC-A12-07's tree without the mint catches that too).
+- [x] `unit::storage::a_repo_that_cascades_down_a_full_tree_fits_in_one_transaction` (SC-ST-13): 394 of the test host's 400 footprint entries and 195 of the 200 writes, 2 writes more than a deposit down the same tree (SC-ST-07), and the worst case for the footprint of any call at the cap.
+- [x] `unit::storage::a_repo_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-14): 391 entries and 16,120 of the 16,384 bytes of events and return value, below SC-ST-10's 16,280. So the cap stays at 62.
+- [x] `unit::storage::a_repo_extends_the_instance_and_its_entries_to_thirty_days` (SC-ST-15), added in the review: `open_repo` extends the instance only through its mint, and SC-ST-03 cannot see that, since its `set_collateral` extends the instance in the same ledger. It kills the hand mutant that drops the extension from `mint` (pinned seed and seeds 1–4).
 
 One decision is still open (README): who holds the SAC admin role. For now, the tests give it to the central bank's own account.
 
@@ -404,7 +411,7 @@ Converting a repo moves its outstanding amount from `cr` to `ovn` and records th
 - [ ] `unit::credit::a_repaid_repo_is_never_overdue` (SC-A20-05)
 - [ ] `unit::credit::converting_an_unknown_repo_is_refused` (SC-A20-06)
 - [ ] `unit::credit::a_penalty_repo_is_repaid_by_a_burn` (SC-A20-07)
-- [ ] `unit::credit::penalty_repos_stay_collateralised` (SC-A20-08)
+- [ ] `unit::credit::penalty_repos_stay_collateralised` (SC-A20-08). Until it is green, dropping `ovn` from `open_repo`'s or `set_collateral`'s collateral check survives (Flow 17); check that both mutants now fail.
 - [ ] `auth::convert_overdue_needs_no_authorization` (SC-A20-09)
 
 ## Flow 20: every entry point extends every entry it writes (1)
@@ -424,8 +431,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 16) | 160 |
-| Still to fix (Flows 17 to 21) | 33 |
-| All | 193 |
+| Already green (Flows 0 to 17) | 173 |
+| Still to fix (Flows 18 to 21) | 24 |
+| All | 197 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, and Flow 16 added SC-ST-12.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, and Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15.

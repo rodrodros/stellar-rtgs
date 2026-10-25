@@ -475,7 +475,10 @@ fn open_repo_is_authorized_by_the_central_bank_with_the_mint() {
 }
 
 /// SC-A12-07. S6 for A12: neither the bank's authorization nor none at all can open a
-/// repo, and nothing is minted; the central bank's tree with the mint can.
+/// repo, and nothing is minted. The central bank's tree without the mint beneath it gets
+/// as far as the SAC, which refuses the mint, and `open_repo` reports `TokenTransferFailed`
+/// (as `deposit` does a transfer the bank did not authorize). The central bank's tree with
+/// the mint can.
 #[test]
 fn only_the_central_bank_can_open_a_repo() {
     let setup = Setup::new(1, 0);
@@ -505,6 +508,11 @@ fn only_the_central_bank_can_open_a_repo() {
     assert_eq!(
         host_error(&setup, "open_repo", args.clone()),
         auth_failure()
+    );
+    authorize(&setup, &setup.cb, "open_repo", args.clone(), &[]);
+    assert_eq!(
+        client.try_open_repo(setup.bank(0), &60),
+        Err(Ok(Error::TokenTransferFailed))
     );
     assert_eq!(setup.token().balance(&setup.contract), 0);
     assert_eq!(client.balance(setup.bank(0)), 0);
