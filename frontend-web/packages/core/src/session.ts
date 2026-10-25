@@ -3,6 +3,7 @@
 import { Operation } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { cachedCapabilities, capabilityOverrides, type Capabilities } from "./capabilities.ts";
+import { readConservation, type ConservationRead } from "./contract/conservation.ts";
 import { fromPriority } from "./contract/convert.ts";
 import { SettlementReader, SettlementWriter, mapLimit, type Preview } from "./contract/gateway.ts";
 import { RtgsError, toRtgsError } from "./errors.ts";
@@ -275,6 +276,15 @@ export class RtgsSession {
 
   latestLedger(): Promise<LedgerClock> {
     return latestLedger(this.server);
+  }
+
+  /**
+   * Conservation (S1) at one ledger: the cash the contract holds against the settlement
+   * balances of `accounts` (every bank, plus the central bank and the contract to be safe).
+   */
+  readConservation(accounts: readonly string[]): Promise<ConservationRead> {
+    this.assertLive();
+    return readConservation(this.ctx, this.contractId, this.cashToken.sacId, accounts);
   }
 
   dispose(): void {

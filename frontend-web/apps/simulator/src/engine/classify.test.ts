@@ -25,6 +25,7 @@ const cases: [string, RtgsError, ReturnType<typeof classify>][] = [
   ["tx_insufficient_fee", toRtgsError("tx_insufficient_fee"), "transient"],
   ["TRY_AGAIN_LATER", new RtgsError("transaction", "Network busy", "RPC asked to try again later."), "transient"],
   ["a send that wasn't confirmed", new RtgsError("transaction", "Not confirmed", "Transaction ab was not seen in a closed ledger in time."), "transient"],
+  ["a footprint race", new RtgsError("transaction", "State changed", "Another transaction changed the settlement contract's state after this one was prepared."), "transient"],
   ["tx_insufficient_balance", toRtgsError("tx_insufficient_balance"), "failed"],
   ["RPC's snapshot race", toRtgsError("setting ContractComputeV0 is not present in the snapshot"), "transient"],
   ["RPC unreachable", toRtgsError(new Error("fetch failed")), "transient"],

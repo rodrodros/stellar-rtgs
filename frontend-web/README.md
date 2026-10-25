@@ -1,6 +1,6 @@
 # stellar-front
 
-The interactive front end for the RTGS settlement contract in `../stellar-implementation/`: three static React apps on one shared package, in a pnpm workspace.
+The interactive front end for the RTGS settlement contract in `../stellar-implementation/`: three static React apps on one shared package, in a pnpm workspace, plus a headless simulation that keeps the devnet busy.
 
 | Path | Package | Who uses it | Dev URL |
 |---|---|---|---|
@@ -8,6 +8,7 @@ The interactive front end for the RTGS settlement contract in `../stellar-implem
 | `apps/central-bank/` | `@rtgs/central-bank` | the central bank, the **operator** and **settlement agent** ([README](apps/central-bank/README.md)) | http://localhost:5174 |
 | `apps/participant/` | `@rtgs/participant` | a bank, a **participant** ([README](apps/participant/README.md)) | http://localhost:5175 |
 | `apps/observer/` | `@rtgs/observer` | anyone: a read-only view of the whole system ([README](apps/observer/README.md)) | http://localhost:5176 |
+| `apps/simulator/` | `@rtgs/simulator` | a Node CLI that keeps the banks transacting until Ctrl-C, so the apps have live traffic ([README](apps/simulator/README.md)) | n/a |
 
 Every app runs against the **devnet** (a local Stellar quickstart), **testnet**, or **mainnet** (opt-in, never the default). There is no backend: the browser talks to Stellar RPC through `@rtgs/core`, and the apps themselves make no RPC calls.
 
@@ -31,6 +32,9 @@ pnpm devnet:bootstrap
 
 # 4. Run the three apps side by side
 pnpm dev
+
+# 5. Optional, in another terminal: keep the banks transacting until Ctrl-C
+pnpm simulate
 ```
 
 Then open:

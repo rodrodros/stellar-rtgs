@@ -31,6 +31,7 @@ export { connectWallet, disconnectWallet } from "./signer/wallet.ts";
 
 // Contract
 export { NO_ID, type Preview } from "./contract/gateway.ts";
+export { MAX_CONSERVATION_ACCOUNTS, readConservation, type ConservationRead } from "./contract/conservation.ts";
 export { ENTRY_POINTS, allAvailable, parseCapabilityOverrides, type Capabilities, type Capability, type EntryPoint } from "./capabilities.ts";
 export type * from "./types.ts";
 

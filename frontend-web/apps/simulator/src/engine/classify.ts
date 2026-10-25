@@ -16,8 +16,12 @@ const SAC_RACES = new Set([10, 11]); // BalanceError, BalanceDeauthorizedError
 /** Classic operation results with the same meaning (`op_underfunded`, `op_not_authorized`), by title. */
 const CLASSIC_RACES = new Set(["Cash token holding too low", "Trustline not authorized"]);
 
-/** Transaction results that a retry fixes (`tx_bad_seq`, `tx_insufficient_fee`, `TRY_AGAIN_LATER`, a poll that ran out). */
-const TRANSIENT_TRANSACTIONS = new Set(["Sequence number out of date", "Fee too low", "Network busy", "Not confirmed"]);
+/**
+ * Transaction results that a retry fixes: `tx_bad_seq`, `tx_insufficient_fee`, `TRY_AGAIN_LATER`, a
+ * poll that ran out, and a footprint race (another lane changed the contract after this one was
+ * simulated; the retry simulates again).
+ */
+const TRANSIENT_TRANSACTIONS = new Set(["Sequence number out of date", "Fee too low", "Network busy", "Not confirmed", "State changed"]);
 
 /** JavaScript's own errors: a bug in an action, which no retry fixes. */
 const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];

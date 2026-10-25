@@ -12,8 +12,12 @@ export * from "./format.ts";
 
 /** Async reads the reporter needs for its periodic summary; `createReporterReads` builds them from a session. */
 export interface ReporterReads {
-  /** Cash tokens the settlement contract holds (conservation: against the sum of balances). */
-  contractHolding(): Promise<bigint>;
+  /**
+   * Conservation at one ledger: the cash the contract holds and the sum of `accounts`'
+   * settlement balances. One atomic read, so a transaction landing meanwhile can't make
+   * the two sides differ.
+   */
+  conservation(accounts: readonly string[]): Promise<{ held: bigint; recorded: bigint }>;
   /** An account's XLM balance in stroops, to warn before fees run out. */
   xlmBalance(address: string): Promise<bigint>;
 }
@@ -70,14 +74,14 @@ export function createReporter(options: ReporterOptions): Reporter {
     const lanes = [...labels.keys()];
     // A summary's reads get until the next summary is due.
     const ms = summaryEvery * 1000;
+    // Every bank, plus the central bank (a lane) and the contract, as the central bank app checks.
+    const accounts = [...new Set([...world.banks().map((b) => b.address), ...lanes, world.contractId])];
     const [held, ...xlm] = await Promise.allSettled([
-      within(reads.contractHolding(), ms),
+      within(reads.conservation(accounts), ms),
       ...lanes.map((a) => within(reads.xlmBalance(a), ms)),
     ]);
     if (stopped) return;
-    // Compared with the world as it is when the read returns, not when it was asked for.
     const banks = world.banks();
-    const recorded = banks.reduce((sum, b) => sum + b.balance, 0n);
     const fees: SummaryBlock["fees"] = [];
     xlm.forEach((r, i) => {
       const address = lanes[i]!;
@@ -103,7 +107,7 @@ export function createReporter(options: ReporterOptions): Reporter {
         normal: b.queues.normal.length,
       })),
       repos: world.repos().map((r) => ({ id: r.id, bank: world.bank(r.bank)?.label ?? label(r.bank), outstanding: r.outstanding, status: r.status })),
-      conservation: held.status === "fulfilled" ? { held: held.value, recorded } : { error: toRtgsError(held.reason).title },
+      conservation: held.status === "fulfilled" ? held.value : { error: toRtgsError(held.reason).title },
       fees,
     };
     out(formatSummary(block, mode, color));
@@ -160,7 +164,10 @@ export function createReporter(options: ReporterOptions): Reporter {
 
 export function createReporterReads(session: RtgsSession): ReporterReads {
   return {
-    contractHolding: async () => (await session.token.holding(session.contractId)).balance,
+    conservation: async (accounts) => {
+      const { held, recorded } = await session.readConservation(accounts);
+      return { held, recorded };
+    },
     // The one RPC read the simulator makes itself: core has no XLM balance helper.
     xlmBalance: async (address) => {
       try {

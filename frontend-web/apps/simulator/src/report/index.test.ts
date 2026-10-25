@@ -43,7 +43,7 @@ const PLENTY_XLM = 10_000n * 10_000_000n;
 function setup(over: { reads?: Partial<ReporterReads>; summaryEvery?: number; log?: "pretty" | "json" } = {}) {
   const lines: string[] = [];
   const reads: ReporterReads = {
-    contractHolding: vi.fn(async () => BALANCES),
+    conservation: vi.fn(async () => ({ held: BALANCES, recorded: BALANCES })),
     xlmBalance: vi.fn(async () => PLENTY_XLM),
     ...over.reads,
   };
@@ -132,7 +132,7 @@ describe("periodic summary", () => {
     reporter.tick(world);
     await flush();
     expect(summaries()).toBe(1);
-    expect(reads.contractHolding).toHaveBeenCalledTimes(1);
+    expect(reads.conservation).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
     await flush();
@@ -146,13 +146,13 @@ describe("periodic summary", () => {
     reporter.tick(world);
     await flush();
     expect(lines).toHaveLength(1);
-    expect(reads.contractHolding).not.toHaveBeenCalled();
+    expect(reads.conservation).not.toHaveBeenCalled();
   });
 
   it("doesn't block tick, and doesn't read again while a read is slow", async () => {
-    let resolve!: (v: bigint) => void;
-    const contractHolding = vi.fn(() => new Promise<bigint>((r) => (resolve = r)));
-    const { reporter, lines, world } = setup({ summaryEvery: 10, reads: { contractHolding } });
+    let resolve!: (v: { held: bigint; recorded: bigint }) => void;
+    const conservation = vi.fn(() => new Promise<{ held: bigint; recorded: bigint }>((r) => (resolve = r)));
+    const { reporter, lines, world } = setup({ summaryEvery: 10, reads: { conservation } });
     reporter.start(INFO);
     vi.advanceTimersByTime(10_000);
     expect(reporter.tick(world)).toBeUndefined();
@@ -161,14 +161,14 @@ describe("periodic summary", () => {
       reporter.tick(world);
     }
     await flush();
-    expect(contractHolding).toHaveBeenCalledTimes(1);
+    expect(conservation).toHaveBeenCalledTimes(1);
     expect(lines).toHaveLength(1);
-    resolve(BALANCES);
+    resolve({ held: BALANCES, recorded: BALANCES });
     await flush();
     expect(lines.at(-1)).toContain("held 3000 = recorded 3000 ✓");
     vi.advanceTimersByTime(10_000);
     reporter.tick(world);
-    expect(contractHolding).toHaveBeenCalledTimes(2);
+    expect(conservation).toHaveBeenCalledTimes(2);
   });
 
   it("shows the run's pace, the queue, the banks and the repos", async () => {
@@ -189,7 +189,7 @@ describe("periodic summary", () => {
   });
 
   it("warns loudly when the contract holds other than the sum of balances", async () => {
-    const { reporter, lines, world } = setup({ reads: { contractHolding: async () => BALANCES - 7n * USD } });
+    const { reporter, lines, world } = setup({ reads: { conservation: async () => ({ held: BALANCES - 7n * USD, recorded: BALANCES }) } });
     reporter.start(INFO);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
@@ -197,21 +197,19 @@ describe("periodic summary", () => {
     expect(lines.at(-1)).toContain("!!! CONSERVATION BROKEN: the contract holds 2993 but the settlement balances sum to 3000 (held − recorded = -7)");
   });
 
-  it("compares with the balances when the read returns", async () => {
-    let resolve!: (v: bigint) => void;
-    const { reporter, lines, world } = setup({ reads: { contractHolding: () => new Promise<bigint>((r) => (resolve = r)) } });
+  it("reads every bank, the central bank and the contract in one conservation read", async () => {
+    const { reporter, world, reads } = setup();
     reporter.start(INFO);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
-    world.state.banks[0] = bank(BANK_1, { balance: 1_100n * USD });
-    resolve(BALANCES + 100n * USD);
     await flush();
-    expect(lines.at(-1)).toContain("held 3100 = recorded 3100 ✓");
+    const accounts = (reads.conservation as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string[];
+    expect(new Set(accounts)).toEqual(new Set([BANK_1, BANK_2, BANK_3, CB, CONTRACT]));
   });
 
   it("says so when the holding can't be read, and keeps going", async () => {
-    const contractHolding = vi.fn().mockRejectedValueOnce(new RtgsError("rpc", "Network unreachable", "")).mockResolvedValue(BALANCES);
-    const { reporter, lines, world } = setup({ reads: { contractHolding } });
+    const conservation = vi.fn().mockRejectedValueOnce(new RtgsError("rpc", "Network unreachable", "")).mockResolvedValue({ held: BALANCES, recorded: BALANCES });
+    const { reporter, lines, world } = setup({ reads: { conservation } });
     reporter.start(INFO);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
@@ -224,8 +222,8 @@ describe("periodic summary", () => {
   });
 
   it("gives up on a read that never returns, so later summaries still print", async () => {
-    const contractHolding = vi.fn().mockReturnValueOnce(new Promise<bigint>(() => {})).mockResolvedValue(BALANCES);
-    const { reporter, lines, world } = setup({ summaryEvery: 30, reads: { contractHolding } });
+    const conservation = vi.fn().mockReturnValueOnce(new Promise(() => {})).mockResolvedValue({ held: BALANCES, recorded: BALANCES });
+    const { reporter, lines, world } = setup({ summaryEvery: 30, reads: { conservation } });
     reporter.start(INFO);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
@@ -251,13 +249,13 @@ describe("periodic summary", () => {
   });
 
   it("drops a summary whose reads return after stop", async () => {
-    let resolve!: (v: bigint) => void;
-    const { reporter, lines, world } = setup({ reads: { contractHolding: () => new Promise<bigint>((r) => (resolve = r)) } });
+    let resolve!: (v: { held: bigint; recorded: bigint }) => void;
+    const { reporter, lines, world } = setup({ reads: { conservation: () => new Promise((r) => (resolve = r)) } });
     reporter.start(INFO);
     vi.advanceTimersByTime(30_000);
     reporter.tick(world);
     reporter.stop();
-    resolve(BALANCES);
+    resolve({ held: BALANCES, recorded: BALANCES });
     await flush();
     expect(lines.at(-1)).toContain("simulation stopped");
   });

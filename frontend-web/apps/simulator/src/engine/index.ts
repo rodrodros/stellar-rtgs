@@ -45,7 +45,10 @@ export interface EngineOptions {
 /** Refusals in a row that put an `(action, actor)` pair on cool-down. */
 export const REFUSALS_BEFORE_COOLDOWN = 3;
 
-const DEFAULTS = { tickMs: 250, drainMs: 30_000, cooldownTicks: 40, retryDelaysMs: [500, 1_000, 2_000] };
+// Five retries: lanes that simulate in the same ledger all predict the same next payment id, so
+// only one of them applies per ledger and the rest come back as footprint races ("State
+// changed"); a retry can meet the same race again.
+const DEFAULTS = { tickMs: 250, drainMs: 30_000, cooldownTicks: 40, retryDelaysMs: [500, 1_000, 2_000, 3_000, 4_000] };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 

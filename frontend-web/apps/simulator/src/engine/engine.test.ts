@@ -190,15 +190,15 @@ describe("Engine", () => {
     await e.stop();
   });
 
-  it("gives up after three retries and reports failed", async () => {
+  it("gives up after five retries and reports failed", async () => {
     const def = action(async () => {
       throw toRtgsError("tx_bad_seq");
     });
     const r = reporter();
     const e = engine({ policy: policy(def, (idle) => (def.calls.length === 0 && idle.includes(BANK_1) ? [{ action: def, actor: BANK_1, params: null }] : [])), reporter: r });
     void e.run();
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(def.calls).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(def.calls).toHaveLength(6);
     expect(r.results).toEqual([{ actor: BANK_1, outcome: { kind: "failed", error: expect.objectContaining({ title: "Sequence number out of date" }) }, ms: expect.any(Number) }]);
     await e.stop();
   });
