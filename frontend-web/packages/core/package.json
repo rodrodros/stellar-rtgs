@@ -1,0 +1,46 @@
+{
+  "name": "@rtgs/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Networks, contract client, signers, event feed and read models for the RTGS front ends",
+  "exports": {
+    ".": "./src/index.ts",
+    "./react": "./src/react/index.tsx",
+    "./node": "./src/node/index.ts",
+    "./wasm/settlement.wasm": "./wasm/settlement.wasm"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "bindings": "tsx scripts/bindings.ts",
+    "bindings:check": "tsx scripts/bindings.ts --check",
+    "devnet:bootstrap": "tsx scripts/devnet-bootstrap.ts"
+  },
+  "dependencies": {
+    "@creit.tech/stellar-wallets-kit": "catalog:",
+    "@stellar/stellar-sdk": "catalog:",
+    "buffer": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.3",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "jsdom": "29.1.1",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}

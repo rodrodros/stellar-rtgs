@@ -1,0 +1,28 @@
+{
+  "name": "rtgs-stellar-front",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:central-bank": "pnpm --filter @rtgs/central-bank dev",
+    "dev:participant": "pnpm --filter @rtgs/participant dev",
+    "dev:observer": "pnpm --filter @rtgs/observer dev",
+    "simulate": "pnpm --filter @rtgs/simulator start --",
+    "build": "pnpm -r --if-present build",
+    "preview": "pnpm --parallel --filter \"./apps/*\" preview",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
+    "bindings": "pnpm --filter @rtgs/core bindings",
+    "bindings:check": "pnpm --filter @rtgs/core bindings:check",
+    "devnet:bootstrap": "pnpm --filter @rtgs/core devnet:bootstrap"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
