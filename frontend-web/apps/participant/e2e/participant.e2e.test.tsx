@@ -118,4 +118,12 @@ describe.skipIf(!up)("participant app on the devnet", () => {
     await eventually(() => expect(balanceOf(b)).toBe("2,100 USD"));
     expect(within(within(b).getByTestId("payment-2")).getByText(/released by Bank 1's deposit/)).toBeTruthy();
   });
+
+  it("reconnects after saving deployment settings, keeping the app alive", async () => {
+    fireEvent.click(within(a).getByText(/Deployment settings/));
+    fireEvent.click(within(a).getByRole("button", { name: "Save and reconnect" }));
+    await eventually(() => expect(within(a).getByRole("button", { name: "Bank 1", pressed: true })).toBeTruthy());
+    await eventually(() => expect(balanceOf(a)).toBe("400 USD"));
+    expect(within(a).queryByText(/Session closed/)).toBeNull();
+  });
 });

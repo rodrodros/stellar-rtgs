@@ -1,7 +1,7 @@
 // The participant app: pick a network, act as a bank, and work its liquidity, payment orders,
 // queues and credit. Everything below the network bar lives inside one core session, keyed on
 // the network, so a switch drops the session, the store and the signer together.
-import { defaultNetwork, loadNetworks, overridesStore, withOverrides, type Env, type NetworkId, type NetworkOverrides } from "@rtgs/core";
+import { defaultNetwork, loadNetworks, overridesStore, withOverrides, type Env, type NetworkId, type NetworkOverrides, type RtgsSession } from "@rtgs/core";
 import { RtgsProvider, useConnection } from "@rtgs/core/react";
 import { useMemo, useState } from "react";
 import { BankBar } from "./connect/BankBar.tsx";
@@ -9,6 +9,7 @@ import { DeploymentSettings } from "./connect/DeploymentSettings.tsx";
 import { NetworkSwitcher } from "./connect/NetworkSwitcher.tsx";
 import { Dashboard } from "./Dashboard.tsx";
 import { ActingBankProvider } from "./session/ActingBank.tsx";
+import { ErrorBoundary } from "./ui/ErrorBoundary.tsx";
 
 function localStore(): Storage | undefined {
   try {
@@ -16,6 +17,20 @@ function localStore(): Storage | undefined {
   } catch {
     return undefined;
   }
+}
+
+const sessionIds = new WeakMap<RtgsSession, number>();
+let nextSessionId = 1;
+
+/**
+ * A key per session instance, not per network: right after a switch, `useConnection` still
+ * returns the old session until its effect disposes it, and a subtree keyed on the network
+ * would mount against that session just as it closes.
+ */
+function sessionKey(session: RtgsSession | undefined): string {
+  if (!session) return "none";
+  if (!sessionIds.has(session)) sessionIds.set(session, nextSessionId++);
+  return `session:${sessionIds.get(session)}`;
 }
 
 export function App(props: { env?: Env; bank?: string }) {
@@ -60,12 +75,14 @@ export function App(props: { env?: Env; bank?: string }) {
           </button>
         </div>
       )}
-      <RtgsProvider key={`session:${network.id}:${version}`} session={connection.session}>
-        <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
-          <BankBar />
-          <Dashboard />
-        </ActingBankProvider>
-      </RtgsProvider>
+      <ErrorBoundary key={sessionKey(connection.session)} onReset={connection.reconnect}>
+        <RtgsProvider session={connection.session}>
+          <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
+            <BankBar />
+            <Dashboard />
+          </ActingBankProvider>
+        </RtgsProvider>
+      </ErrorBoundary>
       <DeploymentSettings
         key={`settings:${network.id}:${version}`}
         network={base}

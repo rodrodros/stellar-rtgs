@@ -8,13 +8,13 @@ import { useBankData } from "../session/BankData.tsx";
 import { amountText, countdown, ledgerTime } from "../ui/format.ts";
 
 export function QueuesPanel() {
-  const { view } = useBankData();
+  const { view, error } = useBankData();
   const config = useSnapshot((s) => s.config);
   return (
     <section className="panel wide" aria-labelledby="queues-title">
       <h2 id="queues-title">Your queues</h2>
       {!view ? (
-        <p className="note">Loading…</p>
+        <p className={error ? "tx tx-error" : "note"}>{error ? `${error.title}: ${error.detail}` : "Loading…"}</p>
       ) : (
         <div className="queues">
           <Queue title="Urgent" payments={view.queues.urgent} analysis={view.analysis.urgent} balance={view.balance} config={config} />

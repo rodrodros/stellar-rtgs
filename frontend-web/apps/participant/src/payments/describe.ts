@@ -29,9 +29,13 @@ export function headNote(analysis: QueueAnalysis, balance: bigint, code?: string
   return "Covered: it settles on the next eager closure.";
 }
 
-/** The expiry line for a queued payment order (ADR-0015). */
+/**
+ * The expiry line for a queued payment order (ADR-0015). `expire` accepts a payment order only
+ * once the ledger's time is strictly past `expiresAt`. `now` is the ledger clock advanced by
+ * the local clock, so near the boundary the line is a few seconds early at most.
+ */
 export function expiryNote(expiresAt: number, now: number | undefined, expire: Capability): { past: boolean; text: string } {
-  if (now === undefined || now < expiresAt) return { past: false, text: "Expires" };
+  if (now === undefined || now <= expiresAt) return { past: false, text: "Expires" };
   return {
     past: true,
     text: expire === "stub" ? "Past expiry; not enforced by this contract version" : "Past expiry; a keeper may reject it",

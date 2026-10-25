@@ -44,7 +44,7 @@ export function LiquidityPanel() {
       <h2 id="liquidity-title">Liquidity</h2>
       <dl className="figures">
         <div>
-          <dt>Settlement balance</dt>
+          <dt title="Your settlement balance, held for you by the settlement contract">Custody balance</dt>
           <dd data-testid="settlement-balance">{view ? amountText(view.balance, code) : "…"}</dd>
         </div>
         <div>

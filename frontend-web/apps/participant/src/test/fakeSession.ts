@@ -8,6 +8,7 @@ import {
   covers,
   devnetIdentities,
   loadNetworks,
+  RtgsError,
   toRtgsError,
   type Bank,
   type BankView,
@@ -88,9 +89,12 @@ export function createFakeSession(options: FakeOptions = {}) {
     feed: { state: "live", clamped: false, startLedger: 1 },
     ledger: { sequence: ledger, closeTime },
   };
+  // Like core's store, it keeps a view of every registered bank, re-read after each change.
+  const views = () => new Map(registryBanks.map((b) => [b.address, viewOf(b.address, CONFIG)]));
   const publish = (events: FeedEvent[]) => {
     snapshot = {
       ...snapshot,
+      banks: views(),
       payments: new Map(payments),
       repos: new Map(repos),
       events: [...snapshot.events, ...events],
@@ -99,6 +103,7 @@ export function createFakeSession(options: FakeOptions = {}) {
     for (const l of listeners) l();
   };
   const store = {
+    refresh: async () => publish([]),
     getSnapshot: () => snapshot,
     subscribe: (l: () => void) => {
       listeners.add(l);
@@ -244,19 +249,32 @@ export function createFakeSession(options: FakeOptions = {}) {
     };
   }
 
+  function viewOf(address: string, config?: Config): BankView {
+    const qs = {
+      urgent: queue(address, "urgent").map((id) => payments.get(id)!),
+      normal: queue(address, "normal").map((id) => payments.get(id)!),
+    };
+    const view: BankView = { address, balance: balance(address), queues: qs, analysis: analyseQueues(balance(address), qs, config, closeTime) };
+    if (capabilities.credit !== "stub") view.credit = { intraday: 0n, penalty: 0n, collateral: USD(1000) };
+    return view;
+  }
+
   const read = {
     async bank(address: string, opts: { config?: Config } = {}): Promise<BankView> {
-      const qs = {
-        urgent: queue(address, "urgent").map((id) => payments.get(id)!),
-        normal: queue(address, "normal").map((id) => payments.get(id)!),
-      };
-      const view: BankView = { address, balance: balance(address), queues: qs, analysis: analyseQueues(balance(address), qs, opts.config, closeTime) };
-      if (capabilities.credit !== "stub") view.credit = { intraday: 0n, penalty: 0n, collateral: USD(1000) };
-      return view;
+      return viewOf(address, opts.config);
+    },
+    async payments(range: { from: bigint; to: bigint }) {
+      return [...payments.values()].filter((p) => p.id >= range.from && p.id <= range.to).map(({ steps: _, ...p }) => p);
     },
     async queue(address: string, priority: Priority) {
       return queue(address, priority);
     },
+  };
+
+  // Like core's session: closed for good on dispose, and only signers for its own network.
+  let disposed = false;
+  const assertLive = () => {
+    if (disposed) throw new RtgsError("config", "Session closed", "This session was disposed; connect again.");
   };
 
   const session = {
@@ -268,14 +286,33 @@ export function createFakeSession(options: FakeOptions = {}) {
     registry,
     read,
     token: { holding: async (a: string) => holdings.get(a) ?? { balance: 0n, exists: false, authorized: false, authorizedToMaintainLiabilities: false, clawbackEnabled: false } },
-    as: (signer: Signer) => actorFor(signer),
-    store: () => ({ store, release: () => {} }),
-    dispose: () => {},
+    as: (signer: Signer) => {
+      assertLive();
+      if (signer.networkPassphrase !== network.passphrase) {
+        throw new RtgsError("network-mismatch", "Signer is for another network", `${signer.address} signs for another network.`);
+      }
+      return actorFor(signer);
+    },
+    store: () => {
+      assertLive();
+      return { store, release: () => {} };
+    },
+    dispose: () => {
+      disposed = true;
+    },
   };
+
+  snapshot = { ...snapshot, banks: views() };
 
   return {
     session: session as unknown as RtgsSession,
+    /** Pretends the store holds only payment orders from `id` up, as after a long history. */
+    forgetBefore(id: bigint) {
+      snapshot = { ...snapshot, payments: new Map([...snapshot.payments].filter(([k]) => k >= id)) };
+      for (const l of listeners) l();
+    },
     banks,
+    disposed: () => disposed,
     /** Acts as bank `n` (1-based) directly, e.g. another bank paying the one under test. */
     as: (n: number) => actorFor(banks[n - 1]!),
     balance,

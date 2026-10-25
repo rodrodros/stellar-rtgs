@@ -1,12 +1,13 @@
 # @rtgs/participant
 
 A participant's (a bank's) app for the RTGS settlement contract. It runs on the devnet, testnet or (opt-in) mainnet. A bank uses it to:
-- move cash tokens between its trustline and its settlement balance (`deposit`, `withdraw`), and open its trustline;
+- move cash tokens between its trustline and its custody balance in the settlement contract (`deposit`, `withdraw`), and open its trustline;
 - submit payment orders and see whether each settled at once or queued;
 - revoke (ADR-0016) or reprioritise (ADR-0009) its queued payment orders;
 - watch its urgent and normal queues: the head, what blocks it, and each order's expiry (ADR-0015);
 - follow its intraday credit and repos, and repay them (ADR-0011, ADR-0014);
-- see incoming settlements live, from core's event feed.
+- see its payment history, live from core's event feed, with older payment orders loaded on demand from the contract's views, which outlive the RPC's event retention;
+- see incoming settlements as they happen.
 
 All chain access goes through `@rtgs/core`; the app holds UI and UI state only.
 
@@ -37,6 +38,7 @@ The e2e test bootstraps a fresh deployment from a new seed, then drives two copi
 1. Bank 1 deposits and settles a payment at once.
 2. It queues an uncovered payment behind a blocked head, reprioritises it, then revokes it.
 3. It queues another payment and deposits enough to cover it. The eager closure settles it, and Bank 2 sees the incoming settlement without a refresh.
+4. Bank 1 saves its deployment settings, and the app reconnects cleanly.
 
 It skips itself when no devnet answers. It runs in Node with a jsdom window installed by `e2e/dom.ts`, because Vitest's jsdom environment breaks the Stellar SDK's byte checks.
 

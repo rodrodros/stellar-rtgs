@@ -39,7 +39,8 @@ describe("headNote", () => {
 describe("expiryNote", () => {
   it("follows the expire capability once the expiry has passed", () => {
     expect(expiryNote(100, 50, "available")).toEqual({ past: false, text: "Expires" });
-    expect(expiryNote(100, 100, "stub").text).toBe("Past expiry; not enforced by this contract version");
+    expect(expiryNote(100, 100, "available")).toEqual({ past: false, text: "Expires" });
+    expect(expiryNote(100, 101, "stub").text).toBe("Past expiry; not enforced by this contract version");
     expect(expiryNote(100, 120, "available").text).toBe("Past expiry; a keeper may reject it");
   });
 });

@@ -42,7 +42,7 @@ describe("Dashboard", () => {
   it("shows the custody balance against the cash token holding and the trustline", async () => {
     setup({ balances: { 1: USD(250) } });
     expect(await screen.findByText("250 USD")).toBeTruthy();
-    expect(screen.getByTestId("holding").textContent).toBe("10,000 USD");
+    await waitFor(() => expect(screen.getByTestId("holding").textContent).toBe("10,000 USD"));
     expect(screen.getByText("Authorized")).toBeTruthy();
   });
 
@@ -114,6 +114,20 @@ describe("Dashboard", () => {
     await act(() => fake.as(1).deposit(USD(50)));
     await waitFor(() => expect(within(screen.getByTestId("payment-0")).getByText("Settled")).toBeTruthy());
     expect(within(screen.getByLabelText("Normal queue")).getByText("Empty.")).toBeTruthy();
+  });
+
+  it("loads payment orders older than the store holds, from the views", async () => {
+    const fake = setup({ balances: { 1: USD(100) } });
+    for (const amount of [1, 2, 3]) await act(() => fake.as(1).submit({ to: fake.banks[1]!.address, amount: USD(amount), priority: "normal" }));
+    await screen.findByTestId("payment-2");
+    act(() => fake.forgetBefore(2n));
+    await waitFor(() => expect(screen.queryByTestId("payment-0")).toBeNull());
+    expect(screen.getByText(/back to #2/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Load older payment orders" }));
+    expect(await screen.findByTestId("payment-0")).toBeTruthy();
+    expect(within(screen.getByTestId("payment-1")).getByText("Settled")).toBeTruthy();
+    // Everything back to #0 is read: nothing older to load.
+    expect(screen.queryByRole("button", { name: "Load older payment orders" })).toBeNull();
   });
 
   it("degrades the credit section where entry points are stubs", async () => {

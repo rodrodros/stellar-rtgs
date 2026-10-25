@@ -1,9 +1,11 @@
 // The acting bank's views: custody balance, queues with their analysis, credit, and its cash
-// token holding. Re-read whenever an event concerns the bank, after each of its own writes,
-// and every 30 seconds as a safety net.
+// token holding. A bank in the registry takes its view from core's store, which re-reads it
+// after every event that concerns it; an unregistered one (a wallet core doesn't know) is read
+// here. The holding is always read here, since the store doesn't keep holdings. Both follow
+// the events that concern the bank, debounced, and every 30 seconds as a safety net.
 import type { BankView, Holding, RtgsError } from "@rtgs/core";
-import { useSession, useSnapshot } from "@rtgs/core/react";
-import { createContext, useContext, useEffect, useReducer, type ReactNode } from "react";
+import { useSession, useSnapshot, useStore } from "@rtgs/core/react";
+import { createContext, useCallback, useContext, useEffect, useReducer, useState, type ReactNode } from "react";
 import { lastTouching } from "../live/touches.ts";
 import { useLoad } from "./useLoad.ts";
 
@@ -26,28 +28,55 @@ export function useBankData(): BankData {
 }
 
 export const SAFETY_REFRESH_MS = 30_000;
+/** Gathers a burst of events (e.g. the replay of the retention window) into one read. */
+export const EVENT_DEBOUNCE_MS = 300;
+
+function useDebounced<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
 
 export function BankDataProvider(props: { address: string; children: ReactNode }) {
   const { address } = props;
   const session = useSession();
+  const store = useStore();
   const config = useSnapshot((s) => s.config);
-  const touched = useSnapshot((s) => lastTouching(s, address));
-  const [local, refresh] = useReducer((n: number) => n + 1, 0);
+  const storeView = useSnapshot((s) => s.banks.get(address));
+  const registered = useSnapshot((s) => s.registry.some((b) => b.address === address));
+  const touched = useDebounced(
+    useSnapshot((s) => lastTouching(s, address)),
+    EVENT_DEBOUNCE_MS,
+  );
+  const [local, bump] = useReducer((n: number) => n + 1, 0);
+
+  const refresh = useCallback(() => {
+    bump();
+    if (registered) void store.refresh([address]);
+  }, [registered, store, address]);
 
   useEffect(() => {
     const timer = setInterval(refresh, SAFETY_REFRESH_MS);
     return () => clearInterval(timer);
-  }, []);
+  }, [refresh]);
 
-  const view = useLoad(() => session.read.bank(address, config ? { config } : {}), [session, address, config, touched, local]);
+  const fromStore = registered && storeView !== undefined;
+  const direct = useLoad(
+    () => (fromStore ? Promise.resolve(undefined) : session.read.bank(address, config ? { config } : {})),
+    [session, address, config, fromStore, fromStore || touched, local],
+  );
   const holding = useLoad(() => session.token.holding(address), [session, address, touched, local]);
 
-  const error = view.error ?? holding.error;
+  const view = fromStore ? storeView : direct.data;
+  const error = (fromStore ? undefined : direct.error) ?? holding.error;
   const value: BankData = {
     address,
-    loading: view.loading || holding.loading,
+    loading: (!fromStore && direct.loading) || holding.loading,
     refresh,
-    ...(view.data ? { view: view.data } : {}),
+    ...(view ? { view } : {}),
     ...(holding.data ? { holding: holding.data } : {}),
     ...(error ? { error } : {}),
   };

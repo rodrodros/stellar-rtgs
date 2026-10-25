@@ -1,6 +1,8 @@
 // The bank's outgoing and incoming payment orders with their status, newest first. The store
-// holds the newest payment orders from the views plus everything the event feed has seen.
-import type { PaymentRecord, PaymentStatus } from "@rtgs/core";
+// holds the newest payment orders system-wide (from the views) plus everything the event feed
+// has seen; "Load older" pages further back through the views, which outlive the RPC's
+// retention window.
+import { toRtgsError, type Payment, type PaymentRecord, type PaymentStatus, type RtgsError } from "@rtgs/core";
 import { useSession, useSnapshot } from "@rtgs/core/react";
 import { useMemo, useState } from "react";
 import { useBankData } from "../session/BankData.tsx";
@@ -30,14 +32,55 @@ export function filterHistory(
   return rows.sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0));
 }
 
+/** How many payment ids "Load older" reads per click. */
+export const OLDER_PAGE = 100n;
+
+/** The store's payment orders, plus older ones read on demand; the store's are fresher. */
+export function withOlder(store: ReadonlyMap<bigint, PaymentRecord>, older: ReadonlyMap<bigint, Payment>): PaymentRecord[] {
+  const merged = new Map<bigint, PaymentRecord>();
+  for (const [id, p] of older) merged.set(id, { ...p, steps: [] });
+  for (const [id, p] of store) merged.set(id, p);
+  return [...merged.values()];
+}
+
 export function PaymentHistory() {
   const session = useSession();
   const { address } = useBankData();
   const payments = useSnapshot((s) => s.payments);
   const feed = useSnapshot((s) => s.feed);
+  const loading = useSnapshot((s) => s.status === "loading");
   const [direction, setDirection] = useState<Direction>("all");
   const [status, setStatus] = useState<PaymentStatus | "all">("all");
-  const rows = useMemo(() => filterHistory(payments.values(), address, direction, status), [payments, address, direction, status]);
+  const [older, setOlder] = useState<ReadonlyMap<bigint, Payment>>(new Map());
+  const [paging, setPaging] = useState<{ busy: boolean; error?: RtgsError }>({ busy: false });
+  // The lowest id "Load older" has read, whether or not it was the bank's.
+  const [readBackTo, setReadBackTo] = useState<bigint>();
+  const all = useMemo(() => withOlder(payments, older), [payments, older]);
+  const rows = useMemo(() => filterHistory(all, address, direction, status), [all, address, direction, status]);
+  // The oldest id read so far: everything from it up is in `all`.
+  const lowest = [...all.map((p) => p.id), ...(readBackTo === undefined ? [] : [readBackTo])].reduce<bigint | undefined>(
+    (min, id) => (min === undefined || id < min ? id : min),
+    undefined,
+  );
+
+  const loadOlder = async () => {
+    if (lowest === undefined || lowest === 0n) return;
+    const to = lowest - 1n;
+    const from = to + 1n > OLDER_PAGE ? to + 1n - OLDER_PAGE : 0n;
+    setPaging({ busy: true });
+    try {
+      const page = await session.read.payments({ from, to });
+      setOlder((prev) => {
+        const next = new Map(prev);
+        for (const p of page) next.set(p.id, p);
+        return next;
+      });
+      setReadBackTo(from);
+      setPaging({ busy: false });
+    } catch (e) {
+      setPaging({ busy: false, error: toRtgsError(e) });
+    }
+  };
   const code = session.cashToken.code;
   const name = (a: string) => session.registry.nameOf(a);
 
@@ -65,7 +108,7 @@ export function PaymentHistory() {
         </label>
       </div>
       {rows.length === 0 ? (
-        <p className="note">No payment orders yet.</p>
+        <p className="note">{loading ? "Loading payment orders…" : "No payment orders found."}</p>
       ) : (
         <table className="history">
           <thead>
@@ -107,9 +150,20 @@ export function PaymentHistory() {
         </table>
       )}
       <p className="note">
-        Shows the newest payment orders and every event since ledger {feed.startLedger ?? "…"}.
-        {feed.clamped && " Older events are beyond the RPC retention window, but their payment orders' statuses still come from the contract."}
+        Shows the newest payment orders across the system
+        {lowest !== undefined && lowest > 0n ? ` (back to #${lowest})` : ""} and every event since ledger {feed.startLedger ?? "…"}.
+        {feed.clamped && " Older events are beyond the RPC retention window; older payment orders still load from the contract."}
       </p>
+      {!loading && lowest !== undefined && lowest > 0n && (
+        <button type="button" disabled={paging.busy} onClick={() => void loadOlder()}>
+          {paging.busy ? "Loading…" : "Load older payment orders"}
+        </button>
+      )}
+      {paging.error && (
+        <p className="tx tx-error" role="alert">
+          <strong>{paging.error.title}</strong> {paging.error.detail}
+        </p>
+      )}
     </section>
   );
 }
