@@ -12,9 +12,10 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - `deposit`'s guards: it refuses an amount of 0 or less with `InvalidAmount`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - `withdraw`'s guards: it refuses an amount of 0 or less with `InvalidAmount` and one above the balance with `InsufficientFunds`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - the kernel's cover rule, `rtgs_core::covers`: a payment is covered if paying it leaves the sender's balance non-negative, with its unit and property tests;
+- `submit` (A1): the sender's authorization, `InvalidAmount` and `SameAccount`, sequence-number ids and the payment record. A payment `covers` accepts settles at once (A2); any other waits in the sender's queue for its priority. The `payment`, `queue` and `queued_count` views read them back;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
-Payments, queues, offsetting and credit come next, test first.
+Queue discipline, the queue cap, the eager closure, queue management, offsetting and credit come next, test first.
 
 ## Quick start
 
@@ -41,7 +42,7 @@ Prerequisites:
 | Path | Contents |
 |---|---|
 | `contracts/settlement/` | The settlement contract: one contract holds the cash token and keeps every bank's balance (ADR-0004). `src/tests/` holds its unit, auth, property, state-machine and replay tests, and `tests/SCENARIOS.md` maps each scenario to them |
-| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. Its cover rule is implemented; the greatest feasible prefix is a stub whose unit and property tests are red |
+| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. The settlement contract calls its cover rule. Its greatest feasible prefix is still a stub whose unit and property tests are red |
 | `quint/` | The contract-level Quint model `settlement.qnt`, its tests `settlement_test.qnt`, and the ITF traces in `traces/` that `src/tests/itf_replay.rs` replays against the contract (TESTING.md §3). `make quint-traces` regenerates them |
 | `devnet/` | `up.sh`, `smoke.sh` and `down.sh` for the local network. Containers are named `impl-*`, and stellar-cli's identities go in `.devnet/` |
 | `integration/` | The devnet scenarios (TESTING.md §4): `lib.sh` holds the ADR-0003 cash-token setup, `run.sh` runs every scenario, and `pending/` holds the scenarios written ahead of the contract code they need |
@@ -58,4 +59,5 @@ Two kinds of item. A behaviour the ADRs leave open needs a decision from the use
 - [x] **The penalty rate is recorded but not charged (ADR-0014).** Decided with the user on 2026-10-24: a penalty repo carries only its status and its rate, and no interest accrues. Conversion mints and burns nothing. This is recorded in the header of `contracts/settlement/src/tests/unit/credit.rs`.
 - [ ] **Decide what the queue cap does to an offset (ADR-0010).** The queue is full, and a new payment is not covered alone but would settle at once in an offset that includes it. Is it refused with `QueueFull`, or does it settle? `the_queue_cap_refuses_only_payments_that_would_queue` only tests a payment covered on its own.
 - [ ] **Decide who holds the cash token's SAC admin role.** In the tests, the central bank's own account is the issuer and so the admin, and it authorizes the mint inside `open_repo`. As admin, that account can also claw back from or deauthorize the settlement contract outside the contract's recorded A16 path, which breaks S1 or freezes the RTGS (review finding H1, ADR-0006). The alternative is an issuance controller contract that holds the admin role. The `Setup` doc comment and SCENARIOS.md (the A12 section) mark the current choice as provisional.
+- [ ] **Decide which addresses a payment may credit.** A1's guard asks that sender and receiver are accounts of the system (§4.6, S11), but the contract keeps no list of banks. `submit` accepts any receiver, including the contract itself or the central bank. A payment to the contract credits `Balance(contract)`, which nothing can withdraw. No test or ADR decides this yet.
 - [ ] **Add a devnet scenario for `withdraw`.** `integration/` covers only `deposit`. An `integration/withdraw.sh` (TESTING.md §4) would check on the network what the test host can't: that the bank's own signature is the only one `withdraw` needs (SC-A11-12), that a withdrawal to a trustline the issuer has frozen is refused with `TokenTransferFailed` and leaves the balance unchanged (SC-A11-16), the `withdrawn` event, and the TTL of `Balance(B)` after the withdrawal.

@@ -91,17 +91,19 @@ Build on Flow 4. `submit` needs:
 - the `payment`, `queue` and `queued_count` views;
 - the `Submitted` and `Settled` events.
 
-- [ ] `unit::payments::a_covered_payment_settles_at_once` (SC-A01-01)
-- [ ] `unit::payments::a_payment_of_exactly_the_balance_settles` (SC-A01-02)
-- [ ] `unit::payments::a_payment_of_one_more_than_the_balance_is_queued` (SC-A01-03)
-- [ ] `unit::payments::a_bank_with_no_balance_can_queue_a_payment` (SC-A01-04)
-- [ ] `unit::payments::a_zero_or_negative_payment_is_refused` (SC-A01-05)
-- [ ] `unit::payments::a_payment_to_oneself_is_refused` (SC-A01-06)
-- [ ] `unit::payments::a_payment_of_i128_max_queues_or_settles_without_overflow` (SC-A01-07)
-- [ ] `unit::payments::ids_are_increasing_sequence_numbers` (SC-A01-08)
-- [ ] `auth::submit_is_authorized_by_the_sender_alone` (SC-A01-16)
-- [ ] `auth::submit_without_the_senders_authorization_fails` (SC-A01-16)
-- [ ] `auth::the_receiver_cannot_submit_a_payment_from_the_sender` (SC-A01-16)
+- [x] `unit::payments::a_covered_payment_settles_at_once` (SC-A01-01)
+- [x] `unit::payments::a_payment_of_exactly_the_balance_settles` (SC-A01-02)
+- [x] `unit::payments::a_payment_of_one_more_than_the_balance_is_queued` (SC-A01-03)
+- [x] `unit::payments::a_bank_with_no_balance_can_queue_a_payment` (SC-A01-04)
+- [x] `unit::payments::a_zero_or_negative_payment_is_refused` (SC-A01-05)
+- [x] `unit::payments::a_payment_to_oneself_is_refused` (SC-A01-06)
+- [x] `unit::payments::a_payment_of_i128_max_queues_or_settles_without_overflow` (SC-A01-07)
+- [x] `unit::payments::ids_are_increasing_sequence_numbers` (SC-A01-08)
+- [x] `auth::submit_is_authorized_by_the_sender_alone` (SC-A01-16)
+- [x] `auth::submit_without_the_senders_authorization_fails` (SC-A01-16)
+- [x] `auth::the_receiver_cannot_submit_a_payment_from_the_sender` (SC-A01-16)
+
+`submit` settles a covered payment at once whatever is queued ahead of it, until Flow 6. Seven tests of later flows pass with this flow, but stay unticked until their own flow re-checks them: each guards against, or depends on, a behaviour that doesn't exist yet. They are SC-A01-13 and SC-A01-14 (Flow 6, queue discipline), SC-A01-10 (Flow 7, the cap), SC-A02-06 and SC-A02-07 (Flow 8, the closure), and SC-A03-04 and SC-A03-05 (Flow 13, the offset). Each one's line says what to check before ticking it.
 
 ## Flow 6: queue discipline at submission (5)
 
@@ -109,8 +111,8 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 
 - [ ] `unit::payments::a_covered_payment_waits_behind_an_uncovered_one_of_the_same_priority` (SC-A01-11)
 - [ ] `unit::payments::a_queued_urgent_payment_blocks_the_banks_normal_payments` (SC-A01-12)
-- [ ] `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` (SC-A01-13)
-- [ ] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). This one may already pass after Flow 5.
+- [ ] `unit::payments::an_urgent_payment_settles_ahead_of_queued_normal_ones` (SC-A01-13). Passes since Flow 5, because there is no queue discipline yet. Check that it still passes once the discipline exists, then tick it.
+- [ ] `unit::payments::one_banks_blocked_queue_does_not_block_another_bank` (SC-A01-14). Passes since Flow 5, since cover is checked against the sender's balance alone. Check that it still passes once the discipline exists, then tick it.
 - [ ] `unit::payments::cpss_box_4_strict_fifo_settles_only_the_first_payment` (SC-A01-15)
 
 ## Flow 7: the queue cap, ADR-0010 (2)
@@ -118,7 +120,7 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 `QueueFull` refuses only a payment that would queue. A covered payment still settles.
 
 - [ ] `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` (SC-A01-09)
-- [ ] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09, and it may already pass after Flow 5.
+- [ ] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09. Passes since Flow 5, because there is no cap yet. Check that it still passes once the cap exists, then tick it.
 
 One decision is still open (README): what the cap does to a payment that would settle by offset. No test decides it, so add no behaviour for it.
 
@@ -131,8 +133,8 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 - [ ] `unit::payments::new_liquidity_settles_urgent_payments_before_normal_ones` (SC-A02-03)
 - [ ] `unit::payments::a_settlement_cascades_through_the_receivers_queue` (SC-A02-04)
 - [ ] `unit::payments::a_submission_that_settles_releases_the_receivers_queue` (SC-A02-05)
-- [ ] `unit::payments::a_withdrawal_settles_nothing` (SC-A02-06)
-- [ ] `unit::payments::a_settled_payment_never_changes` (SC-A02-07)
+- [ ] `unit::payments::a_withdrawal_settles_nothing` (SC-A02-06). Passes since Flow 5, because there is no closure yet. Check that it still passes once the closure exists, then tick it.
+- [ ] `unit::payments::a_settled_payment_never_changes` (SC-A02-07). Passes since Flow 5, because there is no closure yet. Check that it still passes once the closure exists, then tick it.
 
 ## Flow 9: revoke, A6 (11)
 
@@ -222,11 +224,13 @@ Build on Flows 8 and 12. Once gross settlement is at rest:
 3. Publish the `Offset` event, then one `Settled` event for each payment in it.
 4. Run the closure again.
 
+Step 1 needs every bank with a queued payment. Since Flow 5, queues are stored one per `Queue(bank, priority)` and the contract keeps no list of banks, so the offset needs a persistent index of the banks with queued payments. That index could replace `QueuedCount`.
+
 - [ ] `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible` (SC-A03-01)
 - [ ] `unit::lsm::two_opposite_payments_offset_with_no_liquidity` (SC-A03-02)
 - [ ] `unit::lsm::the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest` (SC-A03-03)
-- [ ] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04)
-- [ ] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05)
+- [ ] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04). Passes since Flow 5, because there is no offset yet. Check that it still passes once the offset exists, then tick it.
+- [ ] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05). Passes since Flow 5, because there is no offset yet. Check that it still passes once the offset exists, then tick it.
 - [ ] `unit::lsm::a_deposit_can_make_an_offset_feasible` (SC-A03-06)
 - [ ] `unit::lsm::at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative` (SC-A03-07)
 - [ ] `unit::lsm::after_an_offset_the_queues_are_at_rest` (SC-A03-08)
@@ -338,6 +342,6 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 4) | 26 |
-| Still to fix (Flows 5 to 21) | 123 |
+| Already green (Flows 0 to 5) | 37 |
+| Still to fix (Flows 6 to 21) | 112 |
 | All | 149 |

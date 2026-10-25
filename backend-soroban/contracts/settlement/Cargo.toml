@@ -9,7 +9,11 @@ crate-type = ["lib", "cdylib"]
 doctest = false
 
 [dependencies]
-soroban-sdk = { workspace = true }
+# `alloc` gives the Wasm a global allocator. rtgs-core is soroban-free, so its rules use
+# `alloc::vec::Vec` rather than the host's Vec, and linking it needs one. The SDK calls
+# the feature a last resort, for its CPU and code-size cost (C-SC-224).
+soroban-sdk = { workspace = true, features = ["alloc"] }
+rtgs-core = { path = "../../crates/rtgs-core" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

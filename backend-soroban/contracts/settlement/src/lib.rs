@@ -1,16 +1,19 @@
 //! The RTGS settlement contract: one contract holds the cash token and keeps every
 //! bank's settlement balance (ADR-0004).
 //!
-//! Only the constructor, `deposit`, `withdraw` and the `balance`, `config` and
-//! `central_bank` views are implemented. The other entry points are stubs whose unit
-//! tests (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
+//! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
+//! covered payment at once and queues any other) and the `balance`, `payment`, `queue`,
+//! `queued_count`, `config` and `central_bank` views. The other entry points are stubs
+//! whose unit tests (`src/tests/`) are written and red; they are implemented test first
+//! (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
 extern crate std;
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env,
+    IntoVal, Val, Vec,
 };
 
 const DAY_IN_LEDGERS: u32 = 17_280;
@@ -148,6 +151,15 @@ enum DataKey {
     /// One key per bank, so payments between different banks don't share a hot key
     /// (handbook 09 §3).
     Balance(Address),
+    /// The id the next submitted payment gets (S11). The counters are persistent, not in
+    /// the instance, so a submission doesn't write the entry every call reads (handbook 09
+    /// §3).
+    NextId,
+    /// How many payments are queued, across all banks.
+    QueuedCount,
+    Payment(u64),
+    /// The ids `bank` has queued at a priority, head first (ADR-0008, ADR-0009).
+    Queue(Address, Priority),
 }
 
 #[contractevent]
@@ -267,12 +279,51 @@ fn transfer(env: &Env, from: &Address, to: &Address, amount: i128) -> Result<(),
     }
 }
 
+/// Writes a persistent entry and extends it.
+fn put<V: IntoVal<Env, Val>>(env: &Env, key: &DataKey, value: &V) {
+    let persistent = env.storage().persistent();
+    persistent.set(key, value);
+    persistent.extend_ttl(key, BUMP_THRESHOLD, BUMP_AMOUNT);
+}
+
 /// Records the bank's settlement balance and extends its entry.
 fn set_balance(env: &Env, bank: &Address, balance: i128) {
-    let key = DataKey::Balance(bank.clone());
-    let persistent = env.storage().persistent();
-    persistent.set(&key, &balance);
-    persistent.extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+    put(env, &DataKey::Balance(bank.clone()), &balance);
+}
+
+/// A2: moves the payment's amount from its sender's balance, `from_balance`, to its
+/// receiver's, and records it settled at the ledger's close time. The caller has checked
+/// that `from_balance` covers it. No token moves (S1), and the receiver's sum cannot
+/// overflow, since S1 bounds every balance by the tokens the contract holds.
+fn settle(env: &Env, payment: &mut Payment, from_balance: i128) {
+    set_balance(env, &payment.from, from_balance - payment.amount);
+    let to_balance = Settlement::balance(env.clone(), payment.to.clone());
+    set_balance(env, &payment.to, to_balance + payment.amount);
+    payment.status = Status::Settled;
+    payment.settled_at = Some(env.ledger().timestamp());
+    put(env, &DataKey::Payment(payment.id), payment);
+    Settled {
+        id: payment.id,
+        from: payment.from.clone(),
+        to: payment.to.clone(),
+        amount: payment.amount,
+    }
+    .publish(env);
+}
+
+/// Records the queued payment and puts it at the tail of its sender's queue for its
+/// priority.
+fn enqueue(env: &Env, payment: &Payment) {
+    put(env, &DataKey::Payment(payment.id), payment);
+    let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
+    queue.push_back(payment.id);
+    put(
+        env,
+        &DataKey::Queue(payment.from.clone(), payment.priority),
+        &queue,
+    );
+    let count = Settlement::queued_count(env.clone()) + 1;
+    put(env, &DataKey::QueuedCount, &count);
 }
 
 #[contract]
@@ -329,14 +380,61 @@ impl Settlement {
     }
 
     /// A1: submits a payment and returns its id, then settles eagerly (A2, A3).
+    ///
+    /// The sender authorizes it alone (S6). An amount of 0 or less is refused with
+    /// `InvalidAmount`, and a payment to oneself with `SameAccount`, before an id is used.
+    /// The id is the next sequence number (S11). A covered payment settles at once (A2);
+    /// any other waits at the tail of the sender's queue for its priority. Queue discipline
+    /// (S7, ADR-0008, ADR-0009) is not enforced yet: a covered payment settles even behind
+    /// a queued head.
     pub fn submit(
-        _env: Env,
-        _from: Address,
-        _to: Address,
-        _amount: i128,
-        _priority: Priority,
+        env: Env,
+        from: Address,
+        to: Address,
+        amount: i128,
+        priority: Priority,
     ) -> Result<u64, Error> {
-        todo!()
+        from.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        if from == to {
+            return Err(Error::SameAccount);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        let id: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::NextId)
+            .unwrap_or(0);
+        put(&env, &DataKey::NextId, &(id + 1));
+        let mut payment = Payment {
+            id,
+            from,
+            to,
+            amount,
+            priority,
+            submitted_at: env.ledger().timestamp(),
+            status: Status::Queued,
+            settled_at: None,
+        };
+        Submitted {
+            id,
+            from: payment.from.clone(),
+            to: payment.to.clone(),
+            amount,
+            priority,
+        }
+        .publish(&env);
+        let balance = Self::balance(env.clone(), payment.from.clone());
+        if rtgs_core::covers(balance, amount) {
+            settle(&env, &mut payment, balance);
+        } else {
+            enqueue(&env, &payment);
+        }
+        Ok(id)
     }
 
     /// A6: the sender revokes a queued payment (ADR-0016).
@@ -382,18 +480,24 @@ impl Settlement {
             .unwrap_or(0)
     }
 
-    pub fn payment(_env: Env, _id: u64) -> Option<Payment> {
-        todo!()
+    pub fn payment(env: Env, id: u64) -> Option<Payment> {
+        env.storage().persistent().get(&DataKey::Payment(id))
     }
 
     /// The ids queued by `bank` at `priority`, head first.
-    pub fn queue(_env: Env, _bank: Address, _priority: Priority) -> Vec<u64> {
-        todo!()
+    pub fn queue(env: Env, bank: Address, priority: Priority) -> Vec<u64> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Queue(bank, priority))
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     /// How many payments are queued, across all banks.
-    pub fn queued_count(_env: Env) -> u32 {
-        todo!()
+    pub fn queued_count(env: Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::QueuedCount)
+            .unwrap_or(0)
     }
 
     /// The bank's credit position; all zero for a bank with none.
