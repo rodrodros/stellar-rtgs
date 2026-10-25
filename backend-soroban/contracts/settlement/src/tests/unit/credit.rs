@@ -328,8 +328,8 @@ fn a_third_party_cannot_repay() {
     assert_eq!(setup.balances(), std::vec![60, 100]);
 }
 
-/// SC-A13-05. A13's guard `x ≤ cr`: one more than the outstanding amount is
-/// `RepayExceedsRepo`, and a repaid repo has nothing left to repay.
+/// SC-A13-05. A13's guard `x ≤ cr`, checked per repo: one more than the repo's
+/// outstanding amount is `RepayExceedsRepo`, and a repaid repo has nothing left to repay.
 #[test]
 fn repaying_more_than_is_outstanding_is_refused() {
     let setup = Setup::new(1, 0);
@@ -398,6 +398,30 @@ fn repaying_an_unknown_repo_is_refused() {
         setup.client().try_repay(setup.bank(0), &0, &1),
         Err(Ok(Error::UnknownRepo))
     );
+}
+
+/// SC-A13-10. ADR-0003, ADR-0011: a burn the SAC refuses is reported as
+/// `TokenTransferFailed`, not a host abort, and nothing changes (S1; `props.rs` demands
+/// it of SC-P-01). Here the issuer has deauthorized the contract's own holding. Added in
+/// review after the branch was written, so it was shown red against hand mutants (a
+/// burn that aborts, a refusal ignored) rather than against a stub.
+#[test]
+fn a_burn_the_token_refuses_is_reported() {
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.admin().set_authorized(&setup.contract, &false);
+
+    assert_eq!(
+        client.try_repay(setup.bank(0), &id, &20),
+        Err(Ok(Error::TokenTransferFailed))
+    );
+    assert_eq!(client.balance(setup.bank(0)), 60);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 100));
+    assert_eq!(setup.token().balance(&setup.contract), 60);
+    setup.assert_conserved();
 }
 
 // ---------------------------------------------------------------------------------------

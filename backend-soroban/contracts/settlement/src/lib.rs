@@ -5,11 +5,12 @@
 //! covered payment at once unless the sender has one queued ahead of it, queues any
 //! other, and refuses one still queued after the eager closure when the queue was already
 //! full), `revoke`, `reprioritise`, `expire`, `set_collateral`, `open_repo` (which mints
-//! the repo into the contract), the eager closure (gross settlement, then the LSM offset)
-//! after every deposit, submission, revocation, reprioritisation, expiry or repo, and the
-//! `balance`, `payment`, `queue`, `queued_count`, `credit`, `repo`, `config` and
-//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
-//! are written and red; they are implemented test first (TESTING.md).
+//! the repo into the contract), `repay` (which burns the repayment from it), the eager
+//! closure (gross settlement, then the LSM offset) after every deposit, submission,
+//! revocation, reprioritisation, expiry or repo, and the `balance`, `payment`, `queue`,
+//! `queued_count`, `credit`, `repo`, `config` and `central_bank` views. The other entry
+//! points are stubs whose unit tests (`src/tests/`) are written and red; they are
+//! implemented test first (TESTING.md).
 #![no_std]
 
 extern crate alloc;
@@ -316,6 +317,21 @@ fn mint(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
 
     let token: Address = instance.get(&DataKey::Token).unwrap();
     match token::StellarAssetClient::new(env, &token).try_mint(to, &amount) {
+        Ok(Ok(())) => Ok(()),
+        _ => Err(Error::TokenTransferFailed),
+    }
+}
+
+/// Burns `amount` of the cash token from this contract's holding through its SAC
+/// (ADR-0011), and extends the instance that records the token. The contract is the
+/// holder and the direct caller, so the burn needs no one else's authorization. Whatever
+/// the SAC refuses is reported as `TokenTransferFailed`.
+fn burn(env: &Env, amount: i128) -> Result<(), Error> {
+    let instance = env.storage().instance();
+    instance.extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+
+    let token: Address = instance.get(&DataKey::Token).unwrap();
+    match token::Client::new(env, &token).try_burn(&env.current_contract_address(), &amount) {
         Ok(Ok(())) => Ok(()),
         _ => Err(Error::TokenTransferFailed),
     }
@@ -983,9 +999,53 @@ impl Settlement {
         Ok(id)
     }
 
-    /// A13, or A20 for a penalty repo: the bank or the central bank repays, burning cash.
-    pub fn repay(_env: Env, _actor: Address, _repo_id: u64, _amount: i128) -> Result<(), Error> {
-        todo!()
+    /// A13 under Repo with MintBurn: the bank, or the central bank on its behalf, repays
+    /// `amount` of a repo, debiting the bank's balance and burning the cash from the
+    /// contract (ADR-0011).
+    ///
+    /// The actor authorizes it alone (S6). An amount of 0 or less is refused with
+    /// `InvalidAmount`. Then, in SC-P-02's order: an id never issued is `UnknownRepo`, an
+    /// actor that is neither the repo's bank nor the central bank is `NotAuthorized` (S6),
+    /// more than the outstanding amount is `RepayExceedsRepo` (so a repaid repo takes
+    /// nothing more), and more than the bank's balance is `InsufficientFunds` (A13 with
+    /// `lim` = 0). A burn the SAC refuses is `TokenTransferFailed`. The repayment lowers
+    /// the repo's outstanding amount and the bank's `cr`, the repo is `Repaid` once
+    /// nothing is outstanding, and `RepoRepaid` records it. A repayment only lowers a
+    /// balance, so it covers no queue head and makes no offset feasible: no eager closure
+    /// follows.
+    pub fn repay(env: Env, actor: Address, repo_id: u64, amount: i128) -> Result<(), Error> {
+        actor.require_auth();
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let mut repo = Self::repo(env.clone(), repo_id).ok_or(Error::UnknownRepo)?;
+        if actor != repo.bank && actor != Self::central_bank(env.clone()) {
+            return Err(Error::NotAuthorized);
+        }
+        if amount > repo.outstanding {
+            return Err(Error::RepayExceedsRepo);
+        }
+        let balance = Self::balance(env.clone(), repo.bank.clone());
+        if balance < amount {
+            return Err(Error::InsufficientFunds);
+        }
+        set_balance(&env, &repo.bank, balance - amount);
+        burn(&env, amount)?;
+        repo.outstanding -= amount;
+        if repo.outstanding == 0 {
+            repo.status = RepoStatus::Repaid;
+        }
+        put(&env, &DataKey::Repo(repo_id), &repo);
+        let mut credit = Self::credit(env.clone(), repo.bank.clone());
+        credit.cr -= amount;
+        put(&env, &DataKey::Credit(repo.bank), &credit);
+        RepoRepaid {
+            id: repo_id,
+            amount,
+            outstanding: repo.outstanding,
+        }
+        .publish(&env);
+        Ok(())
     }
 
     /// ADR-0014: anyone turns a repo past its term into a penalty repo.

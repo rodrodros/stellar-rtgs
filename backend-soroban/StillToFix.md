@@ -382,18 +382,22 @@ The actor, either the bank or the central bank, authorizes the call. Anyone else
 - the status `Repaid` once nothing is outstanding;
 - the `RepoRepaid` event.
 
-- [ ] `unit::credit::a_partial_repayment_burns_cash_and_lowers_the_credit` (SC-A13-01)
-- [ ] `unit::credit::a_full_repayment_closes_the_repo_and_frees_the_collateral` (SC-A13-02)
-- [ ] `unit::credit::the_central_bank_may_repay_on_the_banks_behalf` (SC-A13-03)
-- [ ] `unit::credit::a_third_party_cannot_repay` (SC-A13-04)
-- [ ] `auth::an_authorized_third_party_is_still_not_authorized_to_repay` (SC-A13-04)
-- [ ] `unit::credit::repaying_more_than_is_outstanding_is_refused` (SC-A13-05)
-- [ ] `unit::credit::a_bank_cannot_repay_more_than_its_balance` (SC-A13-06)
-- [ ] `unit::credit::a_zero_or_negative_repayment_is_refused` (SC-A13-07)
-- [ ] `unit::credit::repaying_an_unknown_repo_is_refused` (SC-A13-08)
-- [ ] `auth::repay_is_authorized_by_the_actor_alone` (SC-A13-09)
-- [ ] `auth::repay_by_the_central_bank_is_authorized_by_the_central_bank_alone` (SC-A13-09)
-- [ ] `auth::repay_without_the_actors_authorization_fails` (SC-A13-09)
+- [x] `unit::credit::a_partial_repayment_burns_cash_and_lowers_the_credit` (SC-A13-01)
+- [x] `unit::credit::a_full_repayment_closes_the_repo_and_frees_the_collateral` (SC-A13-02)
+- [x] `unit::credit::the_central_bank_may_repay_on_the_banks_behalf` (SC-A13-03)
+- [x] `unit::credit::a_third_party_cannot_repay` (SC-A13-04)
+- [x] `auth::an_authorized_third_party_is_still_not_authorized_to_repay` (SC-A13-04)
+- [x] `unit::credit::repaying_more_than_is_outstanding_is_refused` (SC-A13-05)
+- [x] `unit::credit::a_bank_cannot_repay_more_than_its_balance` (SC-A13-06)
+- [x] `unit::credit::a_zero_or_negative_repayment_is_refused` (SC-A13-07)
+- [x] `unit::credit::repaying_an_unknown_repo_is_refused` (SC-A13-08)
+- [x] `auth::repay_is_authorized_by_the_actor_alone` (SC-A13-09)
+- [x] `auth::repay_by_the_central_bank_is_authorized_by_the_central_bank_alone` (SC-A13-09)
+- [x] `auth::repay_without_the_actors_authorization_fails` (SC-A13-09)
+
+Added in Flow 18, and green:
+
+- [x] `unit::credit::a_burn_the_token_refuses_is_reported` (SC-A13-10): `props.rs` demands a refused SAC burn come back as a contract error, so `repay` reports it as `TokenTransferFailed`. Added in review, so it was shown red against hand mutants rather than a stub.
 
 ## Flow 19: the penalty repo, ADR-0014 and A20 (9)
 
@@ -431,8 +435,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 17) | 173 |
-| Still to fix (Flows 18 to 21) | 24 |
-| All | 197 |
+| Already green (Flows 0 to 18) | 186 |
+| Still to fix (Flows 19 to 21) | 12 |
+| All | 198 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, and Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, and Flow 18 added SC-A13-10.
