@@ -420,7 +420,7 @@ Converting a repo moves its outstanding amount from `cr` to `ovn` and records th
 
 Added in Flow 19, and green:
 
-- [x] `unit::credit::converting_one_of_two_repos_moves_only_its_own_amount` (SC-A20-10): every other test converts a bank's only repo, where `cr = 0` and `ovn = outstanding` pass for `cr -= outstanding` and `ovn += outstanding`. With two repos they don't. SC-P-01 and SC-P-02 rarely reach that case.
+- [x] `unit::credit::converting_one_of_two_repos_moves_only_its_own_amount` (SC-A20-10): every other test converts a bank's only repo, where `cr = 0` and `ovn = outstanding` pass for `cr -= outstanding` and `ovn += outstanding`. With two repos they don't. Before Flow 21, SC-P-01 and SC-P-02 rarely reached that case; now both do (Flow 21).
 - [x] `unit::credit::a_term_that_would_overflow_never_passes` (SC-A20-11): the term saturates, so a term near `u64::MAX` never passes, where a wrapping sum would make the repo overdue at once.
 - [x] `unit::credit::each_repo_is_repaid_from_its_own_side_of_the_credit` (SC-A20-12): every other test that repays meets one side only, a bank with only intraday repos or one repaying its only, penalty repo, so choosing the side by the bank's `ovn` rather than the repo's status passed them all. Added in review, so it was shown red against that hand mutant, `owed_by_ovn`, killed under the pinned seed and seeds 1–4.
 - [x] `unit::storage::converting_an_overdue_repo_extends_the_instance_the_repo_and_the_credit` (SC-ST-16): Until Flow 20, SC-ST-03 ran `convert_overdue` in the ledger where `open_repo` had already extended the repo, the credit and the instance, so it could not see a conversion that extended none of them; since Flow 20 it runs the conversion on a ledger of its own. This test converts once they are below the threshold again. Added in review, so it was shown red against hand mutants rather than a stub.
@@ -437,17 +437,39 @@ It passes since Flow 19, which gave `convert_overdue` its code. But it runs ever
 
 They call every entry point and every view, so they turn green last. A failure prints a shrunk call sequence; turn it into a unit test before fixing it. The requirements they add, and what they assume about expiry, are in `tests/SCENARIOS.md`, "Properties over many inputs".
 
-- [ ] `props::the_safety_invariants_hold_for_any_call_sequence` (SC-P-01)
-- [ ] `state_machine::the_contract_refines_the_reference_model` (SC-P-02)
+- [x] `props::the_safety_invariants_hold_for_any_call_sequence` (SC-P-01)
+- [x] `state_machine::the_contract_refines_the_reference_model` (SC-P-02)
 
-Both pass since Flow 19. What is left is to check them against hand mutants (TESTING.md) and tick them. Flow 19's review found that neither reliably converts two repos of one bank, nor fully repays a penalty repo, nor repays an intraday repo beside a penalty repo: SC-A20-10, SC-A20-07 and SC-A20-12 catch those mutants at unit level, the property tests do not. `owed_by_ovn` survives SC-P-01 under every seed and is killed by SC-P-02 under the pinned seed and one of seeds 1–4.
+Both pass since Flow 19, but against hand mutants of the credit code they were weak. Blind draws seldom reach the states those mutants need.
+- **SC-P-01** killed none of the first 11 at the pinned seed.
+- **SC-P-02** let five of them survive. Four of those it can see: a wrong penalty repayment, a conversion at exactly the term, a conversion of a repaid repo, and collateral at exactly the credit it backs. It caught three others at only some of seeds 1 to 4: converting one of two repos (2 of 4), `open_repo` ignoring `ovn` (2 of 4), and `repay`'s error order (1 of 4).
+
+Flow 21 aims some calls at those states, drawn from the state when they run, as the other property tests already do:
+- **SC-P-01** now repays all, half or all but one of a repo's outstanding amount, intraday or penalty. It converts a repo once past its term, and makes a mint the SAC refuses. Aimed at a bank with a penalty repo when there is one, it opens a repo of exactly the bank's headroom or one more, and sets the bank's collateral one below its credit. Where it opens a repo whose mint must overflow the contract's holding, it checks the error is `TokenTransferFailed`.
+- **SC-P-02** now repays all, half or all but one of a repo's outstanding amount, and repays penalty repos. It lands time on a repo's term and converts there, and converts repaid repos and a repo of a bank that owes on two. It sets collateral to exactly the credit it backs, and repays over both the outstanding amount and the balance. It runs 128 cases, up from 32, which take about a second.
+
+The sweep has 28 hand mutants of `open_repo`, `repay`, `convert_overdue`, `set_collateral` and `mint`: the first 11, and 17 from the reviews. At the pinned seed and seeds 1 to 4:
+- **SC-P-02** kills 24. The other four it never reaches:
+  - three are `InvalidAmount` guards on zero or negative repo and repayment amounts and negative collateral, which it never sends;
+  - one is `mint` called without `try_`, which needs an overflow that amounts of 300 at most never reach.
+  - SC-A12-04, SC-A13-07, SC-A14-02 and SC-A12-08 kill these four.
+- **SC-P-01** kills 13 at every seed, and `repay` with no amount guard at the pinned seed too: a blind `i128::MIN` repayment overflows `balance - amount`, and `typed` sees the host abort. Eleven of the 13 break an invariant it states:
+  - in `convert_overdue`: converting one of two repos, moving a repo's whole amount rather than what is outstanding, and leaving `cr` as it was;
+  - in `open_repo`: ignoring `ovn`, booking the repo to `ovn`, no amount guard, and no eager closure;
+  - in `repay`: a penalty repayment lowering `cr`, a repo left unpaid at 0, and a repo marked `Repaid` with 1 still outstanding;
+  - in `set_collateral`: ignoring `ovn`.
+- The other two fail SC-P-01's one outcome check, that a mint which must overflow the contract's holding is refused with `TokenTransferFailed`:
+  - `mint` called without `try_`, which fails with the SAC's own error code, 12. That code passes for `CreditExceedsCollateral`, so `typed` alone cannot see it.
+  - The boundary of `open_repo`'s collateral check, which refuses that exact-headroom repo first.
+- SC-P-01 does not check the other outcomes and error codes. At seeds 1 to 4, the 15 mutants that change only those survive it, and SC-P-02 or a unit test kills each one.
+- At seeds 1 to 4, only the negative-amount guards of `repay` and `set_collateral` survive both property tests. SC-A13-07 and SC-A14-02 kill them.
 
 ## Totals
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 20) | 200 |
-| Still to fix (Flow 21) | 2 |
+| Already green (Flows 0 to 21) | 202 |
+| Still to fix | 0 |
 | All | 202 |
 
 The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, Flow 18 added SC-A13-10, and Flow 19 added SC-A20-10 to SC-A20-12 and SC-ST-16.

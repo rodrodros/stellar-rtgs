@@ -29,7 +29,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - the model-based replay (TESTING.md §3): the 50 committed Quint traces replay against the contract step by step, with the same outcome, state and settlement events;
 - integration scenarios for `deposit` on the devnet (`integration/`).
 
-Every entry point now has code, and each extends the instance and every entry it writes, checked call by call (Flow 20, SC-ST-03). Flow 21 (the property and state-machine tests) comes next. Its tests already pass; StillToFix.md says what is left.
+Every flow in `StillToFix.md` is done, and no test fails. Every entry point has code, and each extends the instance and every entry it writes, checked call by call (Flow 20, SC-ST-03). The property and state-machine tests over random call sequences pass, and they aim some calls at the credit code's edges. Together with the unit tests they catch every hand mutant of that code listed in StillToFix.md, Flow 21 (SC-P-01, SC-P-02).
 
 ## Quick start
 

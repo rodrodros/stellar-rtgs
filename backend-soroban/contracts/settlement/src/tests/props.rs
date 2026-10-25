@@ -16,7 +16,11 @@
 //!   `i128`, but neither booking payment by payment nor applying every debit first stays in
 //!   range: both overflow at the `i128` limit (SC-A03-11, SC-A03-12);
 //! - a refused SAC call, such as an `open_repo` mint that would overflow the contract's
-//!   holding, must come back as a contract error, not a host abort.
+//!   holding, must come back as the contract's own `TokenTransferFailed`, not a host
+//!   abort or the SAC's error. `OpenOverflow` makes that call, and the `open_repo` arm
+//!   checks the error itself: a mint called without `try_` fails with the SAC's own code,
+//!   which passes for one of the contract's (`CreditExceedsCollateral`), so `typed` alone
+//!   cannot see it.
 use std::collections::BTreeMap;
 use std::vec;
 use std::vec::Vec;
@@ -26,7 +30,7 @@ use soroban_sdk::Address;
 
 use super::reference::{config, greatest_feasible_prefix};
 use super::support::{default_config, Setup};
-use crate::{Config, Error, Payment, Priority, RepoStatus, Status};
+use crate::{Config, Error, Payment, Priority, Repo, RepoStatus, Status};
 
 const BANKS: usize = 3;
 const FUNDING: i128 = 1_000;
@@ -105,8 +109,82 @@ fn op() -> impl Strategy<Value = Op> {
     ]
 }
 
-/// Every failure must be one of the contract's own errors, never a host trap or a foreign
-/// error code.
+/// A call of the safety property: any `Op`, or one resolved against the state when it
+/// runs, since a blind amount or repo id rarely hits a repo's outstanding amount or a
+/// bank's headroom:
+/// - `RepayAimed(pick, by_cb, share)` repays all that is outstanding on a repo, half of
+///   it, or all but one, picked by `Index` among those with something outstanding,
+///   intraday or penalty, as its bank or, if `by_cb`, the central bank: A13 down to
+///   `Repaid` and just short of it, A20, and a partly repaid repo for `ConvertAimed`;
+/// - `ConvertAimed(pick)` moves time past the term of an intraday repo, picked by `Index`,
+///   then converts it, partly repaid or not, and a bank's second repo when it has two
+///   (ADR-0014);
+/// - `CollateralUnderCredit(pick)` sets a bank's collateral one below `cr + ovn`, which is
+///   refused: with a penalty repo outstanding, `ovn` must count (S21);
+/// - `OpenAtHeadroom(pick, over)` opens a repo of exactly a bank's headroom,
+///   `coll − cr − ovn`, or one more: with a penalty repo outstanding, `ovn` must count
+///   (S21);
+/// - `OpenOverflow(bank)` sets the bank's collateral to `i128::MAX` and opens a repo of all
+///   its headroom: once the contract holds more than the bank's credit, the SAC refuses
+///   the mint, which must come back as `TokenTransferFailed`.
+///
+/// `CollateralUnderCredit` and `OpenAtHeadroom` pick their bank by `Index` among those with
+/// a penalty repo outstanding if there are any, else among every bank.
+#[derive(Clone, Debug)]
+enum SafetyOp {
+    Call(Op),
+    RepayAimed(prop::sample::Index, bool, Share),
+    ConvertAimed(prop::sample::Index),
+    CollateralUnderCredit(prop::sample::Index),
+    OpenAtHeadroom(prop::sample::Index, bool),
+    OpenOverflow(usize),
+}
+
+/// How much of a repo's outstanding amount `RepayAimed` repays.
+#[derive(Clone, Copy, Debug)]
+enum Share {
+    All,
+    Half,
+    AllButOne,
+}
+
+impl Share {
+    /// The repayment of `outstanding`, at least 1.
+    fn of(self, outstanding: i128) -> i128 {
+        match self {
+            Share::All => outstanding,
+            Share::Half => (outstanding / 2).max(1),
+            Share::AllButOne => (outstanding - 1).max(1),
+        }
+    }
+}
+
+fn safety_op() -> impl Strategy<Value = SafetyOp> {
+    use SafetyOp::*;
+    prop_oneof![
+        16 => op().prop_map(Call),
+        2 => (
+            any::<prop::sample::Index>(),
+            any::<bool>(),
+            prop_oneof![Just(Share::All), Just(Share::Half), Just(Share::AllButOne)],
+        )
+            .prop_map(|(pick, by_cb, share)| RepayAimed(pick, by_cb, share)),
+        2 => any::<prop::sample::Index>().prop_map(ConvertAimed),
+        1 => any::<prop::sample::Index>().prop_map(CollateralUnderCredit),
+        2 => (any::<prop::sample::Index>(), any::<bool>()).prop_map(|(pick, over)| OpenAtHeadroom(pick, over)),
+        1 => (0..BANKS).prop_map(OpenOverflow),
+    ]
+}
+
+/// Every repo the contract has recorded, in id order.
+fn repos(setup: &Setup) -> Vec<Repo> {
+    let client = setup.client();
+    (0..).map_while(|id| client.repo(&id)).collect()
+}
+
+/// Every failure must be one of the contract's own errors, never a host trap. A foreign
+/// error code that matches one of the contract's decodes as that error, so this cannot
+/// tell them apart: the refused mint's error is checked where `open_repo` is called.
 fn typed<T: core::fmt::Debug, C: core::fmt::Debug, I: core::fmt::Debug>(
     result: Result<Result<T, C>, Result<Error, I>>,
 ) -> Result<T, Error> {
@@ -564,18 +642,20 @@ proptest! {
     /// - S9, S23: between calls nothing is covered and k* = 0 (ADR-0010);
     /// - S17, S21: `cr + ovn ≤ coll`, and `cr` and `ovn` are the outstanding intraday and
     ///   penalty repos (ADR-0011, ADR-0014);
-    /// - the queue never holds more than `queue_cap` payments (ADR-0010).
+    /// - the queue never holds more than `queue_cap` payments (ADR-0010);
+    /// - one outcome: a repo whose mint would overflow the contract's holding is refused
+    ///   with `TokenTransferFailed`, not the SAC's own error (A12, ADR-0003, ADR-0011;
+    ///   SC-A12-08).
     #[test]
-    fn the_safety_invariants_hold_for_any_call_sequence(ops in prop::collection::vec(op(), 1..30)) {
+    fn the_safety_invariants_hold_for_any_call_sequence(ops in prop::collection::vec(safety_op(), 1..30)) {
         let cfg = test_config();
         let setup = Setup::with_config(BANKS, FUNDING, cfg.clone());
         let client = setup.client();
         let actor = |who: usize| {
             if who == BANKS { setup.cb.clone() } else { setup.bank(who).clone() }
         };
-        // Ops are drawn before the run, so an `OpenRepo` rarely follows a `SetCollateral` for
-        // the same bank. Every bank starts with collateral, so repos, repayments and penalty
-        // repos are reached; `SetCollateral` can still take it to zero.
+        // Every bank starts with collateral, so blind `OpenRepo`s succeed and repos,
+        // repayments and penalty repos are reached; `SetCollateral` can still take it to zero.
         for bank in 0..BANKS {
             typed(client.try_set_collateral(setup.bank(bank), &FUNDING)).unwrap();
         }
@@ -585,123 +665,174 @@ proptest! {
         let mut now = 0u64;
 
         for op in ops {
-            match op {
-                Op::Deposit(bank, amount) => {
-                    if typed(client.try_deposit(setup.bank(bank), &amount)).is_ok() {
-                        issued += amount;
+            let credit = |bank: usize| client.credit(setup.bank(bank));
+            let used = |bank: usize| credit(bank).cr + credit(bank).ovn;
+            let penalised: Vec<usize> = (0..BANKS).filter(|&bank| credit(bank).ovn > 0).collect();
+            let aimed_bank = |pick: prop::sample::Index| {
+                if penalised.is_empty() { pick.index(BANKS) } else { *pick.get(&penalised) }
+            };
+            let recorded = repos(&setup);
+            let owed: Vec<&Repo> = recorded.iter().filter(|repo| repo.outstanding > 0).collect();
+            let intraday: Vec<&Repo> = recorded.iter().filter(|repo| repo.status == RepoStatus::Intraday).collect();
+            let bank_of = |repo: &Repo| setup.banks.iter().position(|bank| *bank == repo.bank).unwrap();
+            let unknown = recorded.len() as u64;
+            let calls = match op {
+                SafetyOp::Call(op) => vec![op],
+                SafetyOp::RepayAimed(pick, by_cb, share) if !owed.is_empty() => {
+                    let repo = pick.get(&owed);
+                    let who = if by_cb { BANKS } else { bank_of(repo) };
+                    vec![Op::Repay(who, repo.id, share.of(repo.outstanding))]
+                }
+                SafetyOp::ConvertAimed(pick) if !intraday.is_empty() => {
+                    let repo = pick.get(&intraday);
+                    let overdue = repo.opened_at + cfg.repo_term_secs + 1;
+                    vec![Op::Tick(overdue.saturating_sub(now)), Op::ConvertOverdue(repo.id)]
+                }
+                SafetyOp::OpenAtHeadroom(pick, over) => {
+                    let bank = aimed_bank(pick);
+                    // When the headroom is `i128::MAX`, one more saturates.
+                    let headroom = credit(bank).coll - used(bank);
+                    vec![Op::OpenRepo(bank, headroom.saturating_add(i128::from(over)))]
+                }
+                SafetyOp::CollateralUnderCredit(pick) => {
+                    let bank = aimed_bank(pick);
+                    vec![Op::SetCollateral(bank, used(bank) - 1)]
+                }
+                SafetyOp::OpenOverflow(bank) => {
+                    vec![Op::SetCollateral(bank, i128::MAX), Op::OpenRepo(bank, i128::MAX - used(bank))]
+                }
+                // No repo to aim at: an id one past the last is unknown.
+                SafetyOp::RepayAimed(..) => vec![Op::Repay(BANKS, unknown, 1)],
+                SafetyOp::ConvertAimed(_) => vec![Op::ConvertOverdue(unknown)],
+            };
+            for op in calls {
+                match op {
+                    Op::Deposit(bank, amount) => {
+                        if typed(client.try_deposit(setup.bank(bank), &amount)).is_ok() {
+                            issued += amount;
+                        }
+                    }
+                    Op::Withdraw(bank, amount) => {
+                        if typed(client.try_withdraw(setup.bank(bank), &amount)).is_ok() {
+                            issued -= amount;
+                        }
+                    }
+                    Op::Submit(from, to, amount, priority) => {
+                        let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
+                    }
+                    Op::Revoke(id) => {
+                        let _ = typed(client.try_revoke(&id));
+                    }
+                    Op::Reprioritise(id, priority) => {
+                        let _ = typed(client.try_reprioritise(&id, &priority));
+                    }
+                    Op::Expire(id) => {
+                        let _ = typed(client.try_expire(&id));
+                    }
+                    Op::Tick(dt) => {
+                        now += dt;
+                        setup.at(now);
+                    }
+                    Op::SetCollateral(bank, value) => {
+                        let _ = typed(client.try_set_collateral(setup.bank(bank), &value));
+                    }
+                    Op::OpenRepo(bank, amount) => {
+                        let within = amount > 0
+                            && used(bank).checked_add(amount).is_some_and(|total| total <= credit(bank).coll);
+                        // By S1, what the contract holds.
+                        let held: i128 = setup.balances().iter().sum();
+                        let result = typed(client.try_open_repo(setup.bank(bank), &amount));
+                        if within && held.checked_add(amount).is_none() {
+                            // The SAC refuses a mint that would overflow the contract's
+                            // holding; the contract must report it, not pass on the SAC's
+                            // own code (SC-A12-08).
+                            prop_assert_eq!(&result, &Err(Error::TokenTransferFailed), "refused mint");
+                        }
+                        if result.is_ok() {
+                            issued += amount;
+                        }
+                    }
+                    Op::Repay(who, repo, amount) => {
+                        if typed(client.try_repay(&actor(who), &repo, &amount)).is_ok() {
+                            issued -= amount;
+                        }
+                    }
+                    Op::ConvertOverdue(repo) => {
+                        let _ = typed(client.try_convert_overdue(&repo));
                     }
                 }
-                Op::Withdraw(bank, amount) => {
-                    if typed(client.try_withdraw(setup.bank(bank), &amount)).is_ok() {
-                        issued -= amount;
-                    }
-                }
-                Op::Submit(from, to, amount, priority) => {
-                    let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
-                }
-                Op::Revoke(id) => {
-                    let _ = typed(client.try_revoke(&id));
-                }
-                Op::Reprioritise(id, priority) => {
-                    let _ = typed(client.try_reprioritise(&id, &priority));
-                }
-                Op::Expire(id) => {
-                    let _ = typed(client.try_expire(&id));
-                }
-                Op::Tick(dt) => {
-                    now += dt;
-                    setup.at(now);
-                }
-                Op::SetCollateral(bank, value) => {
-                    let _ = typed(client.try_set_collateral(setup.bank(bank), &value));
-                }
-                Op::OpenRepo(bank, amount) => {
-                    if typed(client.try_open_repo(setup.bank(bank), &amount)).is_ok() {
-                        issued += amount;
-                    }
-                }
-                Op::Repay(who, repo, amount) => {
-                    if typed(client.try_repay(&actor(who), &repo, &amount)).is_ok() {
-                        issued -= amount;
-                    }
-                }
-                Op::ConvertOverdue(repo) => {
-                    let _ = typed(client.try_convert_overdue(&repo));
-                }
-            }
 
-            // S1, S2.
-            setup.assert_conserved();
-            prop_assert_eq!(setup.balances().iter().sum::<i128>(), issued, "S1");
+                // S1, S2.
+                setup.assert_conserved();
+                prop_assert_eq!(setup.balances().iter().sum::<i128>(), issued, "S1");
 
-            let after = payments(&setup);
-            // S11.
-            for (id, payment) in &after {
-                prop_assert_eq!(payment.id, *id, "S11: id");
-                prop_assert!(payment.amount > 0, "S11: amount {}", payment.amount);
-                prop_assert!(payment.from != payment.to, "S11: payment {} to itself", id);
-                prop_assert_eq!(
-                    payment.status == Status::Settled,
-                    payment.settled_at.is_some(),
-                    "settled_at of {}", id
-                );
-            }
-            // S3, S5: final stays final, unchanged; no payment disappears.
-            for (id, payment) in &before {
-                let current = after.get(id);
-                prop_assert!(current.is_some(), "payment {} disappeared", id);
-                if is_final(payment.status) {
-                    prop_assert_eq!(Some(payment), current, "S3: final payment {} changed", id);
+                let after = payments(&setup);
+                // S11.
+                for (id, payment) in &after {
+                    prop_assert_eq!(payment.id, *id, "S11: id");
+                    prop_assert!(payment.amount > 0, "S11: amount {}", payment.amount);
+                    prop_assert!(payment.from != payment.to, "S11: payment {} to itself", id);
+                    prop_assert_eq!(
+                        payment.status == Status::Settled,
+                        payment.settled_at.is_some(),
+                        "settled_at of {}", id
+                    );
                 }
-            }
-            // S7 under F2.
-            settled_in_order(&before, &after)?;
-            // The queue views agree with the statuses, in `≺` order, under the cap.
-            let queued = after.values().filter(|payment| payment.status == Status::Queued).count();
-            prop_assert_eq!(client.queued_count() as usize, queued);
-            prop_assert!(queued <= cfg.queue_cap as usize, "queue over its cap");
-            let mut candidates = std::vec![];
-            for bank in 0..BANKS {
-                let mut queue = setup.queue(bank, Priority::Urgent);
-                queue.extend(setup.queue(bank, Priority::Normal));
-                prop_assert_eq!(&queue, &queued_in_order(&setup, &after, bank), "queue of bank {}", bank);
-                candidates.push(
-                    queue.iter()
-                        .map(|id| {
-                            let payment = &after[id];
-                            (setup.banks.iter().position(|x| *x == payment.to).unwrap(), payment.amount)
-                        })
-                        .collect::<Vec<_>>(),
-                );
-            }
-            // S9, S23: at rest. No head is covered and the greatest feasible prefix is 0.
-            let prefix = greatest_feasible_prefix(&setup.balances(), &candidates);
-            prop_assert!(prefix.iter().all(|x| *x == 0), "S23: k* = {:?} between calls", prefix);
-
-            // S17, S21, and `cr`/`ovn` match the repos.
-            for bank in 0..BANKS {
-                let cr = client.credit(setup.bank(bank));
-                prop_assert!(cr.cr >= 0 && cr.ovn >= 0 && cr.coll >= 0, "credit {:?}", cr);
-                prop_assert!(
-                    cr.cr.checked_add(cr.ovn).is_some_and(|total| total <= cr.coll),
-                    "S21: {:?}", cr
-                );
-                let (mut intraday, mut penalty) = (0i128, 0i128);
-                for repo in (0..)
-                    .map_while(|id| client.repo(&id))
-                    .filter(|repo| &repo.bank == setup.bank(bank))
-                {
-                    prop_assert!(repo.outstanding >= 0 && repo.outstanding <= repo.amount, "repo {:?}", repo);
-                    prop_assert_eq!(repo.status == RepoStatus::Repaid, repo.outstanding == 0, "repo {:?}", repo);
-                    match repo.status {
-                        RepoStatus::Intraday => intraday += repo.outstanding,
-                        RepoStatus::Penalty => penalty += repo.outstanding,
-                        RepoStatus::Repaid => {}
+                // S3, S5: final stays final, unchanged; no payment disappears.
+                for (id, payment) in &before {
+                    let current = after.get(id);
+                    prop_assert!(current.is_some(), "payment {} disappeared", id);
+                    if is_final(payment.status) {
+                        prop_assert_eq!(Some(payment), current, "S3: final payment {} changed", id);
                     }
                 }
-                prop_assert_eq!((cr.cr, cr.ovn), (intraday, penalty), "credit of bank {}", bank);
+                // S7 under F2.
+                settled_in_order(&before, &after)?;
+                // The queue views agree with the statuses, in `≺` order, under the cap.
+                let queued = after.values().filter(|payment| payment.status == Status::Queued).count();
+                prop_assert_eq!(client.queued_count() as usize, queued);
+                prop_assert!(queued <= cfg.queue_cap as usize, "queue over its cap");
+                let mut candidates = std::vec![];
+                for bank in 0..BANKS {
+                    let mut queue = setup.queue(bank, Priority::Urgent);
+                    queue.extend(setup.queue(bank, Priority::Normal));
+                    prop_assert_eq!(&queue, &queued_in_order(&setup, &after, bank), "queue of bank {}", bank);
+                    candidates.push(
+                        queue.iter()
+                            .map(|id| {
+                                let payment = &after[id];
+                                (setup.banks.iter().position(|x| *x == payment.to).unwrap(), payment.amount)
+                            })
+                            .collect::<Vec<_>>(),
+                    );
+                }
+                // S9, S23: at rest. No head is covered and the greatest feasible prefix is 0.
+                let prefix = greatest_feasible_prefix(&setup.balances(), &candidates);
+                prop_assert!(prefix.iter().all(|x| *x == 0), "S23: k* = {:?} between calls", prefix);
+
+                // S17, S21, and `cr`/`ovn` match the repos.
+                let repos_after = repos(&setup);
+                for bank in 0..BANKS {
+                    let cr = client.credit(setup.bank(bank));
+                    prop_assert!(cr.cr >= 0 && cr.ovn >= 0 && cr.coll >= 0, "credit {:?}", cr);
+                    prop_assert!(
+                        cr.cr.checked_add(cr.ovn).is_some_and(|total| total <= cr.coll),
+                        "S21: {:?}", cr
+                    );
+                    let (mut intraday, mut penalty) = (0i128, 0i128);
+                    for repo in repos_after.iter().filter(|repo| &repo.bank == setup.bank(bank)) {
+                        prop_assert!(repo.outstanding >= 0 && repo.outstanding <= repo.amount, "repo {:?}", repo);
+                        prop_assert_eq!(repo.status == RepoStatus::Repaid, repo.outstanding == 0, "repo {:?}", repo);
+                        match repo.status {
+                            RepoStatus::Intraday => intraday += repo.outstanding,
+                            RepoStatus::Penalty => penalty += repo.outstanding,
+                            RepoStatus::Repaid => {}
+                        }
+                    }
+                    prop_assert_eq!((cr.cr, cr.ovn), (intraday, penalty), "credit of bank {}", bank);
+                }
+                before = after;
             }
-            before = after;
         }
     }
 

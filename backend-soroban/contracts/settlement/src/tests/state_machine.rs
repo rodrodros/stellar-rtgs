@@ -270,11 +270,28 @@ impl ReferenceStateMachine for Reference {
                 .boxed()
         };
         let past = || Just(Transition::Tick { secs: 101 }).boxed();
-        let exact_repay = pick(outstanding, collateral(), |(repo, bank, amount)| {
+        let exact_repay = pick(outstanding.clone(), collateral(), |(repo, bank, amount)| {
             Transition::Repay {
                 actor: bank,
                 repo,
                 amount,
+            }
+        });
+        // Half of what is outstanding, so that a repo is converted partly repaid: only its
+        // outstanding amount moves from `cr` to `ovn` (ADR-0014).
+        let part_repay = pick(outstanding.clone(), collateral(), |(repo, bank, amount)| {
+            Transition::Repay {
+                actor: bank,
+                repo,
+                amount: (amount / 2).max(1),
+            }
+        });
+        // All but one: a repo just short of `Repaid` (A13).
+        let short_repay = pick(outstanding.clone(), collateral(), |(repo, bank, amount)| {
+            Transition::Repay {
+                actor: bank,
+                repo,
+                amount: (amount - 1).max(1),
             }
         });
         let headroom: Vec<(usize, i128)> = (0..BANKS)
@@ -312,6 +329,112 @@ impl ReferenceStateMachine for Reference {
         let due_convert = pick(past_term, past(), |repo| Transition::ConvertOverdue {
             repo,
         });
+        // A20 and the edges of ADR-0014, which blind draws leave to luck: a penalty repo
+        // repaid, by its bank or the central bank; time that lands exactly on a repo's
+        // term, and a conversion there; and a repaid repo converted.
+        let penalty_owed: Vec<(u64, usize, i128)> = state
+            .repos
+            .iter()
+            .enumerate()
+            .filter(|(_, repo)| repo.status == RepoStatus::Penalty && repo.outstanding > 0)
+            .flat_map(|(i, repo)| {
+                [
+                    (i as u64, repo.bank, repo.outstanding),
+                    (i as u64, CB, repo.outstanding),
+                ]
+            })
+            .collect();
+        let penalty_repay = pick(
+            penalty_owed,
+            due_convert.clone(),
+            |(repo, actor, amount)| Transition::Repay {
+                actor,
+                repo,
+                amount,
+            },
+        );
+        let term = |repo: &ModelRepo| repo.opened_at + state.cfg.repo_term_secs;
+        let before_term: Vec<u64> = state
+            .repos
+            .iter()
+            .filter(|repo| repo.status == RepoStatus::Intraday && term(repo) > state.now)
+            .map(|repo| term(repo) - state.now)
+            .collect();
+        let to_term = pick(before_term, exact_repo.clone(), |secs| Transition::Tick {
+            secs,
+        });
+        let at_term: Vec<u64> = state
+            .repos
+            .iter()
+            .enumerate()
+            .filter(|(_, repo)| repo.status == RepoStatus::Intraday && term(repo) == state.now)
+            .map(|(i, _)| i as u64)
+            .collect();
+        let at_term_convert = pick(at_term, to_term.clone(), |repo| {
+            Transition::ConvertOverdue { repo }
+        });
+        let repaid: Vec<u64> = state
+            .repos
+            .iter()
+            .enumerate()
+            .filter(|(_, repo)| repo.status == RepoStatus::Repaid)
+            .map(|(i, _)| i as u64)
+            .collect();
+        let repaid_convert = pick(repaid, exact_repay.clone(), |repo| {
+            Transition::ConvertOverdue { repo }
+        });
+        // A bank that owes on two repos: converting one must move only its own amount.
+        let owes_another = |id: usize, bank: usize| {
+            state
+                .repos
+                .iter()
+                .enumerate()
+                .any(|(other, repo)| other != id && repo.bank == bank && repo.outstanding > 0)
+        };
+        let crowded: Vec<u64> = state
+            .repos
+            .iter()
+            .enumerate()
+            .filter(|(i, repo)| repo.status == RepoStatus::Intraday && owes_another(*i, repo.bank))
+            .filter(|(_, repo)| state.now > term(repo))
+            .map(|(i, _)| i as u64)
+            .collect();
+        let crowded_convert = pick(crowded, exact_repo.clone(), |repo| {
+            Transition::ConvertOverdue { repo }
+        });
+        // A bank with a penalty repo: a new repo must count it against the collateral (S21).
+        let penalised: Vec<(usize, i128)> = (0..BANKS)
+            .map(|bank| (bank, state.credit(bank)))
+            .filter(|(_, credit)| credit.ovn > 0)
+            .map(|(bank, credit)| (bank, credit.coll - credit.cr - credit.ovn + 1))
+            .collect();
+        let over_penalised = pick(penalised, due_convert.clone(), |(bank, amount)| {
+            Transition::OpenRepo { bank, amount }
+        });
+        // A repayment over both the outstanding amount and the balance: `RepayExceedsRepo`
+        // must win.
+        let over_owed: Vec<(u64, usize, i128)> = outstanding
+            .iter()
+            .map(|&(repo, bank, amount)| (repo, bank, amount.max(balances[bank]) + 1))
+            .collect();
+        let over_repay = pick(over_owed, collateral(), |(repo, bank, amount)| {
+            Transition::Repay {
+                actor: bank,
+                repo,
+                amount,
+            }
+        });
+        // S21's edge: collateral set to exactly the credit it backs.
+        let backed: Vec<(usize, i128)> = (0..BANKS)
+            .map(|bank| {
+                let credit = state.credit(bank);
+                (bank, credit.cr + credit.ovn)
+            })
+            .filter(|(_, used)| *used > 0)
+            .collect();
+        let exact_collateral = pick(backed, exact_repo.clone(), |(bank, value)| {
+            Transition::SetCollateral { bank, value }
+        });
         prop_oneof![
             3 => (0..BANKS, amount()).prop_map(|(bank, amount)| Transition::Deposit { bank, amount }),
             1 => (0..BANKS).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank].max(1) }),
@@ -334,8 +457,18 @@ impl ReferenceStateMachine for Reference {
             1 => (0..=CB, repo.clone(), amount())
                 .prop_map(|(actor, repo, amount)| Transition::Repay { actor, repo, amount }),
             2 => exact_repay,
+            1 => part_repay,
+            1 => short_repay,
             1 => repo.prop_map(|repo| Transition::ConvertOverdue { repo }),
             2 => due_convert,
+            2 => penalty_repay,
+            1 => to_term,
+            2 => at_term_convert,
+            2 => crowded_convert,
+            1 => over_penalised,
+            1 => repaid_convert,
+            1 => over_repay,
+            1 => exact_collateral,
         ]
         .boxed()
     }
@@ -660,7 +793,7 @@ impl StateMachineTest for SettlementMachine {
 }
 
 prop_state_machine! {
-    #![proptest_config(config(32))]
+    #![proptest_config(config(128))]
 
     /// The contract refines the reference model: every call's outcome, every balance,
     /// holding, queue, payment record and repo match it (A1, A2, A3, A5, A6, A8, A11–A14,
