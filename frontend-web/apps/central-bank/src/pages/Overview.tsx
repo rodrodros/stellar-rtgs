@@ -18,7 +18,7 @@ export function Overview() {
   const registry = useBankRegistry();
   const feed = useFeedStatus();
   const clock = useLedgerClock();
-  const { result: check } = useConservation();
+  const { result: check, error: checkError } = useConservation();
   const code = session.cashToken.code;
   const nameOf = (a: string) => session.registry.nameOf(a);
   const { config } = snapshot;
@@ -54,15 +54,25 @@ export function Overview() {
               <div className="tile-value ok">holds</div>
             ) : (
               <div className="tile-value danger" role="alert">
-                broken by <Amount value={check.difference} code={code} />
+                unexplained difference of <Amount value={check.difference} code={code} />
               </div>
             )
+          ) : checkError ? (
+            <div className="tile-value muted" role="status">
+              can't check: {checkError.title}
+            </div>
           ) : (
             <div className="tile-value muted">…</div>
           )}
           {check ? (
             <div className="small muted">
-              held <Amount value={check.held} code={code} />, recorded <Amount value={check.recorded} code={code} />
+              held <Amount value={check.held} code={code} />, recorded for known accounts{" "}
+              <Amount value={check.recorded} code={code} />
+              {check.holds ? null : (
+                <div>
+                  A direct clawback from the contract (H1) would show here, as would a bank this app doesn't know about.
+                </div>
+              )}
             </div>
           ) : null}
         </div>

@@ -16,6 +16,7 @@ import {
 import { useState } from "react";
 import { parseConfig, parseWhole, type ConfigForm } from "../model/setupForm.ts";
 import { useAppSession } from "../session/AppSession.tsx";
+import { useWriteQueue } from "../session/writeQueue.ts";
 
 export function Setup(props: { devnetBanks?: number }) {
   const app = useAppSession();
@@ -45,6 +46,7 @@ const STEP_LABELS: Record<BootstrapStep["step"], string> = {
 
 function DevnetBootstrap(props: { devnetBanks?: number }) {
   const app = useAppSession();
+  const queue = useWriteQueue();
   const [form, setForm] = useState<ConfigForm>(
     () => Object.fromEntries(Object.entries(DEFAULT_CONFIG).map(([k, v]) => [k, String(v)])) as ConfigForm,
   );
@@ -78,7 +80,8 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
     setDone(undefined);
     setSteps([]);
     try {
-      const deployment = await bootstrapDevnet({
+      // The central bank signs most of it, so it waits its turn behind the auto-keeper's writes.
+      const deployment = await queue.run(async () => bootstrapDevnet({
         network: app.network,
         wasm: await loadSettlementWasm(),
         config,
@@ -86,13 +89,19 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
         cash: cashValue,
         fresh,
         onStep: (s) => setSteps((all) => [...all.filter((x) => x.step !== s.step), s]),
-      });
+      }));
       setDone(deployment.contractId);
       // Reconnecting unmounts this page, so the result goes to the app-level notice.
       app.setNotice(
         `Devnet bootstrapped: settlement contract ${deployment.contractId}, cash token ${deployment.cashToken.code} ` +
           `(${deployment.sacId}), ${deployment.banks.length} banks onboarded.`,
       );
+      // The bootstrap publishes its contract on the central bank's account. A saved contract id
+      // would win over it on reconnect, so it is cleared.
+      if (app.overrides.contractId) {
+        const { contractId: _, ...rest } = app.overrides;
+        app.saveOverrides(rest);
+      }
       app.reconnect();
     } catch (e) {
       setError(toRtgsError(e));

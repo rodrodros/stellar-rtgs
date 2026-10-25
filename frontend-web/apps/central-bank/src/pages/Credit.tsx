@@ -10,6 +10,7 @@ import { Address } from "../components/Address.tsx";
 import { Amount } from "../components/Amount.tsx";
 import { capabilityReason, firstReason } from "../components/capability.ts";
 import { useAction } from "../hooks/useAction.ts";
+import { isBank } from "../model/accounts.ts";
 import { formatSpan, overdueRepos, termEndOf } from "../model/due.ts";
 import { centralBankReason, useRole } from "../session/role.ts";
 
@@ -25,6 +26,7 @@ function parsePositive(text: string, allowZero = false): bigint | undefined {
 }
 
 export function Credit() {
+  const session = useSession();
   const caps = useCapabilities();
   const registry = useBankRegistry();
   const banks = useSnapshot((s) => s.banks);
@@ -62,7 +64,9 @@ export function Credit() {
           </tr>
         </thead>
         <tbody>
-          {registry.map((b) => (
+          {registry
+            .filter((b) => isBank(b.address, session))
+            .map((b) => (
             <CreditRow key={b.address} address={b.address} name={b.name} view={banks.get(b.address)} />
           ))}
         </tbody>
@@ -118,7 +122,7 @@ function CreditRow(props: { address: string; name: string | undefined; view: Ban
         <ActionButton
           disabledReason={firstReason(capabilityReason(caps, "setCollateral"), base, collateral && collateralValue === undefined && "Enter a value of zero or more")}
           disabled={!collateral}
-          onClick={() => void action.run(`Set ${label}'s collateral`, () => cb!.setCollateral(props.address, collateralValue!))}
+          onClick={() => void action.run(`Set ${label}'s collateral`, () => cb!.setCollateral(props.address, collateralValue!)).then((r) => r && setCollateral(""))}
         >
           Set collateral
         </ActionButton>
@@ -131,7 +135,7 @@ function CreditRow(props: { address: string; name: string | undefined; view: Ban
             repoValue !== undefined && headroom !== undefined && repoValue > headroom && "More than the collateral's headroom",
           )}
           disabled={!repo}
-          onClick={() => void action.run(`Open a repo for ${label}`, () => cb!.openRepo(props.address, repoValue!))}
+          onClick={() => void action.run(`Open a repo for ${label}`, () => cb!.openRepo(props.address, repoValue!)).then((r) => r && setRepo(""))}
         >
           Open repo
         </ActionButton>
@@ -207,7 +211,7 @@ function RepoRow(props: { repo: Repo; termEnd: number | undefined; now: number |
         <Amount value={r.outstanding} code={props.code} />
       </td>
       <td>{new Date(r.openedAt * 1000).toISOString().replace(".000Z", "Z")}</td>
-      <td>{r.status !== "intraday" ? "—" : overdue ? <span className="badge warn">overdue</span> : left !== undefined ? `ends in ${formatSpan(left)}` : "—"}</td>
+      <td>{r.status !== "intraday" ? "—" : overdue ? <span className="badge warn">overdue</span> : left !== undefined && left > 0 ? `ends in ${formatSpan(left)}` : "term ending"}</td>
       <td>
         <span className={r.status === "penalty" ? "badge danger" : r.status === "repaid" ? "badge ok" : "badge"}>
           {r.status}
@@ -228,7 +232,7 @@ function RepoRow(props: { repo: Repo; termEnd: number | undefined; now: number |
               )}
               disabled={!amount}
               title="Repays on the bank's behalf, debiting its settlement balance and burning the cash (A13, A20)."
-              onClick={() => void action.run(`Repay repo #${r.id}`, () => role.centralBank!.repay(r.id, value!))}
+              onClick={() => void action.run(`Repay repo #${r.id}`, () => role.centralBank!.repay(r.id, value!)).then((done) => done && setAmount(""))}
             >
               Repay
             </ActionButton>

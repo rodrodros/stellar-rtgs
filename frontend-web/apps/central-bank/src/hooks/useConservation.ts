@@ -45,7 +45,8 @@ export function useConservation(): { result?: Conservation; error?: RtgsError } 
       () => new Promise((r) => setTimeout(r, RECHECK_MS)),
     ).then(
       (result) => !cancelled && setState({ result }),
-      (e) => !cancelled && setState((s) => ({ ...s, error: toRtgsError(e) })),
+      // A failed read leaves no result: an old "holds" must not stand for the current state.
+      (e) => !cancelled && setState({ error: toRtgsError(e) }),
     );
     return () => {
       cancelled = true;

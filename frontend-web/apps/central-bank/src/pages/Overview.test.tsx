@@ -29,7 +29,7 @@ describe("Overview", () => {
     renderConnected(<Overview />, fakeSession({ contractHolding: { balance: 500n } }));
     // A mismatch is read twice before it is reported.
     const alert = await within(screen.getByLabelText("Conservation")).findByRole("alert", {}, { timeout: 5000 });
-    expect(alert.textContent).toMatch(/broken by/);
+    expect(alert.textContent).toMatch(/unexplained difference/);
   });
 
   it("doesn't alarm on a mismatch that a second read doesn't confirm (a deposit between the reads)", async () => {
@@ -45,6 +45,13 @@ describe("Overview", () => {
     renderConnected(<Overview />, fake);
     expect(await within(screen.getByLabelText("Conservation")).findByText("holds", {}, { timeout: 5000 })).toBeTruthy();
     expect(within(screen.getByLabelText("Conservation")).queryByRole("alert")).toBeNull();
+  });
+
+  it("says it can't check conservation when the reads fail, rather than showing an old result", async () => {
+    const fake = fakeSession();
+    vi.mocked(fake.session.token.holding).mockRejectedValue(new Error("fetch failed"));
+    renderConnected(<Overview />, fake);
+    expect(await within(screen.getByLabelText("Conservation")).findByText(/can't check: Network unreachable/)).toBeTruthy();
   });
 
   it("says conservation holds when it does", async () => {

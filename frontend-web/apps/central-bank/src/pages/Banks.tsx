@@ -18,7 +18,8 @@ import { centralBankReason, tokenAdminReason, useRole, type Role } from "../sess
 export function Banks() {
   const session = useSession();
   const role = useRole();
-  const banks = useBankRegistry();
+  const registry = useBankRegistry();
+  const banks = registry.filter((b) => isBank(b.address, session));
   const reads = useLedgerReads(banks.map((b) => b.address));
   const code = session.cashToken.code;
 
@@ -47,9 +48,7 @@ export function Banks() {
           </tr>
         </thead>
         <tbody>
-          {banks
-            .filter((bank) => isBank(bank.address, session))
-            .map((bank) => (
+          {banks.map((bank) => (
             <BankRow key={bank.address} bank={bank} holding={reads.holdings.get(bank.address)} role={role} code={code} onChange={reads.reload} />
           ))}
           {banks.length === 0 ? (
@@ -187,11 +186,23 @@ function BankRow(props: { bank: Bank; holding: Holding | undefined; role: Role; 
         <ActionButton
           disabledReason={firstReason(adminReason, !holding?.authorized && "The trustline must be authorized", amount && amountReason)}
           disabled={!amount}
-          onClick={() => void action.run(`Issue cash to ${bank.name ?? "the bank"}`, () => admin!.issue(bank.address, parseAmount(amount))).then(done)}
+          onClick={() =>
+            void action.run(`Issue cash to ${bank.name ?? "the bank"}`, () => admin!.issue(bank.address, parseAmount(amount))).then((r) => {
+              if (r) setAmount("");
+              done();
+            })
+          }
         >
           Issue
         </ActionButton>
-        <ActionButton disabledReason={firstReason(adminReason, !holding?.balance && "Nothing to claw back")} onClick={() => setClawback(true)}>
+        <ActionButton
+          disabledReason={firstReason(
+            adminReason,
+            holding?.exists && !holding.clawbackEnabled && "This trustline was opened without clawback enabled",
+            !holding?.balance && "Nothing to claw back",
+          )}
+          onClick={() => setClawback(true)}
+        >
           Clawback…
         </ActionButton>
         <ActionStatus state={action.state} />

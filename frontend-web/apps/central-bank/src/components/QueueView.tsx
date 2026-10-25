@@ -46,7 +46,7 @@ function QueueItem(props: { payment: Payment; head: boolean; config?: Config | u
       {props.nameOf(p.to)}
       {props.head ? <span className="badge">head</span> : null}
       {left !== undefined ? (
-        <span className={left < 0 ? "badge warn" : "muted"}>{left < 0 ? "past expiry" : `expires in ${formatSpan(left)}`}</span>
+        <span className={left < 0 ? "badge warn" : "muted"}>{left < 0 ? "past expiry" : left === 0 ? "at its expiry" : `expires in ${formatSpan(left)}`}</span>
       ) : null}
     </li>
   );
