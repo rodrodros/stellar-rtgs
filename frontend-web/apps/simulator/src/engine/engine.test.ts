@@ -232,11 +232,12 @@ describe("Engine", () => {
     await tick(REFUSALS_BEFORE_COOLDOWN - 1);
     expect(def.calls).toHaveLength(REFUSALS_BEFORE_COOLDOWN);
 
-    await tick(4);
+    // Exactly `cooldownTicks` ticks out.
+    await tick(8);
     expect(def.calls).toHaveLength(REFUSALS_BEFORE_COOLDOWN);
-    expect(p.seen.at(-1)).toEqual({ idle: [BANK_1], excluded: [`revoke:${BANK_1}`] });
+    expect(p.seen.slice(-8).every((s) => s.excluded.join() === `revoke:${BANK_1}`)).toBe(true);
 
-    await tick(4);
+    await tick();
     expect(p.seen.at(-1)).toEqual({ idle: [BANK_1], excluded: [] });
     expect(def.calls).toHaveLength(REFUSALS_BEFORE_COOLDOWN + 1);
     await e.stop();

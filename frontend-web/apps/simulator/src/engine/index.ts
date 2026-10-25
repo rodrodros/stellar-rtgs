@@ -135,7 +135,7 @@ export class Engine {
     }
 
     for (const [key, until] of this.cooling) {
-      if (this.ticks >= until) {
+      if (this.ticks > until) {
         this.cooling.delete(key);
         this.refusals.delete(key);
       }
@@ -218,6 +218,7 @@ export class Engine {
         const delay = delays[retry];
         if (delay === undefined || this.closed || classify(e) !== "transient") throw e;
         await sleep(jitter(delay));
+        if (this.closed) throw e;
       }
     }
   }
