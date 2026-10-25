@@ -180,6 +180,28 @@ importers:
         specifier: 'catalog:'
         version: 5.0.4(@types/node@26.6.5)(jsdom@29.1.1(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
 
+  apps/simulator:
+    dependencies:
+      '@rtgs/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@stellar/stellar-sdk':
+        specifier: 'catalog:'
+        version: 17.3.0(debug@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.5
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.4(@types/node@26.6.5)(jsdom@29.1.1(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/core:
     dependencies:
       '@creit.tech/stellar-wallets-kit':
