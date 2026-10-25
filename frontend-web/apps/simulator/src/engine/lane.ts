@@ -16,7 +16,13 @@ export class Lane {
   /** Runs `work` after everything queued before it, whether that succeeded or failed. */
   run<T>(work: () => Promise<T>): Promise<T> {
     this.pending++;
-    const step = () => work().finally(() => this.pending--);
+    const step = async () => {
+      try {
+        return await work();
+      } finally {
+        this.pending--;
+      }
+    };
     const next = this.tail.then(step, step);
     this.tail = next.catch(() => {});
     return next;

@@ -19,12 +19,16 @@ const CLASSIC_RACES = new Set(["Cash token holding too low", "Trustline not auth
 /** Transaction results that a retry fixes (`tx_bad_seq`, `tx_insufficient_fee`, `TRY_AGAIN_LATER`, a poll that ran out). */
 const TRANSIENT_TRANSACTIONS = new Set(["Sequence number out of date", "Fee too low", "Network busy", "Not confirmed"]);
 
+/** JavaScript's own errors: a bug in an action, which no retry fixes. */
+const PROGRAMMING_ERRORS = [TypeError, ReferenceError, SyntaxError, RangeError];
+
 export function classify(e: unknown): Classification {
   const error: RtgsError = toRtgsError(e);
   switch (error.kind) {
     case "rpc":
-      // "Unexpected failure" is toRtgsError's catch-all, a thrown TypeError included: not RPC's.
-      return error.title === "Unexpected failure" ? "failed" : "transient";
+      // "Unexpected failure" is toRtgsError's catch-all: an RPC answer it doesn't recognise
+      // (HTTP 503, ECONNRESET) is worth retrying, a bug in our own code is not.
+      return error.cause instanceof Error && PROGRAMMING_ERRORS.some((t) => error.cause instanceof t) ? "failed" : "transient";
     case "transaction":
       return TRANSIENT_TRANSACTIONS.has(error.title) ? "transient" : "failed";
     case "contract":

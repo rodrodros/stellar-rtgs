@@ -31,4 +31,14 @@ describe("Lane", () => {
     expect(log).toEqual(["first start", "first end", "second", "third"]);
     expect(lane.idle).toBe(true);
   });
+
+  it("stays usable when work throws synchronously", async () => {
+    const lane = new Lane("GBANK1");
+    await expect(
+      lane.run(() => {
+        throw new Error("sync");
+      }),
+    ).rejects.toThrow("sync");
+    expect(lane.idle).toBe(true);
+  });
 });

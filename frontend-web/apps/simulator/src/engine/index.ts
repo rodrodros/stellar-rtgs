@@ -117,6 +117,8 @@ export class Engine {
       this.error("stop", new RtgsError("transaction", "Not drained", `${this.inFlight.size} action(s) still in flight after ${drainMs} ms.`));
     }
     this.closed = true;
+    // After a drain that timed out, a lane may still be sending from the account `recover` uses;
+    // its `tx_bad_seq` then reaches `onError`. Bounding the drain is worth that.
     // Only when started: a stop before `run` has nothing to undo, and the CLI never does that.
     if (this.starting) await this.recover("stop");
     this.resolveDone();
@@ -151,18 +153,24 @@ export class Engine {
     }
 
     this.refill();
-    for (const choice of choices) {
-      if (this.stopping) return;
-      const lane = this.lanes.get(choice.actor);
-      // Safety nets: one choice per idle lane, and nothing cooling down.
-      if (!lane?.idle || excluded.has(keyOf(choice))) continue;
-      if (this.tokens < 1) break;
-      this.tokens--;
-      this.dispatch(lane, choice);
-      if (this.options.maxActions !== undefined && this.dispatched >= this.options.maxActions) {
-        void this.stop();
-        return;
+    try {
+      for (const choice of choices) {
+        if (this.stopping) return;
+        if (this.options.maxActions !== undefined && this.dispatched >= this.options.maxActions) {
+          void this.stop();
+          return;
+        }
+        const lane = this.lanes.get(choice.actor);
+        // Safety nets: one choice per idle lane, and nothing cooling down.
+        if (!lane?.idle || excluded.has(keyOf(choice))) continue;
+        if (this.tokens < 1) break;
+        this.tokens--;
+        this.dispatch(lane, choice);
       }
+      if (this.options.maxActions !== undefined && this.dispatched >= this.options.maxActions) void this.stop();
+    } catch (e) {
+      // A malformed choice, which the types rule out; it must not crash the interval.
+      this.error("dispatch", toRtgsError(e));
     }
   }
 

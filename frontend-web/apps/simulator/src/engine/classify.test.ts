@@ -29,6 +29,10 @@ const cases: [string, RtgsError, ReturnType<typeof classify>][] = [
   ["RPC's snapshot race", toRtgsError("setting ContractComputeV0 is not present in the snapshot"), "transient"],
   ["RPC unreachable", toRtgsError(new Error("fetch failed")), "transient"],
   ["a thrown TypeError", toRtgsError(new TypeError("cannot read properties of undefined")), "failed"],
+  ["a thrown RangeError", toRtgsError(new RangeError("invalid array length")), "failed"],
+  ["an HTTP 503 from RPC", toRtgsError(new Error("Request failed with status code 503")), "transient"],
+  ["a dropped connection", toRtgsError(new Error("read ECONNRESET")), "transient"],
+  ["a JSON-RPC error object", toRtgsError({ code: -32603, message: "internal error" }), "transient"],
   ["a Wasm trap", toRtgsError("Error(WasmVm, InvalidAction)"), "failed"],
   ["an archived entry", toRtgsError("EntryArchived"), "failed"],
 ];

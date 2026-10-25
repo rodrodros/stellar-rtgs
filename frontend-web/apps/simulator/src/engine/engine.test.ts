@@ -154,6 +154,13 @@ describe("Engine", () => {
     expect(done).toHaveBeenCalled();
   });
 
+  it("dispatches nothing with maxActions 0", async () => {
+    const def = action();
+    const e = engine({ policy: policy(def), maxActions: 0 });
+    await Promise.all([e.run(), tick()]);
+    expect(def.calls).toHaveLength(0);
+  });
+
   it("retries transient failures with back-off, then reports ok", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5); // no jitter
     let attempts = 0;
