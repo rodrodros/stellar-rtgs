@@ -14,6 +14,8 @@ export interface BankData {
   view?: BankView;
   holding?: Holding;
   error?: RtgsError;
+  /** The view's own read failure, without the holding's. */
+  viewError?: RtgsError;
   loading: boolean;
   /** Read the views again now, e.g. after a write. */
   refresh: () => void;
@@ -89,6 +91,7 @@ export function BankDataProvider(props: { address: string; children: ReactNode }
     ...(view ? { view } : {}),
     ...(holding.data ? { holding: holding.data } : {}),
     ...(error ? { error } : {}),
+    ...(!fromStore && direct.error ? { viewError: direct.error } : {}),
   };
   return <Context.Provider value={value}>{props.children}</Context.Provider>;
 }

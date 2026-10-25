@@ -2,18 +2,23 @@
 import type { Capability, LifecycleStep, PaymentRecord, QueueAnalysis, TxOutcome } from "@rtgs/core";
 import { amountText } from "../ui/format.ts";
 
-/** What happened to a submitted payment order, read from its own transaction. */
+/**
+ * What happened to a submitted payment order, read from its own transaction. `ahead`: how many
+ * of the bank's queued payment orders come before it in queue order (urgent ones first).
+ */
 export function describeSubmit(
   outcome: Pick<TxOutcome<{ id: bigint; disposition: "settled" | "queued" }>, "value" | "events">,
   priority: "urgent" | "normal",
-  position?: number,
+  ahead?: number,
 ): string {
   const { id, disposition } = outcome.value;
   const released = outcome.events.filter((e) => e.type === "Settled" && e.id !== id).map((e) => `#${(e as { id: bigint }).id}`);
   const head =
     disposition === "settled"
       ? `Payment order #${id} settled at once.`
-      : `Payment order #${id} queued${position ? ` at position ${position}` : ""} in your ${priority} queue.`;
+      : `Payment order #${id} queued in your ${priority} queue${
+          ahead === undefined ? "" : ahead === 0 ? ", first in queue order" : `, behind ${ahead} other payment order${ahead === 1 ? "" : "s"}`
+        }.`;
   return released.length ? `${head} The eager closure also settled ${released.join(", ")}.` : head;
 }
 

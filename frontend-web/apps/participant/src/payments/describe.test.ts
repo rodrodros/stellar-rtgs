@@ -8,8 +8,11 @@ const settled = (id: bigint) => ({ type: "Settled", id }) as RtgsEvent;
 describe("describeSubmit", () => {
   it("says whether the order settled at once or queued, and where", () => {
     expect(describeSubmit({ value: { id: 3n, disposition: "settled" }, events: [settled(3n)] }, "normal")).toBe("Payment order #3 settled at once.");
-    expect(describeSubmit({ value: { id: 3n, disposition: "queued" }, events: [] }, "urgent", 2)).toBe(
-      "Payment order #3 queued at position 2 in your urgent queue.",
+    expect(describeSubmit({ value: { id: 3n, disposition: "queued" }, events: [] }, "urgent", 0)).toBe(
+      "Payment order #3 queued in your urgent queue, first in queue order.",
+    );
+    expect(describeSubmit({ value: { id: 3n, disposition: "queued" }, events: [] }, "normal", 2)).toBe(
+      "Payment order #3 queued in your normal queue, behind 2 other payment orders.",
     );
   });
 

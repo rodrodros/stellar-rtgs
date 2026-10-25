@@ -85,13 +85,16 @@ export function ActingBankProvider(props: { initialBank?: string; children: Reac
   );
   const current = useRef(signer);
   current.current = signer;
-  // The provider unmounts when the session goes (a network switch): forget a wallet with it.
-  useEffect(
-    () => () => {
+  // The provider unmounts when the session goes (a network switch): forget a wallet with it,
+  // including one whose connection is still being approved.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
       if (current.current?.kind === "wallet") void disconnectWallet().catch(() => {});
-    },
-    [],
-  );
+    };
+  }, []);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<RtgsError>();
 
@@ -110,11 +113,16 @@ export function ActingBankProvider(props: { initialBank?: string; children: Reac
     setConnecting(true);
     setError(undefined);
     try {
-      setSigner(await connectWallet(net));
+      const wallet = await connectWallet(net);
+      if (!alive.current) {
+        void disconnectWallet().catch(() => {});
+        return;
+      }
+      setSigner(wallet);
     } catch (e) {
-      setError(toRtgsError(e));
+      if (alive.current) setError(toRtgsError(e));
     } finally {
-      setConnecting(false);
+      if (alive.current) setConnecting(false);
     }
   }, [net]);
 

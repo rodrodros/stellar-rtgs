@@ -17,7 +17,10 @@ afterEach(() => {
 });
 
 function setup(options: FakeOptions = {}, bank = "1") {
-  const fake = createFakeSession(options);
+  return renderWith(createFakeSession(options), bank);
+}
+
+function renderWith(fake: ReturnType<typeof createFakeSession>, bank = "1") {
   render(
     <RtgsProvider session={fake.session}>
       <ActingBankProvider initialBank={bank}>
@@ -76,10 +79,19 @@ describe("Dashboard", () => {
   it("queues an uncovered payment order and explains the blocked head", async () => {
     const fake = setup({ balances: { 1: USD(10) } });
     await submit(fake.banks[1]!.address, "30");
-    expect(await screen.findByText("Payment order #0 queued at position 1 in your normal queue.")).toBeTruthy();
+    expect(await screen.findByText("Payment order #0 queued in your normal queue, first in queue order.")).toBeTruthy();
     const normal = await screen.findByLabelText("Normal queue");
     await waitFor(() => expect(within(normal).getByText(/Blocked queue head/).textContent).toMatch(/20 USD more is needed/));
     expect(within(normal).getByText(/Expires in 1d/)).toBeTruthy();
+  });
+
+  it("counts queued urgent payment orders ahead of a new normal one", async () => {
+    const fake = setup();
+    await submit(fake.banks[1]!.address, "10", "Urgent");
+    expect(await screen.findByText("Payment order #0 queued in your urgent queue, first in queue order.")).toBeTruthy();
+    await submit(fake.banks[1]!.address, "5");
+    expect(await screen.findByText("Payment order #1 queued in your normal queue, behind 1 other payment order.")).toBeTruthy();
+    expect(within(screen.getByLabelText("Normal queue")).getByText("Waits behind your urgent payment orders, which go first.")).toBeTruthy();
   });
 
   it("reprioritises and revokes a queued payment order", async () => {
@@ -109,10 +121,21 @@ describe("Dashboard", () => {
     expect(within(row).getByText("at once")).toBeTruthy();
   });
 
+  it("raises no notice for settlements that happened before the page loaded", async () => {
+    const fake = createFakeSession({ balances: { 2: USD(500) } });
+    await fake.as(2).submit({ to: fake.banks[0]!.address, amount: USD(75), priority: "normal" });
+    const replay = fake.hold();
+    renderWith(fake);
+    expect(await screen.findByTestId("payment-0")).toBeTruthy();
+    act(replay);
+    await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("75 USD"));
+    expect(screen.queryByText(/Incoming payment order/)).toBeNull();
+  });
+
   it("settles a queued payment order when a deposit covers it", async () => {
     const fake = setup();
     await submit(fake.banks[1]!.address, "30");
-    await screen.findByText(/queued at position 1/);
+    await screen.findByText(/queued in your normal queue/);
     await act(() => fake.as(1).deposit(USD(50)));
     await waitFor(() => expect(within(screen.getByTestId("payment-0")).getByText("Settled")).toBeTruthy());
     expect(within(screen.getByLabelText("Normal queue")).getByText("Empty.")).toBeTruthy();
@@ -155,10 +178,23 @@ describe("Dashboard", () => {
     const credit = panel(/intraday credit/i);
     expect(await within(credit).findByText("1,000 USD")).toBeTruthy();
     expect(within(credit).getByText(/term ends in 1d/)).toBeTruthy();
+    fireEvent.click(within(credit).getByRole("button", { name: "Repay" }));
+    expect(await within(credit).findByText("Enter an amount.")).toBeTruthy();
     fireEvent.change(within(credit).getByLabelText(/Repay/), { target: { value: "20" } });
     fireEvent.click(within(credit).getByRole("button", { name: "Repay" }));
     expect(await within(credit).findByText("Repaid 20 USD of repo #3.")).toBeTruthy();
     await waitFor(() => expect(within(credit).getByText(/outstanding 40 USD/)).toBeTruthy());
+  });
+
+  it("re-reads the credit position after a repo event the store doesn't resolve to a bank", async () => {
+    const repo = { id: 3n, bank: BANK_1, amount: USD(60), outstanding: USD(60), openedAt: 1_800_000_000, status: "intraday" as const, rateBps: 0 };
+    const fake = setup({ balances: { 1: USD(100) }, repos: [repo], staleViews: true });
+    const credit = panel(/intraday credit/i);
+    const intraday = () => within(credit).getByText("Intraday repos outstanding").nextElementSibling!.textContent;
+    await waitFor(() => expect(intraday()).toBe("60 USD"));
+    // Repaid outside this page, e.g. by the central bank: only the RepoRepaid event says so.
+    await act(() => fake.as(1).repay(3n, USD(25)));
+    await waitFor(() => expect(intraday()).toBe("35 USD"));
   });
 
   it("keeps repayment disabled while repay is a stub", async () => {

@@ -14,7 +14,7 @@ import { useTx } from "../ui/useTx.ts";
 export function CreditPanel() {
   const session = useSession();
   const caps = useCapabilities();
-  const { address, view, error } = useBankData();
+  const { address, view, viewError: error } = useBankData();
   const repos = useSnapshot((s) => s.repos);
   const mine = useMemo(() => [...repos.values()].filter((r) => r.bank === address).sort((a, b) => (a.id < b.id ? 1 : -1)), [repos, address]);
   const code = session.cashToken.code;
@@ -81,9 +81,9 @@ function RepoItem({ repo }: { repo: Repo }) {
   const due = config ? repo.openedAt + config.repoTermSecs : undefined;
   const canRepay = offered(caps.repay);
 
-  const repay = () => {
+  const repay = (all: boolean) => {
     if (!actor) return;
-    const parsed = amount.trim() ? readAmount(amount) : ({ ok: true, value: repo.outstanding } as const);
+    const parsed = all ? ({ ok: true, value: repo.outstanding } as const) : readAmount(amount);
     if (!parsed.ok) return tx.fail(parsed.message);
     void tx.run(
       `Repaying ${amountText(parsed.value, code)} of repo #${repo.id}`,
@@ -113,10 +113,13 @@ function RepoItem({ repo }: { repo: Repo }) {
         <div className="row">
           <label>
             Repay ({code})
-            <input inputMode="decimal" value={amount} placeholder={amountText(repo.outstanding)} onChange={(e) => setAmount(e.target.value)} />
+            <input inputMode="decimal" value={amount} placeholder="0.00" onChange={(e) => setAmount(e.target.value)} />
           </label>
-          <button type="button" disabled={!actor || !canRepay || !!tx.pending} title={canRepay ? undefined : STUB_NOTE} onClick={repay}>
+          <button type="button" disabled={!actor || !canRepay || !!tx.pending} title={canRepay ? undefined : STUB_NOTE} onClick={() => repay(false)}>
             Repay
+          </button>
+          <button type="button" disabled={!actor || !canRepay || !!tx.pending} title={canRepay ? undefined : STUB_NOTE} onClick={() => repay(true)}>
+            Repay all {amountText(repo.outstanding, code)}
           </button>
           {!canRepay && <span className="note">Repayment: {STUB_NOTE}</span>}
         </div>

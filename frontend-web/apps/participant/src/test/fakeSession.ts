@@ -34,6 +34,11 @@ export const USD = (n: number) => BigInt(Math.round(n * 1e7));
 export interface FakeOptions {
   network?: NetworkConfig;
   capabilities?: Partial<Capabilities>;
+  /**
+   * Like core's store for events it doesn't resolve to a bank: the bank views change only on
+   * `store.refresh`, not on every transaction.
+   */
+  staleViews?: boolean;
   /** The store's first load failed with this error. */
   storeError?: { title: string; detail: string };
   /** Settlement balances per bank index (1-based), in stroops. */
@@ -96,7 +101,7 @@ export function createFakeSession(options: FakeOptions = {}) {
   const publish = (events: FeedEvent[]) => {
     snapshot = {
       ...snapshot,
-      banks: views(),
+      banks: options.staleViews ? snapshot.banks : views(),
       payments: new Map(payments),
       repos: new Map(repos),
       events: [...snapshot.events, ...events],
@@ -105,7 +110,10 @@ export function createFakeSession(options: FakeOptions = {}) {
     for (const l of listeners) l();
   };
   const store = {
-    refresh: async () => publish([]),
+    refresh: async () => {
+      snapshot = { ...snapshot, banks: views() };
+      publish([]);
+    },
     retry: () => {
       snapshot = { ...snapshot, status: "ready" };
       delete (snapshot as { error?: unknown }).error;
@@ -262,7 +270,11 @@ export function createFakeSession(options: FakeOptions = {}) {
       normal: queue(address, "normal").map((id) => payments.get(id)!),
     };
     const view: BankView = { address, balance: balance(address), queues: qs, analysis: analyseQueues(balance(address), qs, config) };
-    if (capabilities.credit !== "stub") view.credit = { intraday: 0n, penalty: 0n, collateral: USD(1000) };
+    if (capabilities.credit !== "stub") {
+      const outstanding = (status: Repo["status"]) =>
+        [...repos.values()].filter((r) => r.bank === address && r.status === status).reduce((sum, r) => sum + r.outstanding, 0n);
+      view.credit = { intraday: outstanding("intraday"), penalty: outstanding("penalty"), collateral: USD(1000) };
+    }
     return view;
   }
 
@@ -316,6 +328,18 @@ export function createFakeSession(options: FakeOptions = {}) {
 
   return {
     session: session as unknown as RtgsSession,
+    /**
+     * Like core's store at start: it is ready before the feed replays the retention window, so
+     * the events so far arrive afterwards, as one batch. Call `hold` before rendering.
+     */
+    hold() {
+      const held = snapshot.events;
+      snapshot = { ...snapshot, events: [] };
+      return () => {
+        snapshot = { ...snapshot, events: [...held, ...snapshot.events] };
+        for (const l of listeners) l();
+      };
+    },
     /** Pretends the store holds only these payment orders, as after a long history. */
     keepOnly(ids: bigint[]) {
       snapshot = { ...snapshot, payments: new Map([...snapshot.payments].filter(([k]) => ids.includes(k))) };

@@ -9,7 +9,9 @@ export function QueuedActions({ payment }: { payment: Payment }) {
   const { actor } = useActingBank();
   const { refresh } = useBankData();
   const tx = useTx(refresh);
-  if (!actor || payment.status !== "queued" || payment.from !== actor.address) return null;
+  if (!actor || payment.from !== actor.address) return null;
+  // Once the order is final, keep the outcome of the last action (or a race's error) in view.
+  if (payment.status !== "queued") return <TxStatus state={tx} />;
   const other = payment.priority === "urgent" ? "normal" : "urgent";
   return (
     <span className="actions">

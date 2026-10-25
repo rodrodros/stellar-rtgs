@@ -123,7 +123,7 @@ describe.skipIf(!up)("participant app on the devnet", () => {
 
   it("queues an uncovered payment order behind a blocked head, then reprioritises and revokes it", async () => {
     const { id, text } = await submit(a, bank2(), "5000");
-    expect(text).toBe(`Payment order #${id} queued at position 1 in your normal queue.`);
+    expect(text).toBe(`Payment order #${id} queued in your normal queue, first in queue order.`);
     const normal = () => within(a).getByLabelText("Normal queue");
     await eventually(() => expect(within(normal()).getByText(/Blocked queue head/).textContent).toMatch(/4,100 USD more is needed/));
 

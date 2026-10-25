@@ -15,12 +15,33 @@ vi.mock("../../../packages/core/src/session.ts", async (importOriginal) => ({
   },
 }));
 
+// Stellar Wallets Kit can't run here: a wallet that connects when told to, and records disconnects.
+const wallet = vi.hoisted(() => ({
+  pending: undefined as undefined | ((address: string) => void),
+  disconnects: 0,
+}));
+vi.mock("../../../packages/core/src/signer/wallet.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../packages/core/src/signer/wallet.ts")>()),
+  connectWallet: (network: NetworkConfig) =>
+    new Promise((resolve) => {
+      wallet.pending = (address) =>
+        resolve({ kind: "wallet", address, networkPassphrase: network.passphrase, signTransaction: async (xdr: string) => xdr });
+    }),
+  disconnectWallet: async () => {
+    wallet.disconnects += 1;
+  },
+}));
+
+const WALLET = "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFSHONUCEOASW7QC7OX2H";
+
 const { App } = await import("./App.tsx");
 
 const ENV = { VITE_RTGS_ENABLE_MAINNET: "true", VITE_RTGS_MAINNET_RPC_URL: "https://mainnet.example" };
 
 beforeEach(() => {
   connected.length = 0;
+  wallet.pending = undefined;
+  wallet.disconnects = 0;
 });
 afterEach(() => {
   cleanup();
@@ -87,6 +108,34 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "Bank 1", pressed: true })).toBeTruthy();
     expect(await screen.findByText("Liquidity")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Bank 1" })).toHaveLength(1);
+    noFailure();
+  });
+
+  it("disconnects the wallet on Disconnect and when the network changes", async () => {
+    render(<App env={ENV} />);
+    fireEvent.change(select(), { target: { value: "testnet" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
+    await act(async () => wallet.pending!(WALLET));
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }));
+    expect(wallet.disconnects).toBe(1);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
+    await act(async () => wallet.pending!(WALLET));
+    await screen.findByRole("button", { name: "Disconnect" });
+    fireEvent.change(select(), { target: { value: "devnet" } });
+    await screen.findByText("Choose a bank to act as.");
+    expect(wallet.disconnects).toBe(2);
+  });
+
+  it("disconnects a wallet whose approval arrives after the network changed", async () => {
+    render(<App env={ENV} />);
+    fireEvent.change(select(), { target: { value: "testnet" } });
+    fireEvent.click(await screen.findByRole("button", { name: "Connect wallet" }));
+    fireEvent.change(select(), { target: { value: "devnet" } });
+    await screen.findByText("Choose a bank to act as.");
+    expect(wallet.disconnects).toBe(0);
+    await act(async () => wallet.pending!(WALLET));
+    expect(wallet.disconnects).toBe(1);
     noFailure();
   });
 

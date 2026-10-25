@@ -30,14 +30,18 @@ export function SubmitPayment() {
       "Submitting the payment order",
       () => actor.submit({ to, amount: parsed.value, priority }),
       async (outcome) => {
-        let position: number | undefined;
+        // In queue order a normal payment order also waits behind every queued urgent one.
+        let ahead: number | undefined;
         if (outcome.value.disposition === "queued") {
-          const ids = await session.read.queue(address, priority).catch(() => [] as bigint[]);
+          const [ids, urgent] = await Promise.all([
+            session.read.queue(address, priority),
+            priority === "normal" ? session.read.queue(address, "urgent") : Promise.resolve([] as bigint[]),
+          ]).catch(() => [[] as bigint[], [] as bigint[]] as const);
           const i = ids.indexOf(outcome.value.id);
-          if (i >= 0) position = i + 1;
+          if (i >= 0) ahead = urgent.length + i;
         }
         setAmount("");
-        return describeSubmit(outcome, priority, position);
+        return describeSubmit(outcome, priority, ahead);
       },
     );
   };
