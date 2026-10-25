@@ -1,7 +1,7 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
-// Against a running devnet: RTGS_DEVNET_RPC (default http://localhost:8360/rpc). The suite
+// Against a running devnet: RTGS_DEVNET_RPC (default http://localhost:8300/rpc). The suite
 // skips itself with a notice when RPC is not healthy.
 export default defineConfig({
   plugins: [react()],

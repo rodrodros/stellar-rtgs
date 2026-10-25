@@ -7,9 +7,15 @@
     "node": ">=26"
   },
   "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:central-bank": "pnpm --filter @rtgs/central-bank dev",
+    "dev:participant": "pnpm --filter @rtgs/participant dev",
+    "dev:observer": "pnpm --filter @rtgs/observer dev",
+    "build": "pnpm -r --if-present build",
+    "preview": "pnpm --parallel --filter \"./apps/*\" preview",
     "typecheck": "pnpm -r --if-present typecheck",
     "test": "vitest run",
-    "test:e2e": "pnpm --filter @rtgs/core test:e2e",
+    "test:e2e": "pnpm -r --workspace-concurrency=1 --if-present test:e2e",
     "bindings": "pnpm --filter @rtgs/core bindings",
     "bindings:check": "pnpm --filter @rtgs/core bindings:check",
     "devnet:bootstrap": "pnpm --filter @rtgs/core devnet:bootstrap"

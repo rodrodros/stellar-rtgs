@@ -22,7 +22,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { cell } from "../src/model/flows.ts";
 import { groupByTransaction } from "../src/model/timeline.ts";
 
-const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8380/rpc";
+const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
 
 async function healthy(): Promise<boolean> {
   try {

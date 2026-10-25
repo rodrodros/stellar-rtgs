@@ -15,7 +15,7 @@ The central bank's app: the RTGS's **operator** and **settlement agent**. A stat
 ```sh
 pnpm install
 make -C ../../../stellar-implementation devnet-up    # http://localhost:8300/rpc
-pnpm --filter @rtgs/central-bank dev                 # then Setup → Bootstrap
+pnpm --filter @rtgs/central-bank dev                 # http://localhost:5174, then Setup → Bootstrap
 ```
 
 Settings are core's `VITE_RTGS_*` variables (the workspace's `.env.example`), read from the workspace root. Mainnet is listed only with `VITE_RTGS_ENABLE_MAINNET=true` and a mainnet RPC, and selecting it needs a typed confirmation; the app always starts on the default network, never mainnet.

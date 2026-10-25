@@ -13,7 +13,7 @@ import { App } from "../src/App.tsx";
 // Passed as a path: under jsdom, core's default `new URL(..., import.meta.url)` isn't a file URL
 // that Node's fs accepts.
 const WASM = join(import.meta.dirname, "../../../packages/core/wasm/settlement.wasm");
-const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8360/rpc";
+const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
 
 async function healthy(): Promise<boolean> {
   try {

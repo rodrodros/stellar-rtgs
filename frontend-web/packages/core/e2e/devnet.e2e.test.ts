@@ -24,7 +24,7 @@ import {
 } from "../src/index.ts";
 import { readSettlementWasm } from "../src/node/index.ts";
 
-const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8350/rpc";
+const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
 /** lib.sh's config, but with a 10-second expiry so a keeper can reject a payment in the test. */
 const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 86_400, penaltyRateBps: 500 };
 
