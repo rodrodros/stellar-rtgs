@@ -1,7 +1,8 @@
 // Credit operations, while the deployed contract implements them: set_collateral, open_repo,
-// repay. Each plan keeps within the contract's limits (collateral never below intraday credit,
-// credit never above collateral, a repayment never above what is outstanding or what the
-// bank's settlement balance covers), so a refusal means a race, not a bad plan.
+// repay. Each plan keeps within the contract's limits (collateral never below the bank's
+// credit, intraday plus penalty; that credit never above collateral; a repayment never above
+// what is outstanding or what the bank's settlement balance covers), so a refusal means a
+// race, not a bad plan.
 // No trustline cash moves: open_repo mints into the contract and repay burns from it.
 import { CASH_CODE, formatAmount } from "@rtgs/core";
 import type { Repo } from "@rtgs/core";
@@ -29,9 +30,12 @@ export interface RepayParams {
 
 const cash = (amount: bigint) => `${formatAmount(amount)} ${CASH_CODE}`;
 
-/** Intraday credit outstanding; zero while the world's `credit` is a stub. */
-function intraday(b: BankState): bigint {
-  return b.credit?.intraday ?? 0n;
+/**
+ * Credit the contract weighs against collateral: intraday plus penalty (its `cr + ovn`).
+ * Zero while the world's `credit` is a stub.
+ */
+function used(b: BankState): bigint {
+  return (b.credit?.intraday ?? 0n) + (b.credit?.penalty ?? 0n);
 }
 
 /** The contract's collateral value, else the last `CollateralSet` seen, else none. */
@@ -45,7 +49,7 @@ function shortfall(b: BankState): bigint {
   return queued > b.balance ? queued - b.balance : 0n;
 }
 
-/** Central bank: a new collateral value for a bank, uniform in `tuning.collateral` and never below its intraday credit. */
+/** Central bank: a new collateral value for a bank, uniform in `tuning.collateral` and never below its credit. */
 export const setCollateral: ActionDef<SetCollateralParams> = {
   name: "setCollateral",
   group: "credit",
@@ -53,10 +57,10 @@ export const setCollateral: ActionDef<SetCollateralParams> = {
   capability: "setCollateral",
   plan({ world, rng, tuning }) {
     const { min, max } = tuning.collateral;
-    const banks = world.banks().filter((b) => intraday(b) <= max);
+    const banks = world.banks().filter((b) => used(b) <= max);
     if (banks.length === 0) return undefined;
     const b = rng.pick(banks);
-    const floor = intraday(b) > min ? intraday(b) : min;
+    const floor = used(b) > min ? used(b) : min;
     return { bank: b.address, label: b.label, value: rng.bigint(floor, max) };
   },
   run: (actors, _actor, p) => actors.centralBank.setCollateral(p.bank, p.value),
@@ -65,7 +69,8 @@ export const setCollateral: ActionDef<SetCollateralParams> = {
 };
 
 /**
- * Central bank: an intraday repo within the bank's headroom (collateral less intraday credit).
+ * Central bank: an intraday repo within the bank's headroom (collateral less intraday and
+ * penalty credit).
  * Banks whose balance doesn't cover their queue come first: the repo's cash releases their
  * orders through the eager closure, so the amount aims at that shortfall.
  */
@@ -75,7 +80,7 @@ export const openRepo: ActionDef<OpenRepoParams> = {
   role: "central-bank",
   capability: "openRepo",
   plan({ world, rng, tuning }) {
-    const headroom = (b: BankState) => collateral(b) - intraday(b);
+    const headroom = (b: BankState) => collateral(b) - used(b);
     const open = world.banks().filter((b) => headroom(b) > 0n);
     if (open.length === 0) return undefined;
     const stuck = open.filter((b) => shortfall(b) > 0n);

@@ -66,6 +66,15 @@ describe("setCollateral", () => {
     expect(setCollateral.plan(ctx(world))).toBeUndefined();
   });
 
+  it("counts penalty credit with intraday credit as the floor", () => {
+    const c = credit({ intraday: 2_000n * USD, penalty: 2_500n * USD, collateral: 4_500n * USD });
+    const world = fakeWorld({ banks: [bank(BANK_1, { credit: c })] });
+    for (const p of plans(setCollateral.plan, world)) expect(p!.value >= 4_500n * USD).toBe(true);
+    // Intraday plus penalty just above the range: no value the contract would take.
+    world.state.banks = [bank(BANK_1, { credit: { ...c, penalty: TUNING.collateral.max - 2_000n * USD + 1n } })];
+    expect(setCollateral.plan(ctx(world))).toBeUndefined();
+  });
+
   it("runs as the central bank", async () => {
     const actors = fakeActors();
     await setCollateral.run(actors, CB, { bank: BANK_2, label: "Bank 2", value: 7n * USD });
@@ -89,6 +98,15 @@ describe("openRepo", () => {
   it("stays within collateral less intraday credit", () => {
     const world = fakeWorld({ banks: [bank(BANK_1, { credit: credit({ intraday: 1_000n * USD, collateral: 1_100n * USD }) })] });
     for (const p of plans(openRepo.plan, world)) expect(p!.amount > 0n && p!.amount <= 100n * USD).toBe(true);
+  });
+
+  it("counts penalty credit against collateral", () => {
+    const world = fakeWorld({
+      banks: [bank(BANK_1, { credit: credit({ intraday: 600n * USD, penalty: 400n * USD, collateral: 1_000n * USD }) })],
+    });
+    expect(openRepo.plan(ctx(world))).toBeUndefined();
+    world.state.banks = [bank(BANK_1, { credit: credit({ intraday: 600n * USD, penalty: 370n * USD, collateral: 1_000n * USD }) })];
+    for (const p of plans(openRepo.plan, world)) expect(p!.amount > 0n && p!.amount <= 30n * USD).toBe(true);
   });
 
   it("falls back to collateral from CollateralSet events while credit is a stub", () => {
