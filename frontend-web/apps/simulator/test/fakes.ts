@@ -22,6 +22,7 @@ export const TUNING: Tuning = {
   holdingCeiling: 20_000n * USD,
   deauthorizeSecs: 30,
   collateral: { min: 1_000n * USD, max: 5_000n * USD },
+  submitMix: { covered: 6, uncovered: 3, gridlock: 1 },
 };
 
 export function bank(address: string, over: Partial<BankState> = {}): BankState {

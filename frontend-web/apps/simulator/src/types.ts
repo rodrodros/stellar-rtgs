@@ -108,6 +108,8 @@ export interface Tuning {
   /** How long a trustline stays deauthorized before it is reauthorized. */
   deauthorizeSecs: number;
   collateral: { min: bigint; max: bigint };
+  /** Relative weights of the three shapes of `submit`: settles at once, queues, crosses another queued order. */
+  submitMix: { covered: number; uncovered: number; gridlock: number };
 }
 
 export interface PlanContext {
@@ -155,9 +157,15 @@ export interface Choice {
   params: unknown;
 }
 
+/** `${action name}:${actor}`, e.g. "revoke:G…": a pair the engine has put on cool-down. */
+export type ExclusionKey = `${ActionName}:${string}`;
+
 export interface Policy {
-  /** At most one choice per idle actor; an actor with nothing to do is left out. */
-  choose(world: WorldView, idleActors: readonly string[]): Choice[];
+  /**
+   * At most one choice per idle actor; an actor with nothing to do is left out. Pairs in
+   * `excluded` were refused repeatedly and are cooling down: don't choose them.
+   */
+  choose(world: WorldView, idleActors: readonly string[], excluded?: ReadonlySet<ExclusionKey>): Choice[];
 }
 
 export interface StartInfo {
@@ -169,6 +177,8 @@ export interface StartInfo {
   profile: string;
   /** Actions per second, across all lanes. */
   rate: number;
+  /** The RNG seed, so the run can be repeated with `--rng-seed`. */
+  rngSeed: number;
   capabilities: Capabilities;
 }
 
