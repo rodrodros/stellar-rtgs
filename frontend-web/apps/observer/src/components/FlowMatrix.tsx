@@ -2,6 +2,7 @@
 import { useMemo, useState, type CSSProperties } from "react";
 import { flowMatrix, useSnapshot } from "../core.ts";
 import { axis, bilateralNet, cell, columnTotal, intensity, maxCell, queuedMatrix, rowTotal } from "../model/flows.ts";
+import { useTruncated } from "../state/groups.ts";
 import { Address, Amount } from "./format.tsx";
 import { useBanks } from "./System.tsx";
 
@@ -18,6 +19,7 @@ export function FlowMatrix() {
   const views = useSnapshot((s) => s.banks);
   const banks = useBanks();
   const [mode, setMode] = useState<Mode>("settled");
+  const truncated = useTruncated();
 
   const matrix = useMemo(() => {
     if (mode === "queued") return queuedMatrix(views.values());
@@ -40,7 +42,10 @@ export function FlowMatrix() {
           ))}
         </div>
       </header>
-      <p className="muted">{MODES.find((m) => m.mode === mode)!.note}</p>
+      <p className="muted">
+        {MODES.find((m) => m.mode === mode)!.note}
+        {truncated && mode !== "queued" && " Only the events still kept in memory count: older ones have been dropped."}
+      </p>
       {parties.length === 0 ? (
         <p className="empty">No banks yet.</p>
       ) : (

@@ -1,5 +1,5 @@
 // The connection controls (network, contract, mainnet confirmation) and the live status lines:
-// the ledger clock, the feed, and the RPC retention window that bounds the history.
+// the ledger clock, the feed, and the RPC retention window that bounds the loaded events.
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { STORE_EVENT_LIMIT, useLedgerClock, useSession, useSnapshot, type NetworkConfig } from "../core.ts";
 import { formatDuration } from "../model/expiry.ts";
@@ -22,7 +22,7 @@ export function ConnectBar(props: { networks: NetworkConfig[]; selected: string 
       return;
     }
     setInvalid(false);
-    update({ contract: value || undefined, payment: undefined, tx: undefined });
+    update({ contract: value || undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined });
   };
 
   return (
@@ -31,7 +31,9 @@ export function ConnectBar(props: { networks: NetworkConfig[]; selected: string 
         Network
         <select
           value={props.selected ?? ""}
-          onChange={(e) => update({ network: e.target.value, contract: undefined, payment: undefined, tx: undefined })}
+          onChange={(e) =>
+            update({ network: e.target.value, contract: undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined })
+          }
         >
           {props.selected === undefined && <option value="">Choose…</option>}
           {props.networks.map((n) => (
@@ -117,7 +119,7 @@ export function RetentionBar() {
   const { query, update } = useQuery();
   const feed = useSnapshot((s) => s.feed);
   const kept = useSnapshot((s) => s.events.length);
-  const window = retentionWindow(feed);
+  const retention = retentionWindow(feed);
   const [preset, setPreset] = useState<Preset>(presetOf(query.from));
   const [ledger, setLedger] = useState(typeof query.from === "number" ? String(query.from) : "");
   const [problem, setProblem] = useState<string>();
@@ -130,16 +132,16 @@ export function RetentionBar() {
       return;
     }
     if (preset === "hour") {
-      if (!window) return setProblem("The retention window isn't known yet.");
+      if (!retention) return setProblem("The retention window isn't known yet.");
       setProblem(undefined);
-      const from = ledgerSecondsAgo(window, 3_600);
+      const from = ledgerSecondsAgo(retention, 3_600);
       setLedger(String(from));
       setPreset("ledger");
       update({ from });
       return;
     }
     const n = Number(ledger);
-    const why = checkStartLedger(n, window);
+    const why = checkStartLedger(n, retention);
     setProblem(why);
     if (!why) update({ from: n });
   };
@@ -147,18 +149,18 @@ export function RetentionBar() {
   return (
     <div className="retention">
       <p>
-        {window ? (
+        {retention ? (
           <>
-            RPC keeps ledgers {window.oldestLedger.toLocaleString()}–{window.latestLedger.toLocaleString()} (about{" "}
-            {formatDuration(window.spanSecs)}, since <Time at={window.oldestCloseTime} withDate />
-            ). Earlier events are gone; balances and queues are still read live from the contract. Older history would need an indexer.
+            RPC keeps ledgers {retention.oldestLedger.toLocaleString()}–{retention.latestLedger.toLocaleString()} (about{" "}
+            {formatDuration(retention.spanSecs)}, since <Time at={retention.oldestCloseTime} withDate />
+            ). Earlier events are gone; balances and queues are still read live from the contract. Older events would need an indexer.
           </>
         ) : (
           <>Reading the RPC retention window…</>
         )}
       </p>
       <p>
-        {feed.startLedger !== undefined ? <>History loaded from ledger {feed.startLedger.toLocaleString()}. </> : null}
+        {feed.startLedger !== undefined ? <>Events loaded from ledger {feed.startLedger.toLocaleString()}. </> : null}
         {feed.clamped && <span className="warn">The requested start was older than the retention window, so loading starts at its oldest ledger. </span>}
         {kept >= STORE_EVENT_LIMIT && (
           <span className="warn">Only the newest {STORE_EVENT_LIMIT.toLocaleString()} events are kept; older ones have left the timeline. </span>
@@ -166,7 +168,7 @@ export function RetentionBar() {
       </p>
       <form className="start" onSubmit={load}>
         <label>
-          Load history from
+          Load events from
           <select value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
             <option value="retention">the whole retention window</option>
             <option value="hour">the last hour</option>
@@ -180,7 +182,7 @@ export function RetentionBar() {
             inputMode="numeric"
             value={ledger}
             onChange={(e) => setLedger(e.target.value.replace(/\D/g, ""))}
-            placeholder={window ? `${window.oldestLedger}–${window.latestLedger}` : "ledger"}
+            placeholder={retention ? `${retention.oldestLedger}–${retention.latestLedger}` : "ledger"}
           />
         )}
         <button type="submit">Load</button>

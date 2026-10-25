@@ -1,8 +1,8 @@
 // Two drawers over the dashboard: one payment order's lifecycle, and one transaction's events.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toRtgsError, useLedgerClock, useSession, useSnapshot, type LifecycleStep, type Payment, type PaymentRecord, type RtgsError } from "../core.ts";
 import { expiryOf, formatDuration } from "../model/expiry.ts";
-import { explainSettlements, groupByTransaction } from "../model/timeline.ts";
+import { useTruncated, useTxGroups } from "../state/groups.ts";
 import { useNav } from "../state/query.tsx";
 import { SettlementCause } from "./EventText.tsx";
 import { Address, Amount, priorityLabel, Time, TxLink } from "./format.tsx";
@@ -41,18 +41,27 @@ const STEP_LABEL: Record<LifecycleStep["kind"], string> = {
 /** A settled step's cause, from its transaction's events when they are loaded, else from core's summary. */
 function StepCause(props: { step: LifecycleStep }) {
   const { step } = props;
-  const events = useSnapshot((s) => s.events);
-  const explained = useMemo(() => {
-    const group = groupByTransaction(events.filter((e) => e.txHash === step.txHash))[0];
-    if (!group) return undefined;
-    const settlement = explainSettlements(group.events).find((s) => s.event.eventId === step.eventId);
-    return settlement && { settlement, trigger: group.trigger };
-  }, [events, step]);
-  if (explained) return <SettlementCause settlement={explained.settlement} trigger={explained.trigger} />;
+  const groups = useTxGroups();
+  const group = groups.find((g) => g.txHash === step.txHash);
+  const settlement = group?.settlements.find((s) => s.event.eventId === step.eventId);
+  if (group && settlement) return <SettlementCause settlement={settlement} trigger={group.trigger} />;
   if (step.via === "at-once") return <span className="cause">settled at once on submission</span>;
   if (step.via === "offset") return <span className="cause">settled in an offset</span>;
-  return <span className="cause">settled by the eager closure{step.trigger ? ` after a ${step.trigger.type} event` : ""}</span>;
+  return (
+    <span className="cause">
+      settled by the eager closure{step.trigger ? ` after ${TRIGGER_WORDS[step.trigger.type] ?? "an earlier action"} in the same transaction` : ""}
+    </span>
+  );
 }
+
+/** Core's trigger types in words, for a step whose transaction's events are no longer loaded. */
+const TRIGGER_WORDS: Partial<Record<string, string>> = {
+  Deposited: "a deposit",
+  Submitted: "a submission",
+  Revoked: "a revocation",
+  Reprioritised: "a reprioritisation",
+  Expired: "an expiry",
+};
 
 function QueuePlace(props: { payment: Payment }) {
   const { payment } = props;
@@ -71,7 +80,7 @@ function QueuePlace(props: { payment: Payment }) {
         <p className="muted">Not in its sender's queue in the latest read; it is about to change.</p>
       ) : (
         <p>
-          {index === 0 ? "Head" : `Position ${index + 1}`} of {queue.length} in <Address address={payment.from} />
+          {index === 0 ? "Head" : `Number ${index + 1} in queue order`} of {queue.length} in <Address address={payment.from} />
           {"'s"} {priorityLabel(payment.priority).toLowerCase()} queue.{" "}
           {index === 0 && analysis.blockedBy === "uncovered" && (
             <>
@@ -96,14 +105,16 @@ function QueuePlace(props: { payment: Payment }) {
 function Lifecycle(props: { record: PaymentRecord }) {
   const { record } = props;
   const feed = useSnapshot((s) => s.feed);
+  const truncated = useTruncated();
   const sawSubmission = record.steps.some((s) => s.kind === "submitted");
   return (
     <>
       {!sawSubmission && (
         <p className="note">
-          Submitted before the loaded window
-          {feed.startLedger !== undefined ? ` (which starts at ledger ${feed.startLedger.toLocaleString()})` : ""}, so its earlier events aren't
-          loaded. Its status comes from the contract.
+          {truncated
+            ? "Its earlier events are older than the events kept in memory"
+            : `Submitted before the loaded events${feed.startLedger !== undefined ? `, which start at ledger ${feed.startLedger.toLocaleString()}` : ""}`}
+          , so they aren't shown. Its status comes from the contract.
         </p>
       )}
       <ol className="lifecycle">
@@ -206,20 +217,49 @@ export function PaymentDrawer(props: { id: bigint }) {
 }
 
 export function TxDrawer(props: { hash: string }) {
-  const events = useSnapshot((s) => s.events);
-  const group = useMemo(() => groupByTransaction(events.filter((e) => e.txHash === props.hash))[0], [events, props.hash]);
+  const group = useTxGroups().find((g) => g.txHash === props.hash);
   return (
     <Drawer title={<>Transaction</>} label="Transaction">
       <p className="mono break">{props.hash}</p>
       {group ? (
         <>
           <p>
-            Ledger {group.ledger.toLocaleString()}, closed <Time at={group.closedAt} withDate />. Final at the close of this ledger (ADR-0005).
+            Ledger {group.ledger.toLocaleString()}, closed <Time at={group.closedAt} withDate />. A payment order it settled was final when this
+            ledger closed (ADR-0005).
           </p>
           <TxEvents group={group} showToken />
         </>
       ) : (
-        <p className="empty">This transaction's events aren't in the loaded window.</p>
+        <p className="empty">This transaction's events aren't among the loaded events.</p>
+      )}
+    </Drawer>
+  );
+}
+
+export function LedgerDrawer(props: { ledger: number }) {
+  const groups = useTxGroups().filter((g) => g.ledger === props.ledger);
+  const nav = useNav();
+  return (
+    <Drawer title={<>Ledger {props.ledger.toLocaleString()}</>} label={`Ledger ${props.ledger}`}>
+      {groups.length === 0 ? (
+        <p className="empty">None of the loaded events is in this ledger.</p>
+      ) : (
+        <>
+          <p>
+            Closed <Time at={groups[0]!.closedAt} withDate />. {groups.length} transaction{groups.length === 1 ? "" : "s"} touched the settlement
+            contract or its cash token.
+          </p>
+          {groups.map((g) => (
+            <div key={g.txHash} className="tx-group">
+              <div className="tx-head">
+                <button type="button" className="link mono" title={g.txHash} onClick={() => nav.openTx(g.txHash)}>
+                  tx {g.txHash.slice(0, 8)}…
+                </button>
+              </div>
+              <TxEvents group={g} showToken />
+            </div>
+          ))}
+        </>
       )}
     </Drawer>
   );

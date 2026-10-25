@@ -55,14 +55,20 @@ export function explainSettlements(events: readonly FeedEvent[]): Settlement[] {
   return out;
 }
 
-/** Groups events by transaction, oldest first. Events arrive in RPC order, so a transaction's events are contiguous. */
-export function groupByTransaction(events: readonly FeedEvent[]): TxGroup[] {
+/**
+ * Groups events by transaction, oldest first. Events arrive in RPC order, so a transaction's
+ * events are contiguous. `truncated`: older events were dropped (core's store keeps a bounded
+ * number), so the oldest transaction may have lost its first events and is left out, rather than
+ * be explained from a part of it.
+ */
+export function groupByTransaction(events: readonly FeedEvent[], opts: { truncated?: boolean } = {}): TxGroup[] {
   const groups: TxGroup[] = [];
   for (const event of events) {
     const last = groups.at(-1);
     if (last && last.txHash === event.txHash) last.events.push(event);
     else groups.push({ txHash: event.txHash, ledger: event.ledger, closedAt: event.closedAt, events: [event], settlements: [] });
   }
+  if (opts.truncated) groups.shift();
   for (const g of groups) {
     const trigger = g.events.find(isContractEvent);
     if (trigger) g.trigger = trigger;

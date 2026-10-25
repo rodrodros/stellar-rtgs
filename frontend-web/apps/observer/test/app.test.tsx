@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { allAvailable, RtgsError, type ConnectOptions, type NetworkConfig, type RtgsSession } from "@rtgs/core";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.tsx";
-import { C } from "./events.ts";
+import { A, B, C, deposited, expired, offset, reprioritised, revoked, settled, tx } from "./events.ts";
 import { fakeSession, snapshotOf, u } from "./fake.ts";
 
 // The connection is the only thing that would reach a network: each test decides what it returns.
@@ -78,7 +79,7 @@ describe("system picture", () => {
     open("");
     expect(screen.getByText("Credit (intraday repos) is not implemented in this contract yet.")).toBeTruthy();
     expect(screen.queryByText("Intraday credit")).toBeNull();
-    expect(screen.getByText(/Not implemented in this contract yet: expiry, collateral, repos/)).toBeTruthy();
+    expect(screen.getByText(/Not implemented in this contract yet: collateral, repos/)).toBeTruthy();
   });
 
   it("shows credit columns once the contract implements credit", () => {
@@ -130,7 +131,7 @@ describe("payment lifecycle", () => {
     fake.read.payment.mockResolvedValue({ id: 7n, from: C, to: "GBANKA", amount: u(1), priority: "normal", submittedAt: 1, status: "settled", settledAt: 2 });
     connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
     open("?payment=7");
-    expect(await screen.findByText(/Submitted before the loaded window \(which starts at ledger 90\)/)).toBeTruthy();
+    expect(await screen.findByText(/Submitted before the loaded events, which start at ledger 90, so they aren't shown/)).toBeTruthy();
   });
 
   it("opens a transaction's events from the timeline", () => {
@@ -195,13 +196,13 @@ describe("networks", () => {
 describe("retention window", () => {
   it("states what RPC keeps and where the history starts", () => {
     open("");
-    expect(screen.getByText(/RPC keeps ledgers 90–103/).textContent).toMatch(/Older history would need an indexer/);
-    expect(screen.getByText(/History loaded from ledger 90/)).toBeTruthy();
+    expect(screen.getByText(/RPC keeps ledgers 90–103/).textContent).toMatch(/Older events would need an indexer/);
+    expect(screen.getByText(/Events loaded from ledger 90/)).toBeTruthy();
   });
 
   it("reconnects from a chosen ledger, and refuses one outside the window", () => {
     open("");
-    fireEvent.change(screen.getByLabelText("Load history from"), { target: { value: "ledger" } });
+    fireEvent.change(screen.getByLabelText("Load events from"), { target: { value: "ledger" } });
     const input = screen.getByLabelText("Start ledger");
     fireEvent.change(input, { target: { value: "50" } });
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
@@ -225,5 +226,118 @@ describe("retention window", () => {
     open("");
     act(() => fake.set({ queuedCount: 3 }));
     await waitFor(() => expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("3"));
+  });
+});
+
+/** The cascade scenario, then one transaction of every other kind of event. */
+function everyEventScenario() {
+  const base = snapshotOf();
+  const events = [
+    ...base.events,
+    ...tx(104, (m) => [reprioritised(m(), 3n, "urgent")]),
+    ...tx(105, (m) => [revoked(m(), 2n), settled(m(), 3n, C, B, u(10))]),
+    ...tx(106, (m) => [expired(m(), 9n)]),
+    ...tx(107, (m) => [offset(m(), [10n, 11n]), settled(m(), 10n, A, B, u(10)), settled(m(), 11n, B, A, u(10))]),
+    ...tx(108, (m) => [{ ...m(), type: "CollateralSet", bank: A, value: u(50) }]),
+    ...tx(109, (m) => [{ ...m(), type: "RepoOpened", id: 0n, bank: A, amount: u(20) }]),
+    ...tx(110, (m) => [{ ...m(), type: "RepoRepaid", id: 0n, amount: u(5), outstanding: u(15) }]),
+    ...tx(111, (m) => [{ ...m(), type: "RepoPenalised", id: 0n, rateBps: 500 }]),
+    ...tx(112, (m) => [{ ...m(), type: "Unknown", name: "Mystery", topics: [], value: null }]),
+  ] as typeof base.events;
+  return snapshotOf(undefined, { events });
+}
+
+describe("every contract event", () => {
+  it("renders each kind in the timeline, with the cause of each settlement", () => {
+    connection.result = { session: fakeSession(everyEventScenario()).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    const text = screen.getByRole("region", { name: "Timeline" }).textContent;
+    for (const expected of [
+      "Bank C moved #3 to urgent",
+      "Bank C revoked #2",
+      "#3 settled: Bank C → Bank B 10 USD — settled by the eager closure after the revocation of #2, which unblocked the queue",
+      "#9 expired: a keeper rejected it",
+      "Offset of #10, #11",
+      "#10 settled: Bank A → Bank B 10 USD — settled in an offset",
+      "Central bank set Bank A's collateral to 50 USD",
+      "Central bank opened repo #0 for Bank A: 20 USD",
+      "Repo #0: 5 USD repaid, 15 USD outstanding",
+      "Repo #0 became a penalty repo at 5.00%",
+      'Unrecognised contract event "Mystery"',
+    ]) {
+      expect(text).toContain(expected);
+    }
+  });
+
+  it("nets settled flows per pair", () => {
+    connection.result = { session: fakeSession(everyEventScenario()).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    const flows = screen.getByRole("region", { name: "Liquidity flows" });
+    const cells = () => [...within(flows).getAllByText("Bank A")[1]!.closest("tr")!.querySelectorAll("td")].map((td) => td.textContent);
+    expect(cells()[1]).toBe("310 USD");
+    fireEvent.click(within(flows).getByRole("radio", { name: "Settled, net" }));
+    expect(cells()[1]).toBe("300 USD");
+  });
+});
+
+describe("links and the URL", () => {
+  it("opens every transaction of a ledger", () => {
+    open("");
+    const group = within(screen.getByRole("region", { name: "Timeline" })).getByText(/deposited/).closest("li.tx-group") as HTMLElement;
+    fireEvent.click(within(group).getByRole("button", { name: "ledger 103" }));
+    const drawer = screen.getByRole("dialog", { name: "Ledger 103" });
+    expect(drawer.textContent).toMatch(/1 transaction touched the settlement contract/);
+    expect(drawer.textContent).toMatch(/Bank A deposited 300 USD/);
+    expect(window.location.search).toBe("?ledger=103");
+  });
+
+  it("adds one history entry per drawer opened, under StrictMode too", () => {
+    window.history.replaceState(null, "", "/");
+    render(
+      <StrictMode>
+        <App env={{}} />
+      </StrictMode>,
+    );
+    const before = window.history.length;
+    fireEvent.click(within(screen.getByRole("region", { name: "Queues" })).getAllByRole("button", { name: "#2" })[0]!);
+    expect(screen.getByRole("dialog", { name: "Payment order 2" })).toBeTruthy();
+    expect(window.history.length).toBe(before + 1);
+  });
+
+  it("refuses a malformed contract id in a link instead of watching another contract", () => {
+    open("?contract=CABC");
+    expect(screen.getByRole("alert").textContent).toMatch(/"CABC" isn't a contract id/);
+    expect(connection.calls.every((c) => c.network === undefined)).toBe(true);
+  });
+});
+
+describe("limits and failures after connecting", () => {
+  it("loads from about an hour ago, clamped to the retention window", () => {
+    open("");
+    fireEvent.change(screen.getByLabelText("Load events from"), { target: { value: "hour" } });
+    fireEvent.click(screen.getByRole("button", { name: "Load" }));
+    expect(window.location.search).toBe("?from=90");
+  });
+
+  it("warns once the store has dropped older events, and drops the possibly cut transaction", () => {
+    const filler = Array.from({ length: 2000 }, (_, i) => tx(1000 + i, (m) => [deposited(m(), A, 1n)])).flat();
+    connection.result = { session: fakeSession(snapshotOf(undefined, { events: filler })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByText(/Only the newest 2,000 events are kept/)).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Liquidity flows" }).textContent).toMatch(/Only the events still kept in memory count/);
+    expect(screen.getByRole("region", { name: "Timeline" }).textContent).toMatch(/1,999 transactions/);
+  });
+
+  it("shows a later failure with the devnet hint, and lets it be dismissed or reconnected", () => {
+    const reconnect = vi.fn();
+    const error = new RtgsError("rpc", "RPC unreachable", "The devnet's RPC didn't answer.");
+    connection.result = { session: fakeSession(snapshotOf(undefined, { error })).session, connecting: false, reconnect };
+    open("");
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toMatch(/RPC unreachable\. The devnet's RPC didn't answer\. If the devnet was reset/);
+    fireEvent.click(within(alert).getByRole("button", { name: "Reconnect" }));
+    expect(reconnect).toHaveBeenCalled();
+    fireEvent.click(within(alert).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

@@ -120,7 +120,7 @@ export function QueueGauge() {
         role="meter"
         aria-label="Payment orders queued against the queue cap"
         aria-valuemin={0}
-        aria-valuemax={cap ?? 0}
+        {...(cap ? { "aria-valuemax": cap } : {})}
         aria-valuenow={queued}
       >
         <span style={{ width: `${ratio * 100}%` }} />
@@ -140,11 +140,10 @@ export function QueueGauge() {
   );
 }
 
-function ExpiryText(props: { payment: Payment }) {
+function ExpiryText(props: { payment: Payment; now: number | undefined }) {
   const config = useSnapshot((s) => s.config);
   const caps = useSnapshot((s) => s.capabilities);
-  const { now } = useLedgerClock();
-  const expiry = expiryOf(props.payment, config, now);
+  const expiry = expiryOf(props.payment, config, props.now);
   if (expiry.kind === "unknown") return null;
   if (expiry.kind === "running") return <span className="expiry">expires in {formatDuration(expiry.secondsLeft)}</span>;
   return (
@@ -154,8 +153,8 @@ function ExpiryText(props: { payment: Payment }) {
   );
 }
 
-function Lane(props: { view: BankView; priority: Priority }) {
-  const { view, priority } = props;
+function Lane(props: { view: BankView; priority: Priority; now: number | undefined }) {
+  const { view, priority, now } = props;
   const queue = view.queues[priority];
   const analysis = view.analysis[priority];
   return (
@@ -174,7 +173,7 @@ function Lane(props: { view: BankView; priority: Priority }) {
                 </span>
               )}
               {i === 0 && analysis.blockedBy === "urgent-queued" && <span className="why">held back by the urgent queue</span>}
-              <ExpiryText payment={p} />
+              <ExpiryText payment={p} now={now} />
             </li>
           ))}
         </ol>
@@ -185,11 +184,13 @@ function Lane(props: { view: BankView; priority: Priority }) {
 
 export function QueueLanes() {
   const banks = useBanks().filter(({ view }) => view && view.queues.urgent.length + view.queues.normal.length > 0);
+  // One clock for every countdown on the panel.
+  const { now } = useLedgerClock();
   return (
     <section className="panel queues" aria-labelledby="queues-title">
       <header className="panel-header">
         <h2 id="queues-title">Queues</h2>
-        <span className="muted">queue order: urgent first, then first in, first out</span>
+        <span className="muted">queue order: urgent first, then strict FIFO within each priority class</span>
       </header>
       {banks.length === 0 ? (
         <p className="empty">Every queue is empty: the system is at rest.</p>
@@ -199,8 +200,8 @@ export function QueueLanes() {
             <h3>
               <Address address={bank.address} /> <span className="muted">balance</span> <Amount value={view!.balance} />
             </h3>
-            <Lane view={view!} priority="urgent" />
-            <Lane view={view!} priority="normal" />
+            <Lane view={view!} priority="urgent" now={now} />
+            <Lane view={view!} priority="normal" now={now} />
           </div>
         ))
       )}

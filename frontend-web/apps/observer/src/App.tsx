@@ -1,8 +1,8 @@
 // The observer: pick a network and a settlement contract, then watch. It holds no keys and
 // signs nothing on any network. The URL carries the whole view (state/query.tsx).
 import { useEffect, useMemo, useState } from "react";
-import { defaultNetwork, loadNetworks, RtgsProvider, useConnection, useSnapshot, type Env, type NetworkConfig, type RtgsError } from "./core.ts";
-import { PaymentDrawer, TxDrawer } from "./components/Drawers.tsx";
+import { defaultNetwork, loadNetworks, RtgsProvider, useConnection, useSession, useSnapshot, type Env, type NetworkConfig, type RtgsError } from "./core.ts";
+import { LedgerDrawer, PaymentDrawer, TxDrawer } from "./components/Drawers.tsx";
 import { FlowMatrix } from "./components/FlowMatrix.tsx";
 import { ChainStatus, ConnectBar, MainnetConfirm, PaymentSearch, RetentionBar } from "./components/Header.tsx";
 import { BanksTable, CapabilityNote, CreditPanel, QueueGauge, QueueLanes } from "./components/System.tsx";
@@ -10,7 +10,7 @@ import { Timeline } from "./components/Timeline.tsx";
 import { toFeedStart } from "./model/retention.ts";
 import { QueryProvider, useQuery } from "./state/query.tsx";
 
-function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefined; onRetry?: () => void }) {
+function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefined; onRetry?: () => void; onDismiss?: () => void }) {
   return (
     <div className="banner banner-error" role="alert">
       <strong>{props.error.title}.</strong> {props.error.detail}
@@ -25,14 +25,22 @@ function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefin
           Reconnect
         </button>
       )}
+      {props.onDismiss && (
+        <button type="button" onClick={props.onDismiss}>
+          Dismiss
+        </button>
+      )}
     </div>
   );
 }
 
-function Dashboard() {
+function Dashboard(props: { onReconnect: () => void }) {
   const { query } = useQuery();
+  const { network } = useSession();
   const status = useSnapshot((s) => s.status);
   const error = useSnapshot((s) => s.error);
+  // Core's store keeps its last error after a later read succeeds, so the banner can be dismissed.
+  const [dismissed, setDismissed] = useState<RtgsError>();
   return (
     <>
       <div className="status-row">
@@ -41,7 +49,9 @@ function Dashboard() {
       </div>
       <RetentionBar />
       <CapabilityNote />
-      {error && <ErrorBanner error={error} network={undefined} />}
+      {error && error !== dismissed && (
+        <ErrorBanner error={error} network={network} onRetry={props.onReconnect} onDismiss={() => setDismissed(error)} />
+      )}
       {status === "loading" && <p className="loading">Reading balances, queues and recent payment orders…</p>}
       <main className="grid">
         <div className="col col-system">
@@ -59,6 +69,7 @@ function Dashboard() {
       </main>
       {query.payment !== undefined && <PaymentDrawer id={query.payment} />}
       {query.tx && <TxDrawer hash={query.tx} />}
+      {query.ledger !== undefined && <LedgerDrawer ledger={query.ledger} />}
     </>
   );
 }
@@ -68,6 +79,8 @@ function Observer(props: { env: Env }) {
   const { env } = props;
   const networks = useMemo(() => loadNetworks(env), [env]);
   const network = query.network ? networks.find((n) => n.id === query.network) : defaultNetwork(networks, env);
+  // A link with a malformed contract id is refused, never answered with another contract.
+  const blocked = query.invalidContract !== undefined;
 
   // Mainnet needs a confirmation every time it is chosen.
   const [mainnetConfirmed, setMainnetConfirmed] = useState(false);
@@ -85,7 +98,7 @@ function Observer(props: { env: Env }) {
     [env, query.contract, network?.id, mainnetConfirmed],
   );
   // A new start ledger needs a new store, so it reconnects.
-  const connection = useConnection(awaitingConfirmation ? undefined : network, options, String(query.from));
+  const connection = useConnection(awaitingConfirmation || blocked ? undefined : network, options, String(query.from));
   const storeOptions = useMemo(() => ({ feed: { from: toFeedStart(query.from) } }), [query.from]);
 
   return (
@@ -94,7 +107,7 @@ function Observer(props: { env: Env }) {
         <h1>
           RTGS <span>observer</span>
         </h1>
-        <ConnectBar networks={networks} selected={network?.id} contractId={query.contract ?? connection.session?.contractId} />
+        <ConnectBar networks={networks} selected={network?.id} contractId={query.contract ?? query.invalidContract ?? connection.session?.contractId} />
       </header>
       {query.network && !network && (
         <div className="banner banner-error" role="alert">
@@ -104,16 +117,24 @@ function Observer(props: { env: Env }) {
           Choose a network above.
         </div>
       )}
+      {blocked && (
+        <div className="banner banner-error" role="alert">
+          The link's settlement contract "{query.invalidContract}" isn't a contract id (C followed by 55 characters), so nothing is watched. Fix it
+          above, or clear it to use the network's configured contract.
+        </div>
+      )}
       {awaitingConfirmation && (
         <MainnetConfirm
           onConfirm={() => setMainnetConfirmed(true)}
-          onCancel={() => update({ network: defaultNetwork(networks, env).id, contract: undefined, payment: undefined, tx: undefined })}
+          onCancel={() =>
+            update({ network: defaultNetwork(networks, env).id, contract: undefined, invalidContract: undefined, payment: undefined, tx: undefined, ledger: undefined })
+          }
         />
       )}
       {connection.error && <ErrorBanner error={connection.error} network={network} onRetry={connection.reconnect} />}
       {connection.connecting && network && <p className="loading">Connecting to {network.label}…</p>}
       <RtgsProvider session={connection.session} storeOptions={storeOptions}>
-        <Dashboard />
+        <Dashboard onReconnect={connection.reconnect} />
       </RtgsProvider>
     </div>
   );

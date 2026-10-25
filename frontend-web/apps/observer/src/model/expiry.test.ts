@@ -10,9 +10,9 @@ describe("expiryOf", () => {
     expect(expiryOf(payment, config, 1100)).toEqual({ kind: "running", at: 1600, secondsLeft: 500 });
   });
 
-  it("has passed from the expiry time itself", () => {
-    expect(expiryOf(payment, config, 1600)).toEqual({ kind: "passed", at: 1600, secondsAgo: 0 });
-    expect(expiryOf(payment, config, 1700)).toEqual({ kind: "passed", at: 1600, secondsAgo: 100 });
+  it("has passed only after the expiry time, as the contract's expire checks it", () => {
+    expect(expiryOf(payment, config, 1600)).toEqual({ kind: "running", at: 1600, secondsLeft: 0 });
+    expect(expiryOf(payment, config, 1601)).toEqual({ kind: "passed", at: 1600, secondsAgo: 1 });
   });
 
   it("is unknown without the config or the ledger clock", () => {

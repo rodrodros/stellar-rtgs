@@ -73,6 +73,14 @@ describe("groupByTransaction", () => {
     expect(groups[1]!.events).toHaveLength(3);
     expect(groups[2]!.trigger).toMatchObject({ type: "Withdrawn" });
   });
+
+  it("leaves out the oldest transaction once older events were dropped, since it may be cut", () => {
+    // The deposit was dropped: alone, the settlements would look released by a `Settled`.
+    const cut = tx(22, (m) => [deposited(m(), A, 9n), settled(m(), 0n, A, B, 9n), settled(m(), 1n, B, C, 9n)]).slice(1);
+    const events = [...cut, ...tx(23, (m) => [withdrawn(m(), B, 1n)])];
+    expect(groupByTransaction(events).map((g) => g.ledger)).toEqual([22, 23]);
+    expect(groupByTransaction(events, { truncated: true }).map((g) => g.ledger)).toEqual([23]);
+  });
 });
 
 describe("filters", () => {

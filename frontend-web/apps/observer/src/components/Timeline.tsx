@@ -2,7 +2,8 @@
 // says what released it. Filters by kind of event and by bank.
 import { useMemo, useState } from "react";
 import { useSnapshot } from "../core.ts";
-import { categoryOf, filterGroups, groupByTransaction, type Category, type TxGroup } from "../model/timeline.ts";
+import { categoryOf, filterGroups, type Category, type TxGroup } from "../model/timeline.ts";
+import { useTxGroups } from "../state/groups.ts";
 import { EventText, SettlementCause } from "./EventText.tsx";
 import { Time, TxLink, useNameOf } from "./format.tsx";
 
@@ -52,7 +53,7 @@ export function Timeline() {
   const [bank, setBank] = useState("");
   const [limit, setLimit] = useState(PAGE);
 
-  const groups = useMemo(() => groupByTransaction(events), [events]);
+  const groups = useTxGroups();
   const shown = useMemo(() => {
     const senderOf = (id: bigint) => payments.get(id)?.from;
     return filterGroups(groups, { categories, ...(bank ? { bank } : {}) }, senderOf).reverse();

@@ -60,7 +60,7 @@ export function PaymentLink(props: { id: bigint }) {
   );
 }
 
-/** Opens the transaction's events; the ledger number is shown next to it. */
+/** Opens the transaction's events, or every transaction of its ledger. */
 export function TxLink(props: { hash: string; ledger: number }) {
   const nav = useNav();
   return (
@@ -68,7 +68,9 @@ export function TxLink(props: { hash: string; ledger: number }) {
       <button type="button" className="link mono" title={props.hash} onClick={() => nav.openTx(props.hash)}>
         tx {props.hash.slice(0, 8)}…
       </button>{" "}
-      <span className="muted">ledger {props.ledger.toLocaleString()}</span>
+      <button type="button" className="link" onClick={() => nav.openLedger(props.ledger)}>
+        ledger {props.ledger.toLocaleString()}
+      </button>
     </span>
   );
 }

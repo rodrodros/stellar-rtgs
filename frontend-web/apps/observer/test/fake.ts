@@ -115,9 +115,9 @@ export function snapshotOf(scenario = cascadeScenario(), patch: Partial<SystemSn
   };
 }
 
-/** What today's contract implements: the credit and repo views and the credit entry points are stubs. */
+/** What today's contract implements: credit (its entry points and views) is still stubbed. */
 export function stubbedCapabilities(): Capabilities {
-  return { ...allAvailable(), expire: "stub", setCollateral: "stub", openRepo: "stub", repay: "stub", convertOverdue: "stub", credit: "stub", repo: "stub" };
+  return { ...allAvailable(), setCollateral: "stub", openRepo: "stub", repay: "stub", convertOverdue: "stub", credit: "stub", repo: "stub" };
 }
 
 export function fakeSession(snapshot: SystemSnapshot = snapshotOf()) {
