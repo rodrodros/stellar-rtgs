@@ -12,6 +12,7 @@ The RTGS (real-time gross settlement system) on Stellar, built test first. It im
 - `deposit`'s guards: it refuses an amount of 0 or less with `InvalidAmount`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - `withdraw`'s guards: it refuses an amount of 0 or less with `InvalidAmount` and one above the balance with `InsufficientFunds`, and reports a transfer the cash token refuses as `TokenTransferFailed`;
 - the kernel's cover rule, `rtgs_core::covers`: a payment is covered if paying it leaves the sender's balance non-negative, with its unit and property tests;
+- the kernel's greatest feasible prefix, `rtgs_core::greatest_feasible_prefix` (Spec O, R4, ADR-0010): the descent from every candidate, dropping the last candidate of the lowest infeasible account until every account ends non-negative. F1 is decided exactly over the integers, so queued sums beyond `i128` neither panic nor rule a prefix out (SC-A03-11). The contract does not call it yet; it has its unit and property tests;
 - `submit` (A1): the sender's authorization, `InvalidAmount` and `SameAccount`, sequence-number ids and the payment record. A payment `covers` accepts settles at once (A2); any other waits in the sender's queue for its priority. The `payment`, `queue` and `queued_count` views read them back;
 - queue discipline at submission (S7, ADR-0008, ADR-0009): within a priority, payments are strictly first in, first out, and a bank's queued urgent payment blocks its normal ones, so a new payment settles at once only if none of the sender's is queued ahead of it, with its unit and property tests;
 - the queue cap (ADR-0010): once `Config::queue_cap` payments are queued across all banks, `submit` refuses a payment that would queue with `QueueFull`, and still settles one that would settle at once, with its unit and property tests;
@@ -48,7 +49,7 @@ Prerequisites:
 | Path | Contents |
 |---|---|
 | `contracts/settlement/` | The settlement contract: one contract holds the cash token and keeps every bank's balance (ADR-0004). `src/tests/` holds its unit, auth, property, state-machine and replay tests, and `tests/SCENARIOS.md` maps each scenario to them |
-| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. The settlement contract calls its cover rule. Its greatest feasible prefix is still a stub whose unit and property tests are red |
+| `crates/rtgs-core/` | The pure settlement rules, `no_std` and free of soroban-sdk, so they can be property-tested and proved with Kani. The settlement contract calls its cover rule. Its greatest feasible prefix is implemented, with its unit and property tests, and the contract will call it once it offsets |
 | `quint/` | The contract-level Quint model `settlement.qnt`, its tests `settlement_test.qnt`, and the ITF traces in `traces/` that `src/tests/itf_replay.rs` replays against the contract (TESTING.md §3). `make quint-traces` regenerates them |
 | `devnet/` | `up.sh`, `smoke.sh` and `down.sh` for the local network. Containers are named `impl-*`, and stellar-cli's identities go in `.devnet/` |
 | `integration/` | The devnet scenarios (TESTING.md §4): `lib.sh` holds the ADR-0003 cash-token setup, `run.sh` runs every scenario, and `pending/` holds the scenarios written ahead of the contract code they need |

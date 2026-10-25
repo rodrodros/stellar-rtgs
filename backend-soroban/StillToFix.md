@@ -210,29 +210,30 @@ The payment keeps its place by id. `reprioritise` needs:
 
 One decision is still open (README): whether a payment can still settle once its expiry has passed but before anyone has expired it. No unit test decides it, but `quint/settlement.qnt` and the tests built on it assume it can: the replay (SC-MB-01) and the property tests (SC-P-01, SC-P-02).
 
-## Flow 12: the kernel's greatest feasible prefix (19)
+## Flow 12: the kernel's greatest feasible prefix (20)
 
 A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, with F1 decided over the integers: queued sums can exceed `i128`, and an overflow must not make a prefix infeasible (SC-A03-11). It depends on nothing, so it can be done at any time before Flow 13.
 
-- [ ] `core::the_prefix_of_empty_queues_is_zero` (SC-A03-09)
-- [ ] `core::when_everything_fits_the_prefix_is_every_candidate` (SC-A03-09)
-- [ ] `core::an_uncovered_first_candidate_blocks_the_whole_queue` (SC-A03-09)
-- [ ] `core::dropping_one_candidate_can_make_others_infeasible` (SC-A03-09)
-- [ ] `core::the_prefix_does_not_depend_on_the_account_order` (SC-A03-09)
-- [ ] `core::r7_cycle_has_prefix_one_one_one` (SC-A03-01)
-- [ ] `core::the_descent_drops_the_last_candidate_of_a_violating_account` (SC-A03-03)
-- [ ] `core::the_prefix_never_skips_an_earlier_candidate` (SC-A03-04)
-- [ ] `core::a_prefix_that_leaves_an_account_negative_is_cut_back_at_the_i128_limit` (SC-A03-07)
-- [ ] `core::props::the_prefix_is_within_every_queue` (SC-P-04)
-- [ ] `core::props::the_prefix_is_feasible` (SC-P-04)
-- [ ] `core::props::the_prefix_is_the_greatest_feasible_one` (SC-P-04)
-- [ ] `core::props::the_prefix_does_not_depend_on_the_account_order` (SC-P-05)
-- [ ] `core::props::more_liquidity_never_shrinks_the_prefix` (SC-P-05)
-- [ ] `core::props::gross_processing_never_beats_the_offset` (SC-P-06)
-- [ ] `core::props::after_the_offset_nothing_more_is_feasible` (SC-P-06)
-- [ ] `core::props::a_candidate_no_inflow_can_cover_blocks_its_queue` (SC-P-07)
-- [ ] `core::props::sums_beyond_i128_are_decided_exactly_not_a_panic` (SC-P-08)
-- [ ] `core::props::at_the_i128_limit_sums_are_decided_exactly` (SC-A03-11)
+- [x] `core::the_prefix_of_empty_queues_is_zero` (SC-A03-09)
+- [x] `core::when_everything_fits_the_prefix_is_every_candidate` (SC-A03-09)
+- [x] `core::an_uncovered_first_candidate_blocks_the_whole_queue` (SC-A03-09)
+- [x] `core::dropping_one_candidate_can_make_others_infeasible` (SC-A03-09)
+- [x] `core::the_prefix_does_not_depend_on_the_account_order` (SC-A03-09)
+- [x] `core::r7_cycle_has_prefix_one_one_one` (SC-A03-01)
+- [x] `core::the_descent_drops_the_last_candidate_of_a_violating_account` (SC-A03-03)
+- [x] `core::the_prefix_never_skips_an_earlier_candidate` (SC-A03-04)
+- [x] `core::a_prefix_that_leaves_an_account_negative_is_cut_back_at_the_i128_limit` (SC-A03-07)
+- [x] `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly` (SC-A03-11)
+- [x] `core::props::the_prefix_is_within_every_queue` (SC-P-04)
+- [x] `core::props::the_prefix_is_feasible` (SC-P-04)
+- [x] `core::props::the_prefix_is_the_greatest_feasible_one` (SC-P-04)
+- [x] `core::props::the_prefix_does_not_depend_on_the_account_order` (SC-P-05)
+- [x] `core::props::more_liquidity_never_shrinks_the_prefix` (SC-P-05)
+- [x] `core::props::gross_processing_never_beats_the_offset` (SC-P-06)
+- [x] `core::props::after_the_offset_nothing_more_is_feasible` (SC-P-06)
+- [x] `core::props::a_candidate_no_inflow_can_cover_blocks_its_queue` (SC-P-07)
+- [x] `core::props::sums_beyond_i128_are_decided_exactly_not_a_panic` (SC-P-08)
+- [x] `core::props::at_the_i128_limit_sums_are_decided_exactly` (SC-A03-11)
 
 ## Flow 13: the LSM offset in the contract, A3 eager (10)
 
@@ -362,8 +363,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 11) | 99 |
-| Still to fix (Flows 12 to 21) | 68 |
-| All | 167 |
+| Already green (Flows 0 to 12) | 119 |
+| Still to fix (Flows 13 to 21) | 49 |
+| All | 168 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, and Flow 11 added SC-A05-10 and SC-P-15.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, and Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`.

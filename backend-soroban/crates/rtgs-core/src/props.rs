@@ -3,7 +3,8 @@
 //! The oracle enumerates every prefix vector of small instances and keeps the feasible
 //! ones (F1 with `lim` = 0, §4.5), decided over the integers: queued sums can exceed
 //! `i128`, and an overflow must never decide feasibility. Then the feasible vectors are
-//! closed under join (R4) and R5 holds at every amount, the `i128` edges included.
+//! closed under join (R4). The rule is checked at amounts and balances up to the `i128`
+//! edges: k* is the greatest feasible prefix there (SC-P-08), and R5 holds there too.
 extern crate std;
 
 use alloc::vec::Vec;
@@ -36,13 +37,33 @@ struct Instance {
 }
 
 /// 2 to 4 accounts, each with up to 3 candidates to other accounts. Payments are
-/// positive (S11) and balances small and non-negative (S2 with `lim` = 0), so that, as in
-/// the contract (S1), every balance a feasible offset leaves fits in `i128`.
+/// positive (S11) and balances small and non-negative (S2 with `lim` = 0).
 fn instance_with(amount: BoxedStrategy<i128>) -> impl Strategy<Value = Instance> {
+    instance_with_balances(amount, (0i128..=60).boxed())
+}
+
+/// As `instance_with`, with balances drawn from `balance`. The balances add up to at most
+/// `i128::MAX`, as in the contract (S1), so every balance a feasible offset leaves fits:
+/// each is cut to what the balances before it leave, so no draw is rejected and the sum
+/// often meets `i128::MAX` exactly.
+fn instance_with_balances(
+    amount: BoxedStrategy<i128>,
+    balance: BoxedStrategy<i128>,
+) -> impl Strategy<Value = Instance> {
     (2usize..=4).prop_flat_map(move |n| {
         let candidate = (1..n, amount.clone());
         (
-            prop::collection::vec(0i128..=60, n),
+            prop::collection::vec(balance.clone(), n).prop_map(|drawn| {
+                let mut headroom = i128::MAX;
+                drawn
+                    .into_iter()
+                    .map(|balance| {
+                        let kept = balance.min(headroom);
+                        headroom -= kept;
+                        kept
+                    })
+                    .collect::<Vec<i128>>()
+            }),
             prop::collection::vec(prop::collection::vec(candidate, 0..=3), n),
         )
             .prop_map(move |(balances, raw)| Instance {
@@ -69,11 +90,34 @@ fn small() -> BoxedStrategy<i128> {
     prop_oneof![3 => 1i128..=60, 1 => Just(10i128), 1 => Just(20i128)].boxed()
 }
 
-/// Amounts at the `i128` limit as well as small ones.
+/// Amounts on both sides of 2^64, where the rule splits them, with a low half around
+/// 2^63, anywhere up to `i128::MAX` and at the `i128` limit, as well as small ones.
 fn edgy() -> BoxedStrategy<i128> {
     prop_oneof![
         3 => 1i128..=60,
+        1 => Just((1i128 << 63) - 1),
+        1 => Just(1i128 << 63),
+        1 => 1i128..=i128::MAX,
+        1 => Just((1i128 << 64) - 1),
+        1 => Just(1i128 << 64),
         1 => Just(i128::MAX),
+        1 => Just(i128::MAX / 2 + 1),
+        1 => (i128::MAX - 60)..=i128::MAX,
+    ]
+    .boxed()
+}
+
+/// Balances on both sides of 2^64, where the rule splits them, with a low half around
+/// 2^63, and anywhere up to `i128::MAX`, as well as small ones.
+fn edgy_balances() -> BoxedStrategy<i128> {
+    prop_oneof![
+        3 => 0i128..=60,
+        1 => Just((1i128 << 63) - 1),
+        1 => Just(1i128 << 63),
+        1 => 0i128..=i128::MAX,
+        1 => Just((1i128 << 64) - 1),
+        1 => Just(1i128 << 64),
+        1 => Just(i128::MAX / 2),
         1 => Just(i128::MAX / 2 + 1),
         1 => (i128::MAX - 60)..=i128::MAX,
     ]
@@ -85,52 +129,57 @@ fn edgy() -> BoxedStrategy<i128> {
 /// over the integers.
 fn feasible(instance: &Instance, prefix: &[usize]) -> bool {
     (0..instance.balances.len()).all(|account| {
-        let outflow = instance.queues[account][..prefix[account]]
-            .iter()
-            .map(|candidate| candidate.amount);
-        let inflow = instance
+        let (credits, debits) = wide_flows(instance, prefix, account);
+        credits >= debits
+    })
+}
+
+/// A 256-bit unsigned sum, `carries · 2^128 + low`, as a `(carries, low)` pair of
+/// `u128`s. The tuple order compares two of them exactly.
+type Wide = (u128, u128);
+
+/// `account`'s balance plus its inflow, and its outflow, when the first `k[a]` candidates
+/// of every `a` settle, each as a 256-bit sum. The rule splits amounts into 64-bit halves;
+/// this oracle sums them another way, so that the two don't share a mistake.
+fn wide_flows(instance: &Instance, prefix: &[usize], account: usize) -> (Wide, Wide) {
+    let wide_sum = |values: &mut dyn Iterator<Item = i128>| {
+        values.fold((0u128, 0u128), |(carries, low), value| {
+            let value = u128::try_from(value).expect("balances and amounts are non-negative");
+            let (low, carried) = low.overflowing_add(value);
+            (carries + u128::from(carried), low)
+        })
+    };
+    let mut credits = core::iter::once(instance.balances[account]).chain(
+        instance
             .queues
             .iter()
             .enumerate()
             .flat_map(|(payer, queue)| &queue[..prefix[payer]])
             .filter(|candidate| candidate.to == account)
-            .map(|candidate| candidate.amount);
-        net_is_non_negative(instance.balances[account], inflow, outflow)
-    })
+            .map(|candidate| candidate.amount),
+    );
+    let mut debits = instance.queues[account][..prefix[account]]
+        .iter()
+        .map(|candidate| candidate.amount);
+    (wide_sum(&mut credits), wide_sum(&mut debits))
 }
 
-/// Whether `balance + Σ inflow − Σ outflow ≥ 0`, decided exactly. The sums can exceed
-/// `i128`, so each amount is split into 64-bit halves, whose sums cannot overflow.
-fn net_is_non_negative(
-    balance: i128,
-    inflow: impl Iterator<Item = i128>,
-    outflow: impl Iterator<Item = i128>,
-) -> bool {
-    const HALF: i128 = 1 << 64;
-    let (mut hi, mut lo) = (balance.div_euclid(HALF), balance.rem_euclid(HALF));
-    for amount in inflow {
-        hi += amount.div_euclid(HALF);
-        lo += amount.rem_euclid(HALF);
-    }
-    for amount in outflow {
-        hi -= amount.div_euclid(HALF);
-        lo -= amount.rem_euclid(HALF);
-    }
-    // The net is `hi · 2^64 + lo`; with `lo` carried into [0, 2^64), its sign is `hi`'s.
-    hi + lo.div_euclid(HALF) >= 0
-}
-
-/// The balances after the first `k[a]` candidates of every `a` settle. Only for small
-/// instances: it panics on overflow.
+/// The balances after the first `k[a]` candidates of every `a` settle, each booked as one
+/// exact net, so the sums may exceed `i128`. Expects `prefix` feasible: by S1 every end
+/// balance then fits in `i128`, and it panics if one does not.
 fn end_balances(instance: &Instance, prefix: &[usize]) -> Vec<i128> {
-    let mut balances = instance.balances.clone();
-    for (account, queue) in instance.queues.iter().enumerate() {
-        for candidate in &queue[..prefix[account]] {
-            balances[account] -= candidate.amount;
-            balances[candidate.to] += candidate.amount;
-        }
-    }
-    balances
+    (0..instance.balances.len())
+        .map(|account| {
+            let (credits, debits) = wide_flows(instance, prefix, account);
+            let (low, borrowed) = credits.1.overflowing_sub(debits.1);
+            let carries = credits.0 - debits.0 - u128::from(borrowed);
+            assert_eq!(
+                carries, 0,
+                "S1: account {account}'s end balance fits in i128"
+            );
+            i128::try_from(low).expect("S1: an end balance fits in i128")
+        })
+        .collect()
 }
 
 /// Every prefix vector of the instance.
@@ -307,14 +356,27 @@ proptest! {
     }
 
     /// R5 and S23: after the offset of k*, the greatest feasible prefix of what is left
-    /// is zero, so the queues are at rest until something external happens (ADR-0010).
+    /// is zero, so the queues are at rest until something external happens. Half the
+    /// instances have amounts and balances at the `i128` edges (ADR-0010).
     #[test]
-    fn after_the_offset_nothing_more_is_feasible(instance in instance_with(small())) {
+    fn after_the_offset_nothing_more_is_feasible(
+        instance in prop_oneof![
+            instance_with(small()).boxed(),
+            instance_with_balances(edgy(), edgy_balances()).boxed(),
+        ]
+    ) {
         let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
-        prop_assume!(feasible(&instance, &prefix));
+        prop_assert!(feasible(&instance, &prefix), "infeasible k = {:?}", prefix);
         let rest = after(&instance, &prefix);
         let k2 = greatest_feasible_prefix(&rest.balances, &rest.queues);
         prop_assert!(k2.iter().all(|x| *x == 0), "R5: k* of the rest is {:?}", k2);
+        // Judged by the oracle too, so that a rule that under-settles on both can't pass.
+        for vector in all_prefixes(&rest).iter().filter(|vector| feasible(&rest, vector)) {
+            prop_assert!(
+                vector.iter().all(|x| *x == 0),
+                "R5: {:?} is feasible after the offset", vector
+            );
+        }
     }
 
     /// F2: the prefix of an account whose first candidate exceeds its balance plus every
@@ -338,11 +400,13 @@ proptest! {
         }
     }
 
-    /// Amounts at the `i128` limit: the rule never panics, decides F1 exactly although the
-    /// sums exceed `i128`, and returns the greatest feasible prefix (S2, S10, R4;
-    /// ADR-0010).
+    /// Amounts and balances at the `i128` limit: the rule never panics, decides F1 exactly
+    /// although the sums exceed `i128`, and returns the greatest feasible prefix (S2, S10,
+    /// R4; ADR-0010).
     #[test]
-    fn sums_beyond_i128_are_decided_exactly_not_a_panic(instance in instance_with(edgy())) {
+    fn sums_beyond_i128_are_decided_exactly_not_a_panic(
+        instance in instance_with_balances(edgy(), edgy_balances())
+    ) {
         let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
         prop_assert!(feasible(&instance, &prefix), "infeasible k = {:?}", prefix);
         for vector in all_prefixes(&instance).iter().filter(|vector| feasible(&instance, vector)) {

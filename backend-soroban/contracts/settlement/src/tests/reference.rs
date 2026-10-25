@@ -1,4 +1,4 @@
-//! Reference rules for the property and state-machine tests, written independently of
+//! Reference rules for the property and state-machine tests, written separately from
 //! `rtgs-core` so that a bug there cannot hide a bug in the contract.
 use std::vec::Vec;
 
@@ -55,7 +55,8 @@ fn covered(
 }
 
 /// Whether `balance + Σ inflow − Σ outflow ≥ 0`, decided exactly. The sums can exceed
-/// `i128`, so each amount is split into 64-bit halves, whose sums cannot overflow.
+/// `i128`, so each amount is split into 64-bit halves, whose sums cannot overflow. SC-P-09
+/// checks it against F1 decided another way, as 256-bit sums (`checks::feasible`).
 fn net_is_non_negative(
     balance: i128,
     inflow: impl Iterator<Item = i128>,
@@ -92,18 +93,57 @@ fn all_prefixes(queues: &[Vec<(usize, i128)>]) -> Vec<Vec<usize>> {
 
 /// R4 and F1 (ADR-0010): the descent above, which judges SC-P-01 and SC-P-02, returns the
 /// join of every feasible prefix vector, found by enumeration, and that join is feasible.
-/// Amounts reach `i128::MAX` and its half, so F1 is checked where the sums exceed `i128`.
+/// Amounts and balances reach `i128::MAX` and its half, straddle 2^64, have low halves
+/// around 2^63 and are drawn anywhere up to `i128::MAX`, so F1 is checked where the sums
+/// exceed `i128` and wherever the 64-bit split puts a value.
+/// The enumeration decides F1 its own way, as 256-bit sums, so that a mistake in the
+/// descent's 64-bit split doesn't also judge it.
 mod checks {
     use super::*;
     use proptest::prelude::*;
 
+    /// `n` balances, small or at the `i128` edges, adding up to at most `i128::MAX`, as in
+    /// the contract (S1): each is cut to what the balances before it leave.
+    fn balances(n: usize) -> impl Strategy<Value = Vec<i128>> {
+        let balance = prop_oneof![
+            4 => 0i128..=60,
+            1 => Just((1i128 << 63) - 1),
+            1 => Just(1i128 << 63),
+            1 => 0i128..=i128::MAX,
+            1 => Just((1i128 << 64) - 1),
+            1 => Just(1i128 << 64),
+            1 => Just(i128::MAX / 2),
+            1 => Just(i128::MAX / 2 + 1),
+            1 => (i128::MAX - 60)..=i128::MAX,
+        ];
+        prop::collection::vec(balance, n).prop_map(|drawn| {
+            let mut headroom = i128::MAX;
+            drawn
+                .into_iter()
+                .map(|balance| {
+                    let kept = balance.min(headroom);
+                    headroom -= kept;
+                    kept
+                })
+                .collect()
+        })
+    }
+
     fn instance() -> impl Strategy<Value = (Vec<i128>, Vec<Vec<(usize, i128)>>)> {
-        let amount =
-            prop_oneof![4 => 1i128..=80, 1 => Just(i128::MAX), 1 => Just(i128::MAX / 2 + 1)];
+        let amount = prop_oneof![
+            6 => 1i128..=80,
+            1 => Just((1i128 << 63) - 1),
+            1 => Just(1i128 << 63),
+            1 => Just((1i128 << 64) - 1),
+            1 => Just(1i128 << 64),
+            1 => 1i128..=i128::MAX,
+            1 => Just(i128::MAX),
+            1 => Just(i128::MAX / 2 + 1),
+        ];
         (2usize..=4).prop_flat_map(move |n| {
             let candidate = (0..n - 1, amount.clone());
             (
-                prop::collection::vec(0i128..=60, n),
+                balances(n),
                 prop::collection::vec(prop::collection::vec(candidate, 0..=3), n),
             )
                 .prop_map(move |(balances, raw)| {
@@ -125,8 +165,30 @@ mod checks {
         })
     }
 
+    /// F1 with `lim` = 0 for every account: `balance + Σ inflow ≥ Σ outflow`, each side a
+    /// 256-bit unsigned sum held as a `(carries, low)` pair of `u128`s.
     fn feasible(balances: &[i128], queues: &[Vec<(usize, i128)>], prefix: &[usize]) -> bool {
-        (0..balances.len()).all(|account| covered(balances, queues, prefix, account))
+        let wide_sum = |values: &mut dyn Iterator<Item = i128>| {
+            values.fold((0u128, 0u128), |(carries, low), value| {
+                let value = u128::try_from(value).expect("balances and amounts are non-negative");
+                let (low, carried) = low.overflowing_add(value);
+                (carries + u128::from(carried), low)
+            })
+        };
+        (0..balances.len()).all(|account| {
+            let mut credits = core::iter::once(balances[account]).chain(
+                queues
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(sender, queue)| &queue[..prefix[sender]])
+                    .filter(|(to, _)| *to == account)
+                    .map(|(_, amount)| *amount),
+            );
+            let mut debits = queues[account][..prefix[account]]
+                .iter()
+                .map(|(_, amount)| *amount);
+            wide_sum(&mut credits) >= wide_sum(&mut debits)
+        })
     }
 
     proptest! {
@@ -150,8 +212,8 @@ mod checks {
     }
 
     /// R7's witness (§4.10): the cycle A→B 15, B→C 20, C→A 25 with every balance 10 has
-    /// k* = (1, 1, 1); dropping one candidate can cascade to nothing; and sums beyond
-    /// `i128` are decided exactly (SC-A03-11; F1, R5; ADR-0010).
+    /// k* = (1, 1, 1); dropping one candidate can cascade to nothing; and sums and balances
+    /// beyond `i128` and 2^64 are decided exactly (SC-A03-11; F1, R5; ADR-0010).
     #[test]
     fn the_reference_descent_resolves_r7_and_cascades() {
         let cycle = [std::vec![(1, 15)], std::vec![(2, 20)], std::vec![(0, 25)]];
@@ -172,5 +234,15 @@ mod checks {
         assert_eq!(greatest_feasible_prefix(&[0, 0, 0], &edge), [2, 1, 1]);
         let halves = [std::vec![(1, half), (1, half)], std::vec![(0, max)]];
         assert_eq!(greatest_feasible_prefix(&[1, 0], &halves), [2, 1]);
+        // SC-A03-11's kernel instances: a balance of 2^64, and one whose inflow on top
+        // exceeds `i128`.
+        let two_to_the_64 = 1i128 << 64;
+        let whole = [std::vec![(1, two_to_the_64)], std::vec![]];
+        assert_eq!(
+            greatest_feasible_prefix(&[two_to_the_64, 0], &whole),
+            [1, 0]
+        );
+        let round_trip = [std::vec![(1, max)], std::vec![(0, max)]];
+        assert_eq!(greatest_feasible_prefix(&[1, max - 1], &round_trip), [1, 1]);
     }
 }

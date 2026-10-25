@@ -2,13 +2,15 @@
 //!
 //! This crate has no soroban-sdk dependency and no `Env`, so its rules can be tested
 //! natively, property-tested and proved with Kani, which cannot compile the soroban-sdk
-//! test host (C-ST-059). The settlement contract calls it. `covers` is implemented.
-//! `greatest_feasible_prefix` is still a stub whose unit tests (below) and property tests
-//! (`props.rs`) are written and red; see TESTING.md, "Property and state-machine tests".
+//! test host (C-ST-059). The settlement contract calls `covers`; it will call
+//! `greatest_feasible_prefix` once it offsets (Flow 13). Both are implemented, with their
+//! unit tests (below) and property tests (`props.rs`); see TESTING.md, "Property and
+//! state-machine tests".
 #![no_std]
 
 extern crate alloc;
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 /// One queued payment, as the prefix rule sees it: the account it credits and its amount.
@@ -36,9 +38,60 @@ pub fn covers(balance: i128, amount: i128) -> bool {
 /// balances, but not the queued amounts: a bank can queue payments it can't cover
 /// (SC-A01-07), so an account's incoming or outgoing sum can exceed `i128` while every
 /// balance the offset leaves fits. Treating an overflowing sum as infeasible would miss
-/// feasible prefixes and leave the queues gridlocked (SC-A03-11).
-pub fn greatest_feasible_prefix(_balances: &[i128], _queues: &[Vec<Candidate>]) -> Vec<usize> {
-    todo!()
+/// feasible prefixes and leave the queues gridlocked (SC-A03-11). So each balance and each
+/// amount is split into its 64-bit halves, `value = high · 2^64 + low` with `low` in
+/// [0, 2^64), and each account's net is kept as the two sums of its halves, which stay in
+/// `i128` for fewer than 2^62 candidates in all.
+///
+/// The descent (R4): start from every candidate and, while some account is infeasible,
+/// drop the last candidate of the lowest such account, as the Quint model's `kstar` does.
+/// Each round drops one candidate, so it makes at most `Σ queues[a].len()` removals.
+///
+/// Expects what the contract guarantees: one balance and one queue per account (equal
+/// lengths), every balance non-negative (S2), every amount positive (A1's guard) and every
+/// `to` an index into `balances`.
+///
+/// # Panics
+///
+/// If those expectations fail: more queues than balances, or a `to` out of range, index
+/// out of bounds, and a negative balance or a non-positive amount can leave a violator
+/// with nothing to drop, so its prefix underflows.
+pub fn greatest_feasible_prefix(balances: &[i128], queues: &[Vec<Candidate>]) -> Vec<usize> {
+    let mut prefix: Vec<usize> = queues.iter().map(Vec::len).collect();
+    // One pair of buffers for every round: the contract's allocator never frees.
+    let mut high = vec![0_i128; balances.len()];
+    let mut low = vec![0_i128; balances.len()];
+    loop {
+        for (account, &balance) in balances.iter().enumerate() {
+            (high[account], low[account]) = split(balance);
+        }
+        for (payer, queue) in queues.iter().enumerate() {
+            for candidate in &queue[..prefix[payer]] {
+                let (amount_high, amount_low) = split(candidate.amount);
+                high[payer] -= amount_high;
+                low[payer] -= amount_low;
+                high[candidate.to] += amount_high;
+                low[candidate.to] += amount_low;
+            }
+        }
+        // The net is `high · 2^64 + low`; with `low` carried into [0, 2^64), its sign is
+        // `high`'s. With balances non-negative and amounts positive, an account that sends
+        // nothing is never infeasible, so a violator has a candidate to drop.
+        let violating =
+            (0..prefix.len()).find(|&account| high[account] + low[account].div_euclid(HALF) < 0);
+        match violating {
+            Some(account) => prefix[account] -= 1,
+            None => return prefix,
+        }
+    }
+}
+
+/// 2^64, where `greatest_feasible_prefix` splits an amount.
+const HALF: i128 = 1 << 64;
+
+/// `value` as `(high, low)`, with `value = high · 2^64 + low` and `low` in [0, 2^64).
+fn split(value: i128) -> (i128, i128) {
+    (value.div_euclid(HALF), value.rem_euclid(HALF))
 }
 
 #[cfg(test)]
@@ -150,6 +203,22 @@ mod tests {
         let prefix =
             greatest_feasible_prefix(&[0, 0], &[vec![to(1, 100), to(1, 50)], vec![to(0, 50)]]);
         assert_eq!(prefix, vec![0, 0]);
+    }
+
+    /// SC-A03-11. F1 and R4 with balances of 2^64 and beyond (S1, S2; ADR-0010): the rule
+    /// splits a balance into 64-bit halves like an amount, and both halves count. A holds
+    /// 2^64 and pays B 2^64, so k* = (1, 0). And with A at 1 and B at `i128::MAX − 1`, A
+    /// pays B `i128::MAX` and B pays it back: B's balance plus its inflow exceeds `i128`,
+    /// yet both settle, k* = (1, 1).
+    #[test]
+    fn balances_beyond_two_to_the_sixty_four_are_decided_exactly() {
+        let two_to_the_64 = 1_i128 << 64;
+        let prefix =
+            greatest_feasible_prefix(&[two_to_the_64, 0], &[vec![to(1, two_to_the_64)], vec![]]);
+        assert_eq!(prefix, vec![1, 0]);
+        let max = i128::MAX;
+        let prefix = greatest_feasible_prefix(&[1, max - 1], &[vec![to(1, max)], vec![to(0, max)]]);
+        assert_eq!(prefix, vec![1, 1]);
     }
 
     /// F1 and R4 at the `i128` limit (ADR-0010): B's two candidates of `i128::MAX` add up
