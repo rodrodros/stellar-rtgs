@@ -304,6 +304,23 @@ describe("links and the URL", () => {
     expect(window.history.length).toBe(before + 1);
   });
 
+  it("links transactions and ledgers to the network's explorer, which the devnet doesn't have", () => {
+    open("?ledger=103");
+    expect(screen.getByRole("dialog", { name: "Ledger 103" }).querySelector("a.external")).toBeNull();
+    cleanup();
+
+    const explorer = { txUrl: "https://explorer.test/tx/{hash}", ledgerUrl: "https://explorer.test/ledger/{ledger}" };
+    connection.result = { session: fakeSession(undefined, { id: "testnet", label: "Testnet", explorer }).session, connecting: false, reconnect: vi.fn() };
+    open("?ledger=103");
+    const ledger = screen.getByRole("dialog", { name: "Ledger 103" });
+    expect(within(ledger).getByRole("link", { name: /Open on the Testnet explorer/ }).getAttribute("href")).toBe("https://explorer.test/ledger/103");
+    fireEvent.click(within(ledger).getByRole("button", { name: /^tx / }));
+    const hash = new URLSearchParams(window.location.search).get("tx")!;
+    const link = within(screen.getByRole("dialog", { name: "Transaction" })).getByRole("link", { name: /Open on the Testnet explorer/ });
+    expect(link.getAttribute("href")).toBe(`https://explorer.test/tx/${hash}`);
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
   it("refuses a malformed contract id in a link instead of watching another contract", () => {
     open("?contract=CABC");
     expect(screen.getByRole("alert").textContent).toMatch(/"CABC" isn't a contract id/);
@@ -326,6 +343,24 @@ describe("limits and failures after connecting", () => {
     expect(screen.getByText(/Only the newest 2,000 events are kept/)).toBeTruthy();
     expect(screen.getByRole("region", { name: "Liquidity flows" }).textContent).toMatch(/Only the events still kept in memory count/);
     expect(screen.getByRole("region", { name: "Timeline" }).textContent).toMatch(/1,999 transactions/);
+  });
+
+  it("shows how far loading older events has got", () => {
+    const feed = { ...snapshotOf().feed, state: "backfilling" as const, cursorLedger: 95 };
+    connection.result = { session: fakeSession(snapshotOf(undefined, { feed })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByText(/Loading: read up to ledger 95 of 103/)).toBeTruthy();
+  });
+
+  it("doesn't guess the priority class or submission time of a payment order known only from its settlement", () => {
+    const scenario = snapshotOf();
+    const payments = new Map(scenario.payments);
+    payments.set(0n, { ...payments.get(0n)!, partial: true });
+    connection.result = { session: fakeSession({ ...scenario, payments }).session, connecting: false, reconnect: vi.fn() };
+    open("?payment=0");
+    const summary = screen.getByRole("dialog", { name: "Payment order 0" }).querySelector("dl.summary") as HTMLElement;
+    expect(summary.textContent).toMatch(/Priority classreading…/);
+    expect(summary.textContent).toMatch(/Submittedreading…/);
   });
 
   it("shows a later failure with the devnet hint, and lets it be dismissed or reconnected", () => {

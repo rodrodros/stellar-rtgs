@@ -39,7 +39,7 @@ function Dashboard(props: { onReconnect: () => void }) {
   const { network } = useSession();
   const status = useSnapshot((s) => s.status);
   const error = useSnapshot((s) => s.error);
-  // Core's store keeps its last error after a later read succeeds, so the banner can be dismissed.
+  // Core clears the store's error once a read succeeds again; until then it can be dismissed.
   const [dismissed, setDismissed] = useState<RtgsError>();
   return (
     <>

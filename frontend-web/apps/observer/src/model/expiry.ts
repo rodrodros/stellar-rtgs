@@ -1,8 +1,7 @@
 // A queued payment order's expiry (ADR-0015), on the RTGS's clock: the latest ledger's close
 // time. Core analyses only each queue's head; the observer shows every queued payment order's.
-// The contract refuses `expire` while `now <= submitted_at + expiry_secs`, so it has passed only
-// strictly after that time.
-import { expiresAt, type Config, type Payment } from "../core.ts";
+// Whether it has passed is core's `isExpired`, which matches the contract's `expire`.
+import { expiresAt, isExpired, type Config, type Payment } from "../core.ts";
 
 export type Expiry =
   | { kind: "unknown" }
@@ -12,7 +11,7 @@ export type Expiry =
 export function expiryOf(payment: Payment, config: Config | undefined, now: number | undefined): Expiry {
   if (!config || now === undefined) return { kind: "unknown" };
   const at = expiresAt(payment, config);
-  return now > at ? { kind: "passed", at, secondsAgo: now - at } : { kind: "running", at, secondsLeft: at - now };
+  return isExpired(payment, config, now) ? { kind: "passed", at, secondsAgo: now - at } : { kind: "running", at, secondsLeft: at - now };
 }
 
 /** `90061` -> `"1 d 1 h"`, `3720` -> `"1 h 2 min"`, `45` -> `"45 s"`: the two largest units. */

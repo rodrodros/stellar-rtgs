@@ -388,6 +388,11 @@ thead th {
   text-underline-offset: 2px;
 }
 
+.external {
+  color: var(--accent);
+  text-underline-offset: 2px;
+}
+
 .status-rest {
   color: var(--ok);
 }

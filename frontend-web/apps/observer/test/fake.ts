@@ -1,6 +1,6 @@
 // A fake session and store for component tests: the shapes core's React hooks read, with a
 // scripted scenario. Nothing touches the network.
-import { allAvailable, type BankView, type Capabilities, type FeedEvent, type PaymentRecord, type RtgsSession, type SystemSnapshot } from "@rtgs/core";
+import { allAvailable, type BankView, type Capabilities, type FeedEvent, type NetworkConfig, type PaymentRecord, type RtgsSession, type SystemSnapshot } from "@rtgs/core";
 import { vi } from "vitest";
 import { A, B, C, CB, CONTRACT, deposited, settled, submitted, transfer, tx } from "./events.ts";
 
@@ -75,8 +75,8 @@ export function cascadeScenario() {
     balance,
     queues: { urgent, normal },
     analysis: {
-      urgent: { priority: "urgent", length: urgent.length, covered: !blocked, expired: false, ...(urgent[0] ? { head: urgent[0], blockedBy: "uncovered" as const } : {}) },
-      normal: { priority: "normal", length: normal.length, covered: true, expired: false, ...(normal[0] ? { head: normal[0], blockedBy: "urgent-queued" as const } : {}) },
+      urgent: { priority: "urgent", length: urgent.length, covered: !blocked, ...(urgent[0] ? { head: urgent[0], blockedBy: "uncovered" as const } : {}) },
+      normal: { priority: "normal", length: normal.length, covered: true, ...(normal[0] ? { head: normal[0], blockedBy: "urgent-queued" as const } : {}) },
     },
   });
   const banks = new Map<string, BankView>([
@@ -120,7 +120,7 @@ export function stubbedCapabilities(): Capabilities {
   return { ...allAvailable(), setCollateral: "stub", openRepo: "stub", repay: "stub", convertOverdue: "stub", credit: "stub", repo: "stub" };
 }
 
-export function fakeSession(snapshot: SystemSnapshot = snapshotOf()) {
+export function fakeSession(snapshot: SystemSnapshot = snapshotOf(), network: Partial<NetworkConfig> = {}) {
   let current = snapshot;
   const listeners = new Set<() => void>();
   const store = {
@@ -133,7 +133,7 @@ export function fakeSession(snapshot: SystemSnapshot = snapshotOf()) {
   };
   const read = { payment: vi.fn(async (_id: bigint) => undefined as unknown) };
   const session = {
-    network: { id: "devnet", label: "Devnet (local)", rpcUrl: "http://localhost:8300/rpc", passphrase: "x", banks: [], allowHttp: true },
+    network: { id: "devnet", label: "Devnet (local)", rpcUrl: "http://localhost:8300/rpc", passphrase: "x", banks: [], allowHttp: true, ...network },
     contractId: CONTRACT,
     centralBank: CB,
     cashToken: { code: "USD", issuer: CB, sacId: "CSAC" },

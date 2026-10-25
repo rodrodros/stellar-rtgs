@@ -1,5 +1,6 @@
 // Small display pieces every panel uses: amounts in the cash token, addresses by name, close
-// times, and links to payment orders and transactions.
+// times, and links to payment orders, transactions and the network's explorer.
+import type { ReactNode } from "react";
 import { formatAmount, useSession } from "../core.ts";
 import { useNav } from "../state/query.tsx";
 
@@ -72,6 +73,16 @@ export function TxLink(props: { hash: string; ledger: number }) {
         ledger {props.ledger.toLocaleString()}
       </button>
     </span>
+  );
+}
+
+/** A link out to the network's block explorer, when core knows one (none on the devnet). */
+export function ExplorerLink(props: { href: string | undefined; children: ReactNode }) {
+  if (!props.href) return null;
+  return (
+    <a className="external" href={props.href} target="_blank" rel="noopener noreferrer">
+      {props.children} ↗
+    </a>
   );
 }
 

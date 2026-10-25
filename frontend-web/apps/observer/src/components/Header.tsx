@@ -161,6 +161,11 @@ export function RetentionBar() {
       </p>
       <p>
         {feed.startLedger !== undefined ? <>Events loaded from ledger {feed.startLedger.toLocaleString()}. </> : null}
+        {feed.state === "backfilling" && feed.cursorLedger !== undefined && feed.latestLedger !== undefined && (
+          <>
+            Loading: read up to ledger {feed.cursorLedger.toLocaleString()} of {feed.latestLedger.toLocaleString()}.{" "}
+          </>
+        )}
         {feed.clamped && <span className="warn">The requested start was older than the retention window, so loading starts at its oldest ledger. </span>}
         {kept >= STORE_EVENT_LIMIT && (
           <span className="warn">Only the newest {STORE_EVENT_LIMIT.toLocaleString()} events are kept; older ones have left the timeline. </span>

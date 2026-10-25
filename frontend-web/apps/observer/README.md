@@ -16,8 +16,8 @@ A read-only watcher of the RTGS: pick a network and a settlement contract, then 
 - **Liquidity flows:** a payer × payee matrix in three modes: settled in the loaded window, settled net per pair, and queued now.
 - **Credit:** repos and collateral once the contract implements them; otherwise a one-line note.
 - **Payment lifecycle** (`?payment=<id>`): Submitted → (Reprioritised) → Settled / Revoked / Expired, with each step's ledger, close time and transaction. A queued payment order also shows its place in the queue and its expiry.
-- **Transaction** (`?tx=<hash>`) and **ledger** (`?ledger=<n>`): all the events of one transaction, or every loaded transaction of one ledger.
-- **Retention window:** what RPC still keeps (about 7 days by default) and where the loaded history starts. You can load from the whole window, the last hour, now, or a ledger number. Older history would need an indexer, which this project doesn't have. Balances, queues and payment orders are still read live from the contract.
+- **Transaction** (`?tx=<hash>`) and **ledger** (`?ledger=<n>`): all the events of one transaction, or every loaded transaction of one ledger, with a link to the network's explorer where core configures one (stellar.expert on testnet and mainnet; none on the devnet).
+- **Retention window:** what RPC still keeps (about 7 days by default) and where the loaded history starts. You can load from the whole window, the last hour, now, or a ledger number; while older events load, it shows how far it has read. Older history would need an indexer, which this project doesn't have. Balances, queues and payment orders are still read live from the contract.
 
 The whole view is in the URL (`?network=&contract=&from=&payment=&tx=&ledger=`), so it can be shared or put on a demo screen. A link whose network isn't offered, or whose contract id is malformed, is refused rather than shown against another network or contract.
 
@@ -57,12 +57,8 @@ The e2e test bootstraps a fresh deployment, drives two scenarios through core's 
 ## Gaps in @rtgs/core
 
 The observer works around these today; each would be a small addition to core.
-- **Explorer links.** Core has no per-network explorer URL (e.g. stellar.expert on testnet), so transaction and ledger links open the in-app views only. Ask: `explorerLinks(net): { tx(hash): string | undefined; ledger(seq): string | undefined }`.
-- **`MAX_EVENTS`.** The store keeps only the newest 2,000 events. Once it reaches that, the observer warns, and it leaves the oldest kept transaction out of the cause analysis, since it may have lost its first events. The constant isn't exported, so `src/core.ts` repeats it. Ask: export it.
-- **Expiry boundary.** `analyseQueues` marks a head `expired` when `now >= submittedAt + expirySecs`, but the contract's `expire` refuses with `NotExpired` until `now > submitted_at + expiry_secs`. The observer computes expiry itself with `>` (`src/model/expiry.ts`). Ask: use `>` in core.
-- **Last error.** The store keeps `error` after a later read succeeds, so the observer lets you dismiss the banner. Ask: clear it on the next successful refresh.
+- **`MAX_EVENTS`.** The store keeps only the newest 2,000 events. Once it reaches that, the observer warns, and it leaves the oldest kept transaction out of the cause analysis, since it may have lost its first events. The constant isn't exported from the package root, so `src/core.ts` repeats it. Ask: export it.
 - **A read-only entry.** `@rtgs/core`'s root entry also brings in the devnet bootstrap, so the observer's bundle carries the settlement Wasm and the SAC spec, which it never uses. Ask: a read-only entry (or side-effect-free modules) that leaves them out.
-- **Backfill progress.** `FeedStatus` says `backfilling` but not how far it has got. Ask: a `cursorLedger` field, so the observer can show "loaded to ledger X of Y".
 
 ## Shared UI
 

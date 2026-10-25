@@ -1,11 +1,12 @@
-// Two drawers over the dashboard: one payment order's lifecycle, and one transaction's events.
+// Drawers over the dashboard: one payment order's lifecycle, one transaction's events, and every
+// loaded transaction of one ledger.
 import { useEffect, useState, type ReactNode } from "react";
-import { toRtgsError, useLedgerClock, useSession, useSnapshot, type LifecycleStep, type Payment, type PaymentRecord, type RtgsError } from "../core.ts";
+import { ledgerUrl, toRtgsError, txUrl, useLedgerClock, useSession, useSnapshot, type LifecycleStep, type Payment, type PaymentRecord, type RtgsError } from "../core.ts";
 import { expiryOf, formatDuration } from "../model/expiry.ts";
 import { useTruncated, useTxGroups } from "../state/groups.ts";
 import { useNav } from "../state/query.tsx";
 import { SettlementCause } from "./EventText.tsx";
-import { Address, Amount, priorityLabel, Time, TxLink } from "./format.tsx";
+import { Address, Amount, ExplorerLink, priorityLabel, Time, TxLink } from "./format.tsx";
 import { TxEvents } from "./Timeline.tsx";
 
 function Drawer(props: { title: ReactNode; label: string; children: ReactNode }) {
@@ -191,15 +192,13 @@ export function PaymentDrawer(props: { id: bigint }) {
           <Amount value={shown.amount} />
         </dd>
         <dt>Priority class</dt>
-        <dd className={`priority priority-${shown.priority}`}>{priorityLabel(shown.priority)}</dd>
+        {shown.partial ? <dd className="muted">reading…</dd> : <dd className={`priority priority-${shown.priority}`}>{priorityLabel(shown.priority)}</dd>}
         <dt>Status</dt>
         <dd>
           <span className={`badge badge-${shown.status}`}>{shown.status}</span>
         </dd>
         <dt>Submitted</dt>
-        <dd>
-          <Time at={shown.submittedAt} withDate />
-        </dd>
+        <dd>{shown.partial ? <span className="muted">reading…</span> : <Time at={shown.submittedAt} withDate />}</dd>
         {shown.settledAt !== undefined && (
           <>
             <dt>Settled</dt>
@@ -217,10 +216,14 @@ export function PaymentDrawer(props: { id: bigint }) {
 }
 
 export function TxDrawer(props: { hash: string }) {
+  const session = useSession();
   const group = useTxGroups().find((g) => g.txHash === props.hash);
   return (
     <Drawer title={<>Transaction</>} label="Transaction">
       <p className="mono break">{props.hash}</p>
+      <p>
+        <ExplorerLink href={txUrl(session.network, props.hash)}>Open on the {session.network.label} explorer</ExplorerLink>
+      </p>
       {group ? (
         <>
           <p>
@@ -239,8 +242,12 @@ export function TxDrawer(props: { hash: string }) {
 export function LedgerDrawer(props: { ledger: number }) {
   const groups = useTxGroups().filter((g) => g.ledger === props.ledger);
   const nav = useNav();
+  const session = useSession();
   return (
     <Drawer title={<>Ledger {props.ledger.toLocaleString()}</>} label={`Ledger ${props.ledger}`}>
+      <p>
+        <ExplorerLink href={ledgerUrl(session.network, props.ledger)}>Open on the {session.network.label} explorer</ExplorerLink>
+      </p>
       {groups.length === 0 ? (
         <p className="empty">None of the loaded events is in this ledger.</p>
       ) : (
