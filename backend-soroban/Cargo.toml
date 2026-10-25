@@ -8,6 +8,11 @@ members = [
 [workspace.dependencies]
 soroban-sdk = "=29.0.1"
 
+[workspace.lints.clippy]
+# No single-letter names. The lint itself exempts generics, lifetimes and `_`;
+# clippy.toml lists the other short names it allows.
+min_ident_chars = "warn"
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true

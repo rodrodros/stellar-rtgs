@@ -14,6 +14,10 @@ This repo implements an RTGS on Stellar as Soroban contracts, test first. Read `
   - actions A1–A20, invariants S1–S23, liveness L1–L3 and results R*n*, from `../stellar-research/definition/rtgs-definition.md` §4;
   - the ADR it enforces.
 - **Before handing work back, run `make lint test build`.** All three must pass.
+- **No single-letter names.**
+  - Name each binding, closure parameter, const, field and function for what it holds: `setup`, `client`, `prefix`, not `s`, `c`, `k`.
+  - Allowed: generic parameters (`T`), lifetimes (`'a`), `_`, and `i j x y z w n`.
+  - `make lint` enforces this with `clippy::min_ident_chars`, configured in `Cargo.toml` and `clippy.toml`. A new workspace member needs `[lints] workspace = true`.
 - **Networks.**
   - Use only the local devnet (`devnet/`).
   - Never send a transaction to testnet or mainnet.
