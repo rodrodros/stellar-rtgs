@@ -179,7 +179,7 @@ fn ids_are_increasing_sequence_numbers() {
     assert_eq!(c.payment(&4), None);
 }
 
-/// SC-A01-09. ADR-0010's queue cap: at `queue_cap` queued payments, another uncovered
+/// SC-A01-09. A1, ADR-0010's queue cap: at `queue_cap` queued payments, another uncovered
 /// payment is refused with `QueueFull`, but a covered one still settles, since it never
 /// queues.
 #[test]
@@ -204,12 +204,14 @@ fn the_queue_cap_refuses_only_payments_that_would_queue() {
         Err(Ok(Error::QueueFull))
     );
     assert_eq!(c.queued_count(), 2);
+    assert_eq!(c.payment(&2), None);
 
     let id = c.submit(s.bank(1), s.bank(0), &100, &N);
+    assert_eq!(id, 2);
     assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
 }
 
-/// SC-A01-10. Below the cap by one, an uncovered payment still queues.
+/// SC-A01-10. A1, ADR-0010: below the cap by one, an uncovered payment still queues.
 #[test]
 fn one_below_the_queue_cap_a_payment_still_queues() {
     let s = Setup::with_config(
@@ -225,6 +227,147 @@ fn one_below_the_queue_cap_a_payment_still_queues() {
     c.submit(s.bank(0), s.bank(1), &500, &N);
     assert_eq!(c.queued_count(), 2);
     assert_eq!(s.queue(0, N), std::vec![0, 1]);
+}
+
+/// SC-A01-22. A1, ADR-0010: the cap counts queued payments only. A payment that settled
+/// does not count, so with a cap of 2 two payments still queue after one has settled.
+#[test]
+fn a_settled_payment_does_not_count_toward_the_queue_cap() {
+    let s = Setup::with_config(
+        2,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let c = s.client();
+    s.mint(s.bank(1), 100);
+    c.deposit(s.bank(1), &100);
+    assert_eq!(c.submit(s.bank(1), s.bank(0), &10, &N), 0);
+    assert_eq!(c.payment(&0).unwrap().status, Status::Settled);
+
+    assert_eq!(c.submit(s.bank(0), s.bank(1), &500, &N), 1);
+    assert_eq!(c.submit(s.bank(0), s.bank(1), &500, &N), 2);
+    assert_eq!(c.queued_count(), 2);
+}
+
+/// SC-A01-18. A1, ADR-0010 with S7: at the cap, a covered payment that would wait behind the
+/// sender's own queued payment would queue, so it is refused with `QueueFull` like an
+/// uncovered one (`queueBounded`). The sender's queued urgent payments block both a normal
+/// payment (S7(a)) and an urgent one (S7(b), ADR-0008, ADR-0009).
+#[test]
+fn at_the_queue_cap_a_covered_payment_blocked_by_the_senders_queue_is_refused() {
+    let s = Setup::with_config(
+        2,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let c = s.client();
+    s.mint(s.bank(0), 100);
+    c.deposit(s.bank(0), &100);
+    c.submit(s.bank(0), s.bank(1), &500, &U);
+    c.submit(s.bank(0), s.bank(1), &500, &U);
+    assert_eq!(c.queued_count(), 2);
+
+    for p in [N, U] {
+        assert_eq!(
+            c.try_submit(s.bank(0), s.bank(1), &10, &p),
+            Err(Ok(Error::QueueFull))
+        );
+    }
+    assert_eq!(c.queued_count(), 2);
+    assert_eq!(s.balances(), std::vec![100, 0]);
+}
+
+/// SC-A01-19. ADR-0010: the cap counts the queued payments of every bank, and applies to
+/// either priority. Two banks fill it, so a third bank's uncovered urgent payment, with
+/// nothing of its own queued, is refused with `QueueFull` (A1). The payment is more than
+/// everything queued to its sender, so no offset could settle it either (F1): the test
+/// holds whatever is decided about the cap and the offset (README).
+#[test]
+fn the_queue_cap_counts_every_banks_queue_and_refuses_an_urgent_payment_too() {
+    let s = Setup::with_config(
+        3,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let c = s.client();
+    c.submit(s.bank(0), s.bank(2), &500, &N);
+    c.submit(s.bank(1), s.bank(2), &500, &N);
+    assert_eq!(c.queued_count(), 2);
+
+    assert_eq!(
+        c.try_submit(s.bank(2), s.bank(0), &1_001, &U),
+        Err(Ok(Error::QueueFull))
+    );
+    assert_eq!(c.queued_count(), 2);
+    assert_eq!(c.payment(&2), None);
+
+    s.mint(s.bank(2), 1);
+    c.deposit(s.bank(2), &1);
+    assert_eq!(c.submit(s.bank(2), s.bank(0), &1, &U), 2);
+}
+
+/// SC-A01-20. A1, S11, ADR-0010: at the cap, an invalid payment gets its own guard's
+/// error, `InvalidAmount` or `SameAccount`, not `QueueFull`, and no id is used.
+#[test]
+fn at_the_queue_cap_a1s_guards_come_before_queue_full() {
+    let s = Setup::with_config(
+        2,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let c = s.client();
+    c.submit(s.bank(0), s.bank(1), &500, &N);
+    c.submit(s.bank(0), s.bank(1), &500, &N);
+    assert_eq!(c.queued_count(), 2);
+
+    assert_eq!(
+        c.try_submit(s.bank(0), s.bank(1), &0, &N),
+        Err(Ok(Error::InvalidAmount))
+    );
+    assert_eq!(
+        c.try_submit(s.bank(0), s.bank(0), &10, &N),
+        Err(Ok(Error::SameAccount))
+    );
+    assert_eq!(c.queued_count(), 2);
+    assert_eq!(c.payment(&2), None);
+}
+
+/// SC-A01-21. A1, S7(a), ADR-0009, ADR-0010: at the cap, a covered urgent payment from a
+/// bank whose only queued payments are normal settles at once, so the cap does not refuse
+/// it.
+#[test]
+fn at_the_queue_cap_a_covered_urgent_payment_settles_past_queued_normal_ones() {
+    let s = Setup::with_config(
+        3,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let c = s.client();
+    s.mint(s.bank(0), 100);
+    c.deposit(s.bank(0), &100);
+    c.submit(s.bank(0), s.bank(1), &500, &N);
+    c.submit(s.bank(2), s.bank(1), &500, &N);
+    assert_eq!(c.queued_count(), 2);
+
+    let id = c.submit(s.bank(0), s.bank(1), &10, &U);
+    assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
+    assert_eq!(c.queued_count(), 2);
+    assert_eq!(s.balances(), std::vec![90, 10, 0]);
 }
 
 // ---------------------------------------------------------------------------------------

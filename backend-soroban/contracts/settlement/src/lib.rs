@@ -3,9 +3,9 @@
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other) and the `balance`, `payment`, `queue`, `queued_count`, `config` and
-//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
-//! are written and red; they are implemented test first (TESTING.md).
+//! other up to the queue cap) and the `balance`, `payment`, `queue`, `queued_count`,
+//! `config` and `central_bank` views. The other entry points are stubs whose unit tests
+//! (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -394,7 +394,11 @@ impl Settlement {
     /// `InvalidAmount`, and a payment to oneself with `SameAccount`, before an id is used.
     /// The id is the next sequence number (S11). A covered payment settles at once (A2) if
     /// nothing of the sender's is queued ahead of it (S7, ADR-0008, ADR-0009); any other
-    /// waits at the tail of the sender's queue for its priority.
+    /// waits at the tail of the sender's queue for its priority, unless `Config::queue_cap`
+    /// payments are queued already: then it is refused with `QueueFull`, before an id is
+    /// used (ADR-0010). The cap never refuses a payment that settles at once. Whether it
+    /// refuses one that an offset would settle is still open (README): `quint/settlement.qnt`
+    /// settles it, which would move this check after the closure (Flow 13).
     pub fn submit(
         env: Env,
         from: Address,
@@ -408,6 +412,11 @@ impl Settlement {
         }
         if from == to {
             return Err(Error::SameAccount);
+        }
+        let balance = Self::balance(env.clone(), from.clone());
+        let settles = !queued_ahead(&env, &from, priority) && rtgs_core::covers(balance, amount);
+        if !settles && Self::queued_count(env.clone()) >= Self::config(env.clone()).queue_cap {
+            return Err(Error::QueueFull);
         }
         env.storage()
             .instance()
@@ -436,8 +445,7 @@ impl Settlement {
             priority,
         }
         .publish(&env);
-        let balance = Self::balance(env.clone(), payment.from.clone());
-        if !queued_ahead(&env, &payment.from, priority) && rtgs_core::covers(balance, amount) {
+        if settles {
             settle(&env, &mut payment, balance);
         } else {
             enqueue(&env, &payment);

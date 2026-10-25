@@ -44,9 +44,9 @@ const FUNDING: i128 = 500;
 /// The central bank, as an actor index next to the banks.
 const CB: usize = N;
 
-/// A queue cap no run reaches, so the cap's rule (which the property test and the unit
-/// tests cover) stays out of the comparison; short expiry and repo terms that `Tick`
-/// reaches.
+/// A queue cap no run reaches, so the cap's rule (which the property tests SC-P-01 and
+/// SC-P-11 and the unit tests cover) stays out of the comparison; short expiry and repo
+/// terms that `Tick` reaches.
 fn test_config() -> Config {
     Config {
         queue_cap: 1_000,

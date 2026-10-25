@@ -117,14 +117,20 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 - [x] `unit::payments::a_covered_urgent_payment_waits_behind_an_uncovered_urgent_one` (SC-A01-17). Added in Flow 6, since no other test checks FIFO within the urgent priority; it fails if an urgent payment ignores the bank's queued urgent ones.
 - [x] `props::submissions_keep_each_banks_queue_in_order` (SC-P-10). Added in Flow 6: SC-P-01 checks S7 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. Against Flow 5's rule it fails with S7: its shrunk case is a normal payment settling past the bank's queued urgent one, which SC-A01-12 already pins as a unit test.
 
-## Flow 7: the queue cap, ADR-0010 (2)
+## Flow 7: the queue cap, ADR-0010 (8)
 
-`QueueFull` refuses only a payment that would queue. A covered payment still settles.
+`QueueFull` refuses only a payment that would queue. A covered payment with nothing of its sender's queued ahead of it still settles.
 
-- [ ] `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` (SC-A01-09)
-- [ ] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09. Passes since Flow 5, because there is no cap yet. Check that it still passes once the cap exists, then tick it.
+- [x] `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` (SC-A01-09)
+- [x] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09. Passed since Flow 5, and still passes with the cap.
+- [x] `unit::payments::at_the_queue_cap_a_covered_payment_blocked_by_the_senders_queue_is_refused` (SC-A01-18). Added in Flow 7, since SC-A01-09's covered payment comes from a bank with nothing queued; it fails if the cap checks cover alone and lets a covered payment queue behind the sender's own past the cap. The sender's queued payments are urgent, and both a normal and an urgent payment are refused, so it also fails if only the same priority's queue counts as ahead.
+- [x] `unit::payments::the_queue_cap_counts_every_banks_queue_and_refuses_an_urgent_payment_too` (SC-A01-19). Added in Flow 7, since it is the only cap test where the refused payment's sender has nothing queued and other banks fill the cap; it fails if the cap counts only the sender's queue, or (like SC-A01-18) applies to normal payments only. The refused payment is more than everything queued to its sender, so no offset could settle it, and the test holds whatever is decided about the cap and the offset.
+- [x] `unit::payments::at_the_queue_cap_a1s_guards_come_before_queue_full` (SC-A01-20). Added in Flow 7, so that a unit test pins what SC-P-11 checks: it fails if `QueueFull` comes before `InvalidAmount` or `SameAccount`.
+- [x] `unit::payments::at_the_queue_cap_a_covered_urgent_payment_settles_past_queued_normal_ones` (SC-A01-21). Added in Flow 7, SC-A01-13's case at the cap: it fails if the cap refuses an urgent payment because its bank has normal ones queued.
+- [x] `unit::payments::a_settled_payment_does_not_count_toward_the_queue_cap` (SC-A01-22). Added in Flow 7, since no other cap test settles a payment before the cap is reached; it fails if the cap counts every payment submitted rather than those queued.
+- [x] `props::submissions_never_queue_past_the_cap` (SC-P-11). Added in Flow 7: SC-P-01 checks the cap too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone, with a cap of 3. At the cap it lets a payment that would not settle by cover either be refused or settle in its own submission, so it stays valid once Flow 13's offset exists. It counts the queued payments from their records, so it also fails if `queued_count` drifts from them, and it fails if `QueueFull` comes before A1's guards. It checks after every call that balances move only by the call's own deposit or withdrawal and the payments it settles (S4), conservation, that no balance goes negative and S7's order, so a payment that settles at the cap must be booked, paid for, and must not overtake its sender's queue. With no cap it fails: its shrunk case is a fourth uncovered payment queued past a cap of 3, which SC-A01-09 already pins. With a cap that checks cover alone it fails too: its shrunk case is a covered payment queued behind its sender's own at the cap, which SC-A01-18 already pins.
 
-One decision is still open (README): what the cap does to a payment that would settle by offset. No test decides it, so add no behaviour for it.
+One decision is still open (README): what the cap does to a payment that would settle by offset. No unit test decides it, so add no behaviour for it here. But `quint/settlement.qnt` refuses a payment only if it is still queued after the closure, offset included, so it settles such a payment, and the replay (SC-MB-01) assumes it: traces 2, 28, 41 and 43 each settle one by offset.
 
 ## Flow 8: the eager closure, gross (7)
 
@@ -225,6 +231,8 @@ Build on Flows 8 and 12. Once gross settlement is at rest:
 2. Apply k*, booking each bank's net change exactly: payment by payment, or every debit first, overflows at the `i128` limit (SC-A03-11, SC-A03-12).
 3. Publish the `Offset` event, then one `Settled` event for each payment in it.
 4. Run the closure again.
+
+Before this flow, ask the user to settle the README decision on the queue cap and the offset. `quint/settlement.qnt` settles a payment that the offset settles, even at the cap. If that stands, first add a unit test, red against Flow 7's check before the closure: at the cap, an uncovered payment that the offset settles is accepted and settles (the README item has one). Then move `submit`'s cap check after the closure, so that it refuses only a payment still queued once the closure is done. If the user chooses to refuse, change `quint/settlement.qnt` and regenerate its traces instead, and add the README's test asserting `QueueFull`: it passes against Flow 7's check, so confirm it goes red against a check moved after the closure. Either way, then narrow SC-P-11's branch at the cap to the chosen answer: with `reference::greatest_feasible_prefix` over the queues plus the new payment, require `Ok(id)` and `Settled` when the prefix takes it and `QueueFull` when it does not ("settle"), or `QueueFull` whenever cover alone does not settle it ("refuse"). Update its doc comment, SCENARIOS row and StillToFix line. SC-P-11 must stay green with the offset: its S4 check sums exactly, so payments of `i128::MAX` settled by offset do not overflow it.
 
 Step 1 needs every bank with a queued payment. Since Flow 5, queues are stored one per `Queue(bank, priority)` and the contract keeps no list of banks, so the offset needs a persistent index of the banks with queued payments. That index could replace `QueuedCount`.
 
@@ -344,8 +352,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 6) | 44 |
-| Still to fix (Flows 7 to 21) | 107 |
-| All | 151 |
+| Already green (Flows 0 to 7) | 52 |
+| Still to fix (Flows 8 to 21) | 105 |
+| All | 157 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, and Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11.

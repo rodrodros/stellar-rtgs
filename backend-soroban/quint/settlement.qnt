@@ -20,7 +20,9 @@
 //   one account, so there is no A11 and cover is `bal - a >= 0` (ADR-0011).
 // - A queue cap across all banks (ADR-0010's consequences). A submission is refused with
 //   `QueueFull` only if the payment would still be queued after the eager closure, and
-//   the queue would then hold more than `QUEUE_CAP` payments (SC-A01-09).
+//   the queue would then hold more than `QUEUE_CAP` payments (SC-A01-09). Whether a
+//   payment the offset would settle is refused at the cap is still open (README); this
+//   model settles it, and traces 2, 28, 41 and 43 settle one.
 // - A8 keeps the sequence number, so toEnd = false (SC-A08-01).
 //
 // Amounts are always positive here. The `InvalidAmount` checks and the `i128` boundaries

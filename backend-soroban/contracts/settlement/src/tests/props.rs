@@ -22,6 +22,7 @@ use std::vec;
 use std::vec::Vec;
 
 use proptest::prelude::*;
+use soroban_sdk::Address;
 
 use super::reference::{config, greatest_feasible_prefix};
 use super::support::{default_config, Setup};
@@ -166,6 +167,50 @@ fn queued_in_order(s: &Setup, payments: &BTreeMap<u64, Payment>, b: usize) -> Ve
         .collect();
     mine.sort_by_key(|p| rank(p.priority, p.id));
     mine.iter().map(|p| p.id).collect()
+}
+
+/// A sum of `i128` terms kept exactly: each term is split into 64-bit halves, whose sums
+/// cannot overflow, as in `reference::net_is_non_negative`. S4's booking sums can exceed
+/// `i128` once an offset settles payments at the `i128` limit.
+#[derive(Clone, Default)]
+struct ExactSum {
+    hi: i128,
+    lo: i128,
+}
+
+impl ExactSum {
+    const HALF: i128 = 1 << 64;
+
+    fn add(&mut self, a: i128) {
+        self.hi += a.div_euclid(Self::HALF);
+        self.lo += a.rem_euclid(Self::HALF);
+    }
+
+    fn sub(&mut self, a: i128) {
+        self.hi -= a.div_euclid(Self::HALF);
+        self.lo -= a.rem_euclid(Self::HALF);
+    }
+
+    /// The sum is `hi · 2^64 + lo`; with `lo` carried into [0, 2^64), it is zero exactly
+    /// when both halves are.
+    fn is_zero(&self) -> bool {
+        self.hi + self.lo.div_euclid(Self::HALF) == 0 && self.lo.rem_euclid(Self::HALF) == 0
+    }
+}
+
+/// Whether bank `b` has a payment queued ahead, in `≺`, of a new payment `id` of priority
+/// `p`: if so, S7 keeps that payment from settling at once.
+fn queued_ahead(
+    s: &Setup,
+    payments: &BTreeMap<u64, Payment>,
+    b: usize,
+    p: Priority,
+    id: u64,
+) -> bool {
+    payments
+        .values()
+        .filter(|q| q.status == Status::Queued && &q.from == s.bank(b))
+        .any(|q| rank(q.priority, q.id) < rank(p, id))
 }
 
 /// Only deposit, withdraw and submit, for the properties of submission alone.
@@ -352,10 +397,7 @@ proptest! {
                 }
                 Op::Submit(f, t, a, p) => {
                     let id = before.len() as u64;
-                    let ahead = before
-                        .values()
-                        .filter(|q| q.status == Status::Queued && &q.from == s.bank(f))
-                        .any(|q| rank(q.priority, q.id) < rank(p, id));
+                    let ahead = queued_ahead(&s, &before, f, p, id);
                     let covered = c.balance(s.bank(f)) >= a;
                     if typed(c.try_submit(s.bank(f), s.bank(t), &a, &p)).is_ok() && covered && !ahead {
                         prop_assert_eq!(c.payment(&id).map(|q| q.status), Some(Status::Settled), "A2: {} waits", id);
@@ -372,6 +414,120 @@ proptest! {
                 q.extend(s.queue(b, Priority::Normal));
                 prop_assert_eq!(&q, &queued_in_order(&s, &after, b), "queue of bank {}", b);
             }
+            before = after;
+        }
+    }
+
+    /// No payment queues past the queue cap, over any sequence of deposits, withdrawals
+    /// and submissions, valid or not (ADR-0010):
+    /// - A1: a valid payment made while `queue_cap` payments are queued, that would not
+    ///   settle at once by cover, is refused with `QueueFull` or settles in its own
+    ///   submission: it never queues. Any other valid payment is accepted, so a payment
+    ///   covered with nothing of its sender's queued ahead of it in `≺` (S7, ADR-0008) is
+    ///   never refused;
+    /// - A1: an invalid payment gets its own guard's error, `InvalidAmount` or
+    ///   `SameAccount` (either, if it breaks both: the order is left open), never
+    ///   `QueueFull`;
+    /// - A1, S11: a refusal moves nothing, records nothing and uses no id;
+    /// - the payments queued, counted from their records, never exceed `queue_cap`, and
+    ///   `queued_count` counts them;
+    /// - S7 under F2: what settles, at the cap or not, precedes in `≺` every payment its
+    ///   sender still queues (ADR-0008, ADR-0009);
+    /// - S4: every balance moves only by the call's own deposit or withdrawal and the
+    ///   payments that settle in it, so what settles at the cap is booked. The sums are
+    ///   exact, so this holds at the `i128` limit once an offset settles there;
+    /// - S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011), so what
+    ///   settles at the cap is paid for.
+    ///
+    /// The cap is 3, so that a run reaches it often. The calls need no later entry point,
+    /// so this checks the cap before SC-P-01 can. It leaves open whether the cap refuses a
+    /// payment that an offset would settle (Flow 13, README): `quint/settlement.qnt`
+    /// settles it. Once that is decided, Flow 13 narrows this branch to the answer.
+    #[test]
+    fn submissions_never_queue_past_the_cap(ops in prop::collection::vec(submission_op(), 1..30)) {
+        let cap = 3;
+        let s = Setup::with_config(N, FUNDING, Config { queue_cap: cap, ..default_config() });
+        let c = s.client();
+        let queued = |ps: &BTreeMap<u64, Payment>| {
+            ps.values().filter(|p| p.status == Status::Queued).count() as u32
+        };
+        let mut before = payments(&s);
+
+        for op in ops {
+            let balances = s.balances();
+            // Per bank, the balance before, plus its funding and the payments that settle,
+            // minus the balance after: S4 holds when every one is zero.
+            let mut drift: Vec<ExactSum> = balances
+                .iter()
+                .map(|&b| {
+                    let mut d = ExactSum::default();
+                    d.add(b);
+                    d
+                })
+                .collect();
+            match op {
+                Op::Deposit(b, a) => {
+                    if typed(c.try_deposit(s.bank(b), &a)).is_ok() {
+                        drift[b].add(a);
+                    }
+                }
+                Op::Withdraw(b, a) => {
+                    if typed(c.try_withdraw(s.bank(b), &a)).is_ok() {
+                        drift[b].sub(a);
+                    }
+                }
+                Op::Submit(f, t, a, p) => {
+                    let id = before.len() as u64;
+                    let ahead = queued_ahead(&s, &before, f, p, id);
+                    let settles = !ahead && c.balance(s.bank(f)) >= a;
+                    let full = queued(&before) >= cap;
+                    let r = typed(c.try_submit(s.bank(f), s.bank(t), &a, &p));
+                    if a > 0 && f != t {
+                        if full && !settles {
+                            let settled = c.payment(&id).map(|q| q.status) == Some(Status::Settled);
+                            prop_assert!(
+                                r == Err(Error::QueueFull) || (r == Ok(id) && settled),
+                                "{} would queue past the cap: {:?}", id, r
+                            );
+                        } else {
+                            prop_assert_eq!(r, Ok(id), "{} refused", id);
+                        }
+                    } else {
+                        // When both guards fail, either error will do: the order is left open.
+                        let ok = match r {
+                            Err(Error::InvalidAmount) => a <= 0,
+                            Err(Error::SameAccount) => f == t,
+                            _ => false,
+                        };
+                        prop_assert!(ok, "A1's guards come before the cap: {:?}", r);
+                    }
+                    if r.is_err() {
+                        prop_assert_eq!(&payments(&s), &before, "a refusal records nothing");
+                        prop_assert_eq!(&s.balances(), &balances, "a refusal moves nothing");
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            s.assert_conserved();
+            let after = payments(&s);
+            let bank = |a: &Address| s.banks.iter().position(|x| x == a).unwrap();
+            for p in after.values().filter(|p| {
+                p.status == Status::Settled && before.get(&p.id).map(|q| q.status) != Some(Status::Settled)
+            }) {
+                drift[bank(&p.from)].sub(p.amount);
+                drift[bank(&p.to)].add(p.amount);
+            }
+            for (d, b) in drift.iter_mut().zip(s.balances()) {
+                d.sub(b);
+            }
+            prop_assert!(
+                drift.iter().all(ExactSum::is_zero),
+                "S4: balances move only by funding and settlements: {:?} to {:?}", balances, s.balances()
+            );
+            settled_in_order(&before, &after)?;
+            prop_assert!(queued(&after) <= cap, "queue over its cap");
+            prop_assert_eq!(c.queued_count(), queued(&after), "queued_count");
             before = after;
         }
     }
