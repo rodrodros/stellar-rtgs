@@ -6,7 +6,7 @@
 // No trustline cash moves: open_repo mints into the contract and repay burns from it.
 import { CASH_CODE, formatAmount } from "@rtgs/core";
 import type { Repo } from "@rtgs/core";
-import type { ActionDef, ActionModule, BankState, PlanContext } from "../types.ts";
+import type { ActionDef, ActionModule, BankState, PlanContext, WorldView } from "../types.ts";
 
 export interface SetCollateralParams {
   bank: string;
@@ -32,10 +32,11 @@ const cash = (amount: bigint) => `${formatAmount(amount)} ${CASH_CODE}`;
 
 /**
  * Credit the contract weighs against collateral: intraday plus penalty (its `cr + ovn`).
- * Zero while the world's `credit` is a stub.
+ * While the world's `credit` is a stub, the sum of the bank's open repos, which is the same.
  */
-function used(b: BankState): bigint {
-  return (b.credit?.intraday ?? 0n) + (b.credit?.penalty ?? 0n);
+function used(world: WorldView, b: BankState): bigint {
+  if (b.credit) return b.credit.intraday + b.credit.penalty;
+  return world.repos(b.address).reduce((sum, r) => sum + r.outstanding, 0n);
 }
 
 /** The contract's collateral value, else the last `CollateralSet` seen, else none. */
@@ -57,10 +58,11 @@ export const setCollateral: ActionDef<SetCollateralParams> = {
   capability: "setCollateral",
   plan({ world, rng, tuning }) {
     const { min, max } = tuning.collateral;
-    const banks = world.banks().filter((b) => used(b) <= max);
+    const banks = world.banks().filter((b) => used(world, b) <= max);
     if (banks.length === 0) return undefined;
     const b = rng.pick(banks);
-    const floor = used(b) > min ? used(b) : min;
+    const credit = used(world, b);
+    const floor = credit > min ? credit : min;
     return { bank: b.address, label: b.label, value: rng.bigint(floor, max) };
   },
   run: (actors, _actor, p) => actors.centralBank.setCollateral(p.bank, p.value),
@@ -80,7 +82,7 @@ export const openRepo: ActionDef<OpenRepoParams> = {
   role: "central-bank",
   capability: "openRepo",
   plan({ world, rng, tuning }) {
-    const headroom = (b: BankState) => collateral(b) - used(b);
+    const headroom = (b: BankState) => collateral(b) - used(world, b);
     const open = world.banks().filter((b) => headroom(b) > 0n);
     if (open.length === 0) return undefined;
     const stuck = open.filter((b) => shortfall(b) > 0n);

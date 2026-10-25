@@ -117,6 +117,15 @@ describe("openRepo", () => {
     }
   });
 
+  it("counts open repos as credit while credit is a stub", () => {
+    const world = fakeWorld({
+      banks: [bank(BANK_1, { collateral: 2_000n * USD })],
+      repos: [repo({ outstanding: 1_500n * USD }), repo({ outstanding: 450n * USD, status: "penalty" })],
+    });
+    for (const p of plans(openRepo.plan, world)) expect(p!.amount > 0n && p!.amount <= 50n * USD).toBe(true);
+    for (const p of plans(setCollateral.plan, world)) expect(p!.value >= 1_950n * USD).toBe(true);
+  });
+
   it("prefers a bank whose balance doesn't cover its queue, aiming at the shortfall", () => {
     const coll = credit({ collateral: 5_000n * USD });
     const world = fakeWorld({
