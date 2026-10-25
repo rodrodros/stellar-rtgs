@@ -4,6 +4,7 @@ import { describeSubmit, expiryNote, headNote, settledVia } from "./describe.ts"
 
 const head: PaymentRecord = { id: 4n, from: "GA", to: "GB", amount: 50_000_000n, priority: "normal", submittedAt: 0, status: "queued", steps: [] };
 const settled = (id: bigint) => ({ type: "Settled", id }) as RtgsEvent;
+const offset = (...ids: bigint[]) => ({ type: "Offset", ids }) as RtgsEvent;
 
 describe("describeSubmit", () => {
   it("says whether the order settled at once or queued, and where", () => {
@@ -19,6 +20,18 @@ describe("describeSubmit", () => {
   it("names the payment orders the eager closure released in the same transaction", () => {
     expect(describeSubmit({ value: { id: 5n, disposition: "settled" }, events: [settled(5n), settled(1n), settled(2n)] }, "normal")).toBe(
       "Payment order #5 settled at once. The eager closure also settled #1, #2.",
+    );
+  });
+
+  it("says when the order settled in an offset, and with which payment orders", () => {
+    const events = [offset(2n, 3n, 6n), settled(2n), settled(3n), settled(6n)];
+    expect(describeSubmit({ value: { id: 6n, disposition: "settled" }, events }, "normal")).toBe("Payment order #6 settled in an offset with #2, #3.");
+  });
+
+  it("tells gross settlement from an offset that followed it", () => {
+    const events = [settled(7n), settled(1n), offset(4n, 5n), settled(4n), settled(5n)];
+    expect(describeSubmit({ value: { id: 7n, disposition: "settled" }, events }, "normal")).toBe(
+      "Payment order #7 settled at once. The eager closure also settled #1. An offset also settled #4, #5.",
     );
   });
 });

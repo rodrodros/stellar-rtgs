@@ -7,6 +7,7 @@ import { Keypair, xdr } from "@stellar/stellar-sdk";
 import { decodeBody } from "../src/events/decode.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  allAvailable,
   bootstrapDevnet,
   connect,
   devnetIdentities,
@@ -25,8 +26,11 @@ import {
 import { readSettlementWasm } from "../src/node/index.ts";
 
 const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
-/** lib.sh's config, but with a 10-second expiry so a keeper can reject a payment in the test. */
-const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 86_400, penaltyRateBps: 500 };
+/**
+ * lib.sh's config, but with a 10-second expiry and repo term, so a keeper can reject a payment
+ * and penalise a repo in the test.
+ */
+const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 10, penaltyRateBps: 500 };
 
 async function healthy(): Promise<boolean> {
   try {
@@ -52,6 +56,11 @@ async function waitFor<T>(what: string, check: () => T | undefined | false, time
     if (Date.now() - start > timeoutMs) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/** Waits for a ledger that closed after `time`, the RTGS's clock. */
+async function closedAfter(session: RtgsSession, time: number): Promise<void> {
+  while ((await session.latestLedger()).closeTime <= time) await new Promise((r) => setTimeout(r, 1000));
 }
 
 describe.skipIf(!up)("@rtgs/core on the devnet", () => {
@@ -115,23 +124,8 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     });
   });
 
-  it("probes capabilities: what's implemented is available, todo!() stubs are stubs", async () => {
-    const caps = session.capabilities;
-    for (const name of ["deposit", "withdraw", "submit", "revoke", "reprioritise"] as const) expect(caps[name]).toBe("available");
-    expect(Object.values(caps).every((c) => c === "available" || c === "stub")).toBe(true);
-    const stub = (["expire", "setCollateral", "openRepo", "convertOverdue"] as const).find((n) => caps[n] === "stub");
-    if (stub) {
-      const actor = session.as(ids.centralBank);
-      const preview =
-        stub === "expire"
-          ? await actor.simulate.expire(0n)
-          : stub === "setCollateral"
-            ? await actor.simulate.setCollateral(ids.banks[0]!.address, 1n)
-            : stub === "openRepo"
-              ? await actor.simulate.openRepo(ids.banks[0]!.address, 1n)
-              : await actor.simulate.convertOverdue(0n);
-      expect(preview).toMatchObject({ ok: false, error: { kind: "not-implemented" } });
-    }
+  it("probes capabilities: the committed Wasm implements every entry point", () => {
+    expect(session.capabilities).toEqual(allAvailable());
   });
 
   it("lists the banks from the ledger registry, named, without the central bank", async () => {
@@ -277,8 +271,7 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     }
   });
 
-  it("lets a keeper reject a queued payment once its expiry has passed (ADR-0015)", async (ctx) => {
-    if (session.capabilities.expire !== "available") ctx.skip();
+  it("lets a keeper reject a queued payment once its expiry has passed (ADR-0015)", async () => {
     const b3 = session.as(ids.banks[2]!);
     const keeper = session.as(ids.banks[0]!);
     const queued = await b3.submit({ to: ids.banks[0]!.address, amount: parseAmount("5000"), priority: "normal" });
@@ -287,12 +280,7 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     expect(await keeper.simulate.expire(id)).toMatchObject({ ok: false, error: { kind: "contract", code: 9 } });
 
     const payment = (await session.read.payment(id))!;
-    await (async () => {
-      for (;;) {
-        if ((await session.latestLedger()).closeTime > payment.submittedAt + CONFIG.expirySecs) return;
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    })();
+    await closedAfter(session, payment.submittedAt + CONFIG.expirySecs);
     const config = await session.read.config();
     const now = (await session.latestLedger()).closeTime;
     const head = (await session.read.bank(ids.banks[2]!.address, { config })).analysis.normal.head!;
@@ -303,6 +291,75 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     expect(outcome.events.map((e) => e.type)).toEqual(["Expired"]);
     expect((await session.read.payment(id))?.status).toBe("expired");
     expect(await session.read.queue(ids.banks[2]!.address, "normal")).toEqual([]);
+  });
+
+  it("settles crossing payment orders in an offset, which the store explains (A3)", async () => {
+    const [b1, b3] = [session.as(ids.banks[0]!), session.as(ids.banks[2]!)];
+    const amount = parseAmount("1000");
+    const balances = await Promise.all([session.read.balance(b1.address), session.read.balance(b3.address)]);
+    // Neither balance covers its payment order alone, but the two net to zero.
+    expect(balances.every((b) => b < amount)).toBe(true);
+    const { store, release } = session.store({ feed: { pollMs: 500 } });
+    try {
+      const first = await b3.submit({ to: b1.address, amount, priority: "normal" });
+      expect(first.value.disposition).toBe("queued");
+      const second = await b1.submit({ to: b3.address, amount, priority: "normal" });
+      expect(second.value.disposition).toBe("settled");
+      expect(second.events.map((e) => e.type)).toEqual(["Submitted", "Offset", "Settled", "Settled"]);
+      expect(second.events[1]).toMatchObject({ type: "Offset", ids: [first.value.id, second.value.id] });
+      expect(await Promise.all([session.read.balance(b1.address), session.read.balance(b3.address)])).toEqual(balances);
+      expect(await session.read.queuedCount()).toBe(0);
+      for (const id of [first.value.id, second.value.id]) {
+        const p = await waitFor(`#${id} settled in the store`, () => {
+          const p = store.getSnapshot().payments.get(id);
+          return p?.status === "settled" ? p : undefined;
+        });
+        expect(p.steps.at(-1)).toMatchObject({ kind: "settled", via: "offset" });
+      }
+    } finally {
+      release();
+    }
+  });
+
+  it("runs a repo from collateral to penalty to repayment, as views and events agree (A12-A14, A20)", async () => {
+    const cb = session.as(ids.centralBank);
+    const bank = session.as(ids.banks[1]!);
+    const keeper = session.as(ids.banks[0]!);
+    const credit = (intraday: string, penalty: string) => ({ intraday: parseAmount(intraday), penalty: parseAmount(penalty), collateral: parseAmount("50") });
+
+    expect((await cb.setCollateral(bank.address, parseAmount("50"))).events.map((e) => e.type)).toEqual(["CollateralSet"]);
+    await expect(cb.openRepo(bank.address, parseAmount("51"))).rejects.toMatchObject({ kind: "contract", code: 12 });
+    const before = await session.read.balance(bank.address);
+    const held = await session.token.balance(session.contractId);
+    const opened = await cb.openRepo(bank.address, parseAmount("30"));
+    const repoId = opened.value.repoId;
+    expect(opened.events).toMatchObject([{ type: "RepoOpened", id: repoId, bank: bank.address, amount: parseAmount("30") }]);
+    // The repo's cash is minted into the contract and credited to the bank's balance (ADR-0011).
+    expect(await session.read.balance(bank.address)).toBe(before + parseAmount("30"));
+    expect(await session.token.balance(session.contractId)).toBe(held + parseAmount("30"));
+    expect(await session.read.credit(bank.address)).toEqual(credit("30", "0"));
+    await expect(cb.setCollateral(bank.address, parseAmount("29"))).rejects.toMatchObject({ kind: "contract", code: 11 });
+
+    const partial = await bank.repay(repoId, parseAmount("10"));
+    expect(partial.events).toMatchObject([{ type: "RepoRepaid", id: repoId, amount: parseAmount("10"), outstanding: parseAmount("20") }]);
+    expect(await session.read.credit(bank.address)).toEqual(credit("20", "0"));
+
+    // Once its term has passed, anyone turns the repo into a penalty repo (ADR-0014).
+    expect(await keeper.simulate.convertOverdue(repoId)).toMatchObject({ ok: false, error: { kind: "contract", code: 15 } });
+    const repo = (await session.read.repo(repoId))!;
+    await closedAfter(session, repo.openedAt + CONFIG.repoTermSecs);
+    const penalised = await keeper.convertOverdue(repoId);
+    expect(penalised.events).toMatchObject([{ type: "RepoPenalised", id: repoId, rateBps: CONFIG.penaltyRateBps }]);
+    expect(await session.read.repo(repoId)).toMatchObject({ status: "penalty", rateBps: CONFIG.penaltyRateBps, outstanding: parseAmount("20") });
+    expect(await session.read.credit(bank.address)).toEqual(credit("0", "20"));
+
+    // The central bank repays on the bank's behalf, from the bank's balance, and the cash is burned.
+    await cb.repay(repoId, parseAmount("20"));
+    expect(await session.read.repo(repoId)).toMatchObject({ status: "repaid", outstanding: 0n });
+    expect(await session.read.credit(bank.address)).toEqual(credit("0", "0"));
+    expect(await session.read.balance(bank.address)).toBe(before);
+    expect(await session.token.balance(session.contractId)).toBe(held);
+    await expect(bank.repay(repoId, 1n)).rejects.toMatchObject({ kind: "contract", code: 14 });
   });
 
   it("decodes the run's raw events as the feed did, and records them as unit fixtures on request", async () => {
@@ -320,7 +377,8 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
       return { topic: e.topic ?? [], value: e.value, expected: body };
     });
     const types = new Set(fixtures.map((f) => f.expected.type));
-    for (const t of ["Deposited", "Withdrawn", "Submitted", "Settled", "Reprioritised", "Revoked"]) expect(types.has(t as never)).toBe(true);
+    const expected = ["Deposited", "Withdrawn", "Submitted", "Settled", "Offset", "Reprioritised", "Revoked", "Expired", "CollateralSet", "RepoOpened", "RepoRepaid", "RepoPenalised"];
+    for (const t of expected) expect(types.has(t as never)).toBe(true);
     expect(types.has("Unknown")).toBe(false);
     if (process.env.RTGS_RECORD_FIXTURES) {
       const json = JSON.stringify(fixtures, (_k, v) => (typeof v === "bigint" ? { $bigint: v.toString() } : v), 2);

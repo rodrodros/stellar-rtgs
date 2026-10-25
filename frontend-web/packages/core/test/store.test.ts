@@ -141,6 +141,22 @@ describe("store", () => {
     expect(fake.read.bank.mock.calls.length).toBe(calls);
   });
 
+  it("re-reads the bank of a repo that is repaid or penalised, though neither event names it", async () => {
+    const fake = fakeSession();
+    const store = new RtgsStore(fake.session, { refreshDebounceMs: 1 });
+    store.start();
+    await ready(store);
+    fake.emit([{ ...meta(10), type: "RepoOpened", id: 0n, bank: B, amount: 30n }]);
+    await vi.waitFor(() => expect(fake.read.bank).toHaveBeenLastCalledWith(B, expect.anything()));
+    fake.read.bank.mockClear();
+    fake.emit([{ ...meta(11), type: "RepoRepaid", id: 0n, amount: 10n, outstanding: 20n }]);
+    await vi.waitFor(() => expect(fake.read.bank).toHaveBeenCalledWith(B, expect.anything()));
+    fake.read.bank.mockClear();
+    fake.emit([{ ...meta(12), type: "RepoPenalised", id: 0n, rateBps: 500 }]);
+    await vi.waitFor(() => expect(fake.read.bank).toHaveBeenCalledWith(B, expect.anything()));
+    store.stop();
+  });
+
   it("tries a failed initial load again, and retry() does it at once", async () => {
     const fake = fakeSession();
     const config = fake.read.config;

@@ -77,6 +77,13 @@ function touchedBy(event: FeedEvent, model: ModelState): string[] {
       const from = model.payments.get(event.id)?.from;
       return from ? [from] : [];
     }
+    // A repayment lowers the bank's balance and credit, a penalty moves its credit to `ovn`;
+    // neither event names the bank, so it comes from the repo.
+    case "RepoRepaid":
+    case "RepoPenalised": {
+      const bank = model.repos.get(event.id)?.bank;
+      return bank ? [bank] : [];
+    }
     default:
       return [];
   }

@@ -127,10 +127,13 @@ describe.skipIf(!up)("participant app on the devnet", () => {
     const normal = () => within(a).getByLabelText("Normal queue");
     await eventually(() => expect(within(normal()).getByText(/Blocked queue head/).textContent).toMatch(/4,100 USD more is needed/));
 
-    fireEvent.click(within(normal()).getByRole("button", { name: "Make urgent" }));
+    // The queue actions share one outcome line and are disabled while one is pending, so each
+    // waits for its outcome: the feed can show the move before the write has finished.
+    const queues = region(a, /your queues/i);
+    expect(await write(queues, "Make urgent")).toBe(`#${id} is now urgent.`);
     const urgent = () => within(a).getByLabelText("Urgent queue");
     await eventually(() => within(urgent()).getByText(`#${id}`));
-    fireEvent.click(within(urgent()).getByRole("button", { name: "Revoke" }));
+    expect(await write(queues, "Revoke")).toBe(`#${id} revoked.`);
     await eventually(() => within(urgent()).getByText("Empty."));
     await eventually(() => within(within(a).getByTestId(`payment-${id}`)).getByText("Revoked"));
   });

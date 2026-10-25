@@ -47,7 +47,7 @@ export const CONTRACT_ERRORS: Readonly<Record<number, ErrorText>> = {
     name: "TokenTransferFailed",
     title: "Cash token transfer refused",
     detail:
-      "The cash token refused to move the funds into or out of the settlement contract. Check the bank's cash token holding and that the cash token's issuer has authorized its trustline.",
+      "The cash token refused to move the funds into or out of the settlement contract, or to mint a repo's cash into it. Check the bank's cash token holding and that the cash token's issuer has authorized its trustline; a repo's mint also needs the cash token's issuer, its SAC admin, to authorize it.",
   },
   3: {
     name: "InsufficientFunds",
@@ -63,7 +63,7 @@ export const CONTRACT_ERRORS: Readonly<Record<number, ErrorText>> = {
     name: "QueueFull",
     title: "Central queue full",
     detail:
-      "The central queue already holds as many payment orders as the queue cap allows, and this one is not covered, so it would have to queue.",
+      "The central queue already holds as many payment orders as the queue cap allows, and this one would still be queued after the eager closure: neither gross settlement nor an offset settles it.",
   },
   6: { name: "UnknownPayment", title: "Unknown payment order", detail: "No payment order has this id." },
   7: {

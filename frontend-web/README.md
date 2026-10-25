@@ -132,11 +132,15 @@ The bootstrap is devnet only, so on testnet the cash token and the settlement co
 
 The central bank's actions are disabled unless the connected signer is the contract's `central_bank()`; keeper actions work with any signer. The observer never signs, on any network.
 
+`open_repo` mints the repo's cash into the settlement contract, and the mint is authorized in the same transaction by the cash token's SAC admin. So the central bank's account must also be the cash token's issuer, as on the devnet; otherwise every repo is refused with `TokenTransferFailed`. Who holds the SAC admin role is still an open decision in `../stellar-implementation` (its README).
+
 **Mainnet** is listed only when `VITE_RTGS_ENABLE_MAINNET=true` and `VITE_RTGS_MAINNET_RPC_URL` are both set. Each app asks you to confirm every time you select it (the central bank and participant apps make you type it), and none starts on it.
 
-## What isn't implemented yet
+## What's implemented, and what isn't
 
-The contract is still under development, and some entry points are stubs. Core probes every entry point when it connects, and the apps disable what the deployed contract doesn't implement, with the reason shown. With the Wasm committed here, `credit`, `repo`, `set_collateral`, `open_repo`, `repay` and `convert_overdue` are stubs, so the credit pages say so.
+The Wasm committed here (`packages/core/wasm/meta.json` names its implementation commit) implements every entry point, credit and the LSM offset included. Core still probes every entry point when it connects, so against an older deployment whose entry points are `todo!()` stubs, the apps disable those actions and show why.
+
+The queue cap refuses a payment order only if it is still queued after the eager closure, gross settlement and offset alike, and the queue was already full; a payment order that completes an offset is accepted at a full queue. The central bank's Setup accepts a `queueCap` of at most 62, the largest the implementation has checked against Mainnet's per-transaction limits.
 
 Two things need a server, which this project doesn't have:
 - **An always-on keeper.** The central bank's auto-keeper runs only while its tab is open.

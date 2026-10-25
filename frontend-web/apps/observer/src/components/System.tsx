@@ -128,7 +128,7 @@ export function QueueGauge() {
       >
         <span style={{ width: `${ratio * 100}%` }} />
       </div>
-      {ratio >= 1 && <p className="warn">The queue cap is reached: a payment order that would queue is refused.</p>}
+      {ratio >= 1 && <p className="warn">The queue cap is reached: a payment order still queued after the eager closure is refused; one an offset settles is accepted.</p>}
       {config && (
         <dl className="config">
           <dt>Expiry</dt>

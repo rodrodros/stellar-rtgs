@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseConfig, parseWhole } from "./setupForm.ts";
+import { MAX_QUEUE_CAP, parseConfig, parseWhole } from "./setupForm.ts";
 
 describe("the bootstrap form", () => {
   it("accepts whole numbers within range only", () => {
@@ -18,5 +18,11 @@ describe("the bootstrap form", () => {
     expect(parseConfig({ queueCap: "16", expirySecs: "86400", repoTermSecs: "86400", penaltyRateBps: "500" })).toEqual({
       config: { queueCap: 16, expirySecs: 86_400, repoTermSecs: 86_400, penaltyRateBps: 500 },
     });
+  });
+
+  it("refuses a queue cap above the one priced against Mainnet's limits", () => {
+    const form = { expirySecs: "10", repoTermSecs: "10", penaltyRateBps: "0" };
+    expect(parseConfig({ ...form, queueCap: String(MAX_QUEUE_CAP) })).toHaveProperty("config.queueCap", 62);
+    expect(parseConfig({ ...form, queueCap: String(MAX_QUEUE_CAP + 1) })).toEqual({ invalid: ["queueCap"] });
   });
 });

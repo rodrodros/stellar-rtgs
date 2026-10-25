@@ -14,7 +14,7 @@ import {
   type RtgsError,
 } from "@rtgs/core";
 import { useState } from "react";
-import { parseConfig, parseWhole, type ConfigForm } from "../model/setupForm.ts";
+import { MAX_QUEUE_CAP, parseConfig, parseWhole, type ConfigForm } from "../model/setupForm.ts";
 import { useAppSession } from "../session/AppSession.tsx";
 import { useWriteQueue } from "../session/writeQueue.ts";
 
@@ -67,7 +67,8 @@ function DevnetBootstrap(props: { devnetBanks?: number }) {
     cashValue = undefined;
   }
   const problems = [
-    "invalid" in parsedConfig && `whole numbers needed for ${parsedConfig.invalid.join(", ")}`,
+    "invalid" in parsedConfig &&
+      `whole numbers needed for ${parsedConfig.invalid.join(", ")}${parsedConfig.invalid.includes("queueCap") ? `, with queueCap at most ${MAX_QUEUE_CAP}` : ""}`,
     banks === undefined && "banks must be a whole number from 1 to 20",
     (cashValue === undefined || cashValue < 0n) && "cash per bank must be an amount",
   ].filter((p): p is string => !!p);

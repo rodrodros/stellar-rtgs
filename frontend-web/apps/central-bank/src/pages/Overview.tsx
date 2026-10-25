@@ -45,7 +45,7 @@ export function Overview() {
             {snapshot.queuedCount} / {config?.queueCap ?? "…"}
           </div>
           {config ? <meter min={0} max={config.queueCap} value={snapshot.queuedCount} high={config.queueCap * 0.8} /> : null}
-          {config && snapshot.queuedCount >= config.queueCap ? <div className="badge danger">full: uncovered payments are refused</div> : null}
+          {config && snapshot.queuedCount >= config.queueCap ? <div className="badge danger">full: a payment order that would stay queued is refused</div> : null}
         </div>
         <div className="tile" aria-label="Conservation">
           <div className="tile-label">Conservation (S1)</div>

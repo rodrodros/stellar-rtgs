@@ -12,14 +12,24 @@ export function describeSubmit(
   ahead?: number,
 ): string {
   const { id, disposition } = outcome.value;
-  const released = outcome.events.filter((e) => e.type === "Settled" && e.id !== id).map((e) => `#${(e as { id: bigint }).id}`);
+  const list = (ids: bigint[]) => ids.map((i) => `#${i}`).join(", ");
+  // An offset publishes `Offset{ids}` and then a `Settled` for each of them (lib.rs).
+  const offset = outcome.events.flatMap((e) => (e.type === "Offset" ? e.ids : []));
+  const inOffset = offset.includes(id);
+  const offsetOthers = offset.filter((i) => i !== id);
+  const released = outcome.events.flatMap((e) => (e.type === "Settled" && e.id !== id && !offset.includes(e.id) ? [e.id] : []));
   const head =
     disposition === "settled"
-      ? `Payment order #${id} settled at once.`
+      ? inOffset
+        ? `Payment order #${id} settled in an offset${offsetOthers.length ? ` with ${list(offsetOthers)}` : ""}.`
+        : `Payment order #${id} settled at once.`
       : `Payment order #${id} queued in your ${priority} queue${
           ahead === undefined ? "" : ahead === 0 ? ", first in queue order" : `, behind ${ahead} other payment order${ahead === 1 ? "" : "s"}`
         }.`;
-  return released.length ? `${head} The eager closure also settled ${released.join(", ")}.` : head;
+  const sentences = [head];
+  if (released.length) sentences.push(`The eager closure also settled ${list(released)}.`);
+  if (!inOffset && offsetOthers.length) sentences.push(`An offset also settled ${list(offsetOthers)}.`);
+  return sentences.join(" ");
 }
 
 /** Why a queue's head is waiting, in glossary terms. */
@@ -29,7 +39,7 @@ export function headNote(analysis: QueueAnalysis, balance: bigint, code?: string
   if (analysis.blockedBy === "urgent-queued") return "Waits behind your urgent payment orders, which go first.";
   if (analysis.blockedBy === "uncovered") {
     const shortfall = head.amount - (balance > 0n ? balance : 0n);
-    return `Blocked queue head: your custody balance doesn't cover it. ${amountText(shortfall, code)} more is needed, from a deposit or an incoming payment.`;
+    return `Blocked queue head: your custody balance doesn't cover it. ${amountText(shortfall, code)} more is needed, from a deposit or an incoming payment, or it settles in an offset with payment orders queued to you.`;
   }
   return "Covered: it settles on the next eager closure.";
 }

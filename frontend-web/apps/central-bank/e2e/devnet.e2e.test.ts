@@ -21,11 +21,12 @@ import { readSettlementWasm } from "@rtgs/core/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AutoKeeper } from "../src/keeper/autoKeeper.ts";
 import { conservation } from "../src/model/conservation.ts";
+import { overdueRepos } from "../src/model/due.ts";
 import { roleOf } from "../src/session/role.ts";
 
 const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
-/** lib.sh's config with a 10-second expiry, so the keeper can reject a payment in the test. */
-const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 86_400, penaltyRateBps: 500 };
+/** lib.sh's config with a 10-second expiry and repo term, so the keeper can act in the test. */
+const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 10, penaltyRateBps: 500 };
 
 async function healthy(): Promise<boolean> {
   try {
@@ -73,6 +74,17 @@ describe.skipIf(!up)("the central bank on the devnet", () => {
     session?.dispose();
   });
 
+  /** S1 as the Overview checks it: the cash the contract holds against every balance it records. */
+  async function conservationHolds(): Promise<boolean> {
+    for (const bank of ids.banks) {
+      const live = await session.read.balance(bank.address);
+      await waitFor(`${bank.label}'s balance in the store`, () => store.getSnapshot().banks.get(bank.address)?.balance === live);
+    }
+    const held = (await session.token.holding(session.contractId)).balance;
+    const others = await Promise.all([session.read.balance(session.centralBank), session.read.balance(session.contractId)]);
+    return conservation(held, [...[...store.getSnapshot().banks.values()].map((v) => v.balance), ...others]).holds;
+  }
+
   it("knows the central bank's role, and refuses it to a bank", () => {
     const cb = roleOf(session, ids.centralBank);
     expect(cb.isCentralBank).toBe(true);
@@ -116,11 +128,7 @@ describe.skipIf(!up)("the central bank on the devnet", () => {
       return v?.queues.normal.some((p) => p.id === queuedId) ? v : undefined;
     });
     expect(view.analysis.normal.blockedBy).toBe("uncovered");
-
-    const s = store.getSnapshot();
-    const held = (await session.token.holding(session.contractId)).balance;
-    const others = await Promise.all([session.read.balance(session.centralBank), session.read.balance(session.contractId)]);
-    expect(conservation(held, [...[...s.banks.values()].map((v) => v.balance), ...others]).holds).toBe(true);
+    expect(await conservationHolds()).toBe(true);
   });
 
   it("freezes the settlement contract and unfreezes it (hazard H1)", async () => {
@@ -136,17 +144,40 @@ describe.skipIf(!up)("the central bank on the devnet", () => {
     await bankA.deposit(parseAmount("1"));
   });
 
-  it("opens credit when the contract implements it, and reports it unavailable otherwise", async () => {
-    const caps = session.capabilities;
+  it("opens a repo, lets the auto-keeper penalise it once overdue, and keeps conservation through the mint and the burn", async () => {
     for (const ep of ["setCollateral", "openRepo", "repay", "convertOverdue", "credit", "repo"] as const) {
-      expect(["available", "stub"]).toContain(caps[ep]);
+      expect(session.capabilities[ep]).toBe("available");
     }
-    if (caps.setCollateral !== "available" || caps.openRepo !== "available") return;
     const cb = roleOf(session, ids.centralBank).centralBank!;
-    const bank = ids.banks[1]!.address;
-    await cb.setCollateral(bank, parseAmount("50"));
-    const { value } = await cb.openRepo(bank, parseAmount("20"));
-    await waitFor("the repo in the store", () => store.getSnapshot().repos.get(value.repoId));
+    const bank = ids.banks[1]!;
+    await cb.setCollateral(bank.address, parseAmount("50"));
+    const { value } = await cb.openRepo(bank.address, parseAmount("20"));
+    const repo = await waitFor("the repo in the store", () => store.getSnapshot().repos.get(value.repoId));
+    expect(repo).toMatchObject({ bank: bank.address, status: "intraday", outstanding: parseAmount("20") });
+    expect(await conservationHolds()).toBe(true);
+
+    const actor = session.as(ids.centralBank);
+    const keeper = new AutoKeeper({
+      due: () => {
+        const s = store.getSnapshot();
+        return { payments: [], repos: overdueRepos(s.repos.values(), s.config!, s.ledger!.closeTime).map((r) => r.id) };
+      },
+      expire: (id) => actor.expire(id),
+      convertOverdue: (id) => actor.convertOverdue(id),
+    });
+    await waitFor("the repo to be overdue", () => {
+      const s = store.getSnapshot();
+      return s.config && s.ledger && overdueRepos(s.repos.values(), s.config, s.ledger.closeTime).some((r) => r.id === value.repoId);
+    });
+    keeper.start();
+    await keeper.tick();
+    keeper.stop();
+    await waitFor("the store to see the penalty", () => store.getSnapshot().repos.get(value.repoId)?.status === "penalty");
+    expect(await session.read.credit(bank.address)).toMatchObject({ intraday: 0n, penalty: parseAmount("20") });
+
+    await session.as(bank).repay(value.repoId, parseAmount("20"));
+    await waitFor("the store to see the repayment", () => store.getSnapshot().repos.get(value.repoId)?.status === "repaid");
+    expect(await conservationHolds()).toBe(true);
   });
 
   it("lets the auto-keeper expire the payment once its expiry has passed", async () => {
