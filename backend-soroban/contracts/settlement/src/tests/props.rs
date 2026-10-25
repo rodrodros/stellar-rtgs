@@ -272,9 +272,9 @@ fn revocation_op() -> impl Strategy<Value = RevocationOp> {
     ]
 }
 
-/// A6, A8, S3: a call changes a payment queued before it only by settling it, apart from
-/// the one it revokes or reprioritises, `acted_on`. A settled payment keeps every other
-/// field.
+/// A5, A6, A8, S3: a call changes a payment queued before it only by settling it, apart
+/// from the one it expires, revokes or reprioritises, `acted_on`. A settled payment keeps
+/// every other field.
 fn queued_kept_or_settled(
     before: &BTreeMap<u64, Payment>,
     after: &BTreeMap<u64, Payment>,
@@ -292,7 +292,7 @@ fn queued_kept_or_settled(
         };
         prop_assert!(
             now == payment || (now == &settled && now.settled_at.is_some()),
-            "A6, A8: queued payment {} changed to {:?}",
+            "A5, A6, A8: queued payment {} changed to {:?}",
             payment.id,
             now
         );
@@ -300,7 +300,7 @@ fn queued_kept_or_settled(
     Ok(())
 }
 
-/// A6, A8: a call that moves no money of its own changes each balance from `balances`
+/// A5, A6, A8: a call that moves no money of its own changes each balance from `balances`
 /// only by the payments that settle in it, between `before` and `after`.
 fn booked_only_settlements(
     setup: &Setup,
@@ -321,8 +321,8 @@ fn booked_only_settlements(
     Ok(())
 }
 
-/// The checks every call of SC-P-13 and SC-P-14 must pass, `acted_on` being the payment it
-/// revoked or reprioritised: final payments unchanged (S3, S5); every other queued payment
+/// The checks every call of SC-P-13 to SC-P-15 must pass, `acted_on` being the payment it
+/// revoked, reprioritised or expired: final payments unchanged (S3, S5); every other queued payment
 /// unchanged or settled; S7's order of what settled; `queued_count` from the records; the
 /// queue views in `≺` order, so ids within each priority ascend (S7, ADR-0009); and no
 /// bank's head in `≺` covered (S9, gross).
@@ -438,6 +438,66 @@ fn reprioritisation_op() -> impl Strategy<Value = ReprioritisationOp> {
         1 => (any::<prop::sample::Index>(), priority()).prop_map(|(pick, priority)| MoveQueued(pick, priority)),
         1 => any::<prop::sample::Index>().prop_map(RevokeQueued),
         1 => (any::<prop::sample::Index>(), priority()).prop_map(|(pick, priority)| MoveFinal(pick, priority)),
+    ]
+}
+
+/// The expiry of the expiry property: short, so that time steps reach it and its boundary.
+const EXPIRY: u64 = 100;
+
+/// A call of the expiry property: a deposit, withdrawal, submission, time step or
+/// expiry by id, or one resolved against the state when it runs:
+/// - `Block` as in `RevocationOp`: a covered payment queued behind an uncovered one;
+/// - `ExpireAimed` expires a payment past its expiry, picked by `Index` among the heads in
+///   `≺` with a covered payment behind them if there are any, else among every queued
+///   payment past its expiry, else among every queued payment;
+/// - `ExpireBehind` expires a payment past its expiry that is not the head of its queue,
+///   picked by `Index`, else falls back as `ExpireAimed` does;
+/// - `ExpireAtBoundary` moves time to exactly `submitted_at + EXPIRY` of a queued payment
+///   picked by `Index` among those not yet past it, then expires it: `NotExpired`;
+/// - `ExpireFinal` expires a final payment, picked by `Index` among those not yet past
+///   their expiry if there are any, else among every final one: `NotQueued`, which comes
+///   before `NotExpired`;
+/// - `ExpireQueued` expires any queued payment, picked by `Index`, past its expiry or not;
+/// - `RevokeRecorded` revokes a recorded payment, picked by `Index` among the expired
+///   ones if there are any, else among every one: an expired or other final payment is
+///   refused with `NotQueued`, and a queued one is revoked, which gives `ExpireFinal`
+///   revoked payments to aim at.
+#[derive(Clone, Debug)]
+enum ExpiryOp {
+    Call(Op),
+    Block(usize, usize, i128, i128, Priority),
+    ExpireAimed(prop::sample::Index),
+    ExpireBehind(prop::sample::Index),
+    ExpireAtBoundary(prop::sample::Index),
+    ExpireFinal(prop::sample::Index),
+    ExpireQueued(prop::sample::Index),
+    RevokeRecorded(prop::sample::Index),
+}
+
+/// Calls aimed at the state, for the same reason as `revocation_op`: blind ids and time
+/// steps rarely hit a head past its expiry with a covered payment behind it, a payment
+/// past its expiry behind its head, a final payment still inside its expiry, an expired
+/// payment, or the boundary itself. Under seeds 1 to 20, mutants of each of these
+/// survived without the aim. Blind ids still reach `UnknownPayment`, `NotQueued` and
+/// `NotExpired`.
+fn expiry_op() -> impl Strategy<Value = ExpiryOp> {
+    use ExpiryOp::*;
+    prop_oneof![
+        2 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Deposit(bank, amount))),
+        1 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Withdraw(bank, amount))),
+        3 => (0..BANKS, 0..BANKS, amount(), priority())
+            .prop_map(|(from, to, amount, priority)| Call(Op::Submit(from, to, amount, priority))),
+        2 => (0..BANKS, 0..BANKS, 1i128..=100, 0i128..=100, priority())
+            .prop_map(|(from, to, over, under, priority)| Block(from, to, over, under, priority)),
+        2 => prop_oneof![Just(1u64), Just(EXPIRY), Just(EXPIRY + 1), 0u64..=2 * EXPIRY]
+            .prop_map(|step| Call(Op::Tick(step))),
+        1 => id().prop_map(|id| Call(Op::Expire(id))),
+        3 => any::<prop::sample::Index>().prop_map(ExpireAimed),
+        2 => any::<prop::sample::Index>().prop_map(ExpireBehind),
+        1 => any::<prop::sample::Index>().prop_map(ExpireAtBoundary),
+        2 => any::<prop::sample::Index>().prop_map(ExpireFinal),
+        1 => any::<prop::sample::Index>().prop_map(ExpireQueued),
+        2 => any::<prop::sample::Index>().prop_map(RevokeRecorded),
     ]
 }
 
@@ -1088,6 +1148,169 @@ proptest! {
                             prop_assert_eq!(&after, &before, "a refusal records nothing");
                         }
                         prop_assert_eq!(after.len(), before.len(), "A8 records no payment");
+                        booked_only_settlements(&setup, &balances, &before, &after)?;
+                    }
+                    _ => unreachable!(),
+                }
+
+                setup.assert_conserved();
+                let after = payments(&setup);
+                queues_at_rest_in_order(&setup, &before, &after, acted_on)?;
+                before = after;
+            }
+        }
+    }
+
+    /// Expiry takes out the expired payment alone, once its expiry has passed, then lets
+    /// the closure settle what that releases, over any sequence of deposits, withdrawals,
+    /// submissions, time steps, revocations and expiries, valid or not (A5; ADR-0015):
+    /// - A5: an id never issued is refused with `UnknownPayment`, a payment already final,
+    ///   settled, revoked or expired, with `NotQueued` (S3, S5), and a queued payment with
+    ///   `now <= submitted_at + expiry_secs`, the boundary included, with `NotExpired`, in
+    ///   the Quint spec's order. A refusal moves and records nothing;
+    /// - A5: any other queued payment is expired: it becomes `Expired`, otherwise
+    ///   unchanged, and leaves its queue for good;
+    /// - S6, M1: an expiry is the system's step, so the call needs no authorization;
+    /// - A5: an expiry moves no money of its own: each balance changes only by the
+    ///   payments that settle in it, and no payment is recorded;
+    /// - A6, S3: an expired payment cannot be revoked (`NotQueued`), nor can a settled or
+    ///   revoked one;
+    /// - A5, S3: every other payment queued before a call is unchanged, or settled with
+    ///   every other field kept;
+    /// - A2, S9, gross: between calls no bank's head in `≺` is covered, so the closure
+    ///   settles whatever an expiry releases in the same call (ADR-0010);
+    /// - S7 under F2: the queue views list each bank's queued payments in `≺` order, and
+    ///   what settles in a call is, per bank, a `≺`-prefix of its queue (ADR-0008,
+    ///   ADR-0009);
+    /// - S3, S5: a final payment never changes, and `queued_count` counts the payments
+    ///   queued, from their records;
+    /// - A11, S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    ///
+    /// The expiry is `EXPIRY`, 100 seconds, so that time steps reach it. Each bank starts
+    /// with half its holding deposited, and `expiry_op` aims the expiries at heads whose
+    /// expiry releases a queue, and at the boundary. A refused deposit, withdrawal or
+    /// submission is skipped. As in `quint/settlement.qnt`, a payment past its expiry
+    /// stays queued until it is expired, so it may still settle; the model's A18 close,
+    /// which would have rejected it, is gone under ADR-0013. The calls need no later
+    /// entry point, so this checks expiry before SC-P-01 and SC-P-02 can.
+    #[test]
+    fn expiry_takes_out_only_the_expired_payment(ops in prop::collection::vec(expiry_op(), 1..30)) {
+        let setup = Setup::with_config(BANKS, FUNDING, Config { expiry_secs: EXPIRY, ..default_config() });
+        let client = setup.client();
+        // Half of each holding, so that `Block` has a balance to queue a covered payment under.
+        for bank in 0..BANKS {
+            client.deposit(setup.bank(bank), &(FUNDING / 2));
+        }
+        let mut before = payments(&setup);
+        let mut now = 0u64;
+
+        for op in ops {
+            let deadline = |id: &u64| before[id].submitted_at + EXPIRY;
+            let queues: Vec<Vec<u64>> = (0..BANKS).map(|bank| queued_in_order(&setup, &before, bank)).collect();
+            let queued: Vec<u64> = queues.concat();
+            let past: Vec<u64> = queued.iter().copied().filter(|id| now > deadline(id)).collect();
+            let releasing: Vec<u64> = (0..BANKS)
+                .filter(|&bank| {
+                    let queue = &queues[bank];
+                    queue.len() > 1
+                        && now > deadline(&queue[0])
+                        && before[&queue[1]].amount <= client.balance(setup.bank(bank))
+                })
+                .map(|bank| queues[bank][0])
+                .collect();
+            let behind: Vec<u64> = past
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let payment = &before[id];
+                    setup.queue(setup.banks.iter().position(|bank| bank == &payment.from).unwrap(), payment.priority)[0] != *id
+                })
+                .collect();
+            let not_past: Vec<u64> = queued.iter().copied().filter(|id| now <= deadline(id)).collect();
+            let finals: Vec<u64> = before.keys().copied().filter(|id| is_final(before[id].status)).collect();
+            let finals_not_past: Vec<u64> = finals.iter().copied().filter(|id| now <= deadline(id)).collect();
+            let expired: Vec<u64> = finals.iter().copied().filter(|id| before[id].status == Status::Expired).collect();
+            let recorded: Vec<u64> = before.keys().copied().collect();
+            let first = |pools: &[&Vec<u64>]| pools.iter().copied().find(|pool| !pool.is_empty()).cloned();
+            let unknown = before.len() as u64;
+            let calls = match op {
+                ExpiryOp::Call(op) => vec![op],
+                ExpiryOp::Block(from, to, over, under, priority) => {
+                    let balance = client.balance(setup.bank(from));
+                    vec![
+                        Op::Submit(from, to, balance + over, priority),
+                        Op::Submit(from, to, balance - under, priority),
+                    ]
+                }
+                ExpiryOp::ExpireAimed(pick) if !queued.is_empty() => {
+                    vec![Op::Expire(*pick.get(&first(&[&releasing, &past, &queued]).unwrap()))]
+                }
+                ExpiryOp::ExpireBehind(pick) if !queued.is_empty() => {
+                    vec![Op::Expire(*pick.get(&first(&[&behind, &releasing, &past, &queued]).unwrap()))]
+                }
+                ExpiryOp::ExpireAtBoundary(pick) if !not_past.is_empty() => {
+                    let id = *pick.get(&not_past);
+                    vec![Op::Tick(deadline(&id) - now), Op::Expire(id)]
+                }
+                ExpiryOp::ExpireFinal(pick) if !finals.is_empty() => {
+                    vec![Op::Expire(*pick.get(&first(&[&finals_not_past, &finals]).unwrap()))]
+                }
+                ExpiryOp::ExpireQueued(pick) if !queued.is_empty() => vec![Op::Expire(*pick.get(&queued))],
+                ExpiryOp::RevokeRecorded(pick) if !recorded.is_empty() => {
+                    vec![Op::Revoke(*pick.get(&first(&[&expired, &recorded]).unwrap()))]
+                }
+                // Nothing to aim at: an id one past the last is unknown.
+                _ => vec![Op::Expire(unknown)],
+            };
+            for op in calls {
+                let balances = setup.balances();
+                let mut acted_on = None;
+                match op {
+                    Op::Deposit(bank, amount) => {
+                        let _ = typed(client.try_deposit(setup.bank(bank), &amount));
+                    }
+                    Op::Withdraw(bank, amount) => {
+                        let _ = typed(client.try_withdraw(setup.bank(bank), &amount));
+                    }
+                    Op::Submit(from, to, amount, priority) => {
+                        let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
+                    }
+                    Op::Tick(step) => {
+                        now += step;
+                        setup.at(now);
+                    }
+                    Op::Revoke(id) => {
+                        let result = typed(client.try_revoke(&id));
+                        if before.get(&id).is_some_and(|payment| is_final(payment.status)) {
+                            prop_assert_eq!(result, Err(Error::NotQueued), "A6: final {}", id);
+                        }
+                        if result.is_ok() {
+                            acted_on = Some(id);
+                        }
+                    }
+                    Op::Expire(id) => {
+                        let result = typed(client.try_expire(&id));
+                        prop_assert!(setup.env.auths().is_empty(), "S6: expire {} needed an authorization", id);
+                        let after = payments(&setup);
+                        match before.get(&id) {
+                            None => prop_assert_eq!(result, Err(Error::UnknownPayment), "A5: unknown {}", id),
+                            Some(payment) if is_final(payment.status) => {
+                                prop_assert_eq!(result, Err(Error::NotQueued), "A5: final {}", id);
+                            }
+                            Some(payment) if now <= payment.submitted_at + EXPIRY => {
+                                prop_assert_eq!(result, Err(Error::NotExpired), "A5: {} not past its expiry", id);
+                            }
+                            Some(payment) => {
+                                prop_assert_eq!(result, Ok(()), "A5: {} past its expiry refused", id);
+                                let expected = Payment { status: Status::Expired, ..payment.clone() };
+                                prop_assert_eq!(after.get(&id), Some(&expected), "A5: {} expired", id);
+                                acted_on = Some(id);
+                            }
+                        }
+                        if result.is_err() {
+                            prop_assert_eq!(&after, &before, "a refusal records nothing");
+                        }
+                        prop_assert_eq!(after.len(), before.len(), "A5 records no payment");
                         booked_only_settlements(&setup, &balances, &before, &after)?;
                     }
                     _ => unreachable!(),

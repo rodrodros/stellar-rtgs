@@ -3,11 +3,11 @@
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other up to the queue cap), `revoke`, `reprioritise`, the eager closure after every
-//! balance increase, revocation or reprioritisation, and the `balance`, `payment`,
-//! `queue`, `queued_count`, `config` and `central_bank` views. The other entry points are
-//! stubs whose unit tests (`src/tests/`) are written and red; they are implemented test
-//! first (TESTING.md).
+//! other up to the queue cap), `revoke`, `reprioritise`, `expire`, the eager closure
+//! after every balance increase, revocation, reprioritisation or expiry, and the
+//! `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank` views. The
+//! other entry points are stubs whose unit tests (`src/tests/`) are written and red; they
+//! are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -604,9 +604,35 @@ impl Settlement {
         Ok(())
     }
 
-    /// A5: anyone rejects a queued payment whose expiry has passed (ADR-0015).
-    pub fn expire(_env: Env, _id: u64) -> Result<(), Error> {
-        todo!()
+    /// A5: anyone rejects a queued payment whose expiry has passed (ADR-0015), then
+    /// settles eagerly.
+    ///
+    /// Rejection is the system's step, so it needs no authorization (S6, M1): any keeper
+    /// may call it. An id never issued is refused with `UnknownPayment`, and a payment no
+    /// longer queued with `NotQueued` (S3, S5). While `now <= submitted_at + expiry_secs`
+    /// it is refused with `NotExpired`; the strict comparison stays correct when two
+    /// ledgers share a timestamp (handbook 09 §3). The payment leaves its queue for good
+    /// with status `Expired`. Its sender's queue head may change, so the eager closure
+    /// follows (S9, ADR-0010). Until someone expires it, a payment past its expiry stays
+    /// queued and can still settle; whether it should is still open (README).
+    pub fn expire(env: Env, id: u64) -> Result<(), Error> {
+        let mut payment = Self::payment(env.clone(), id).ok_or(Error::UnknownPayment)?;
+        if payment.status != Status::Queued {
+            return Err(Error::NotQueued);
+        }
+        let expiry = Self::config(env.clone()).expiry_secs;
+        if env.ledger().timestamp() <= payment.submitted_at.saturating_add(expiry) {
+            return Err(Error::NotExpired);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        dequeue(&env, &payment);
+        payment.status = Status::Expired;
+        put(&env, &DataKey::Payment(id), &payment);
+        Expired { id }.publish(&env);
+        eager_closure(&env, Vec::from_array(&env, [payment.from]));
+        Ok(())
     }
 
     /// A14: the central bank sets a bank's collateral value, after haircuts.

@@ -191,20 +191,22 @@ The payment keeps its place by id. `reprioritise` needs:
 - [x] `unit::queue_management::a_payment_past_its_expiry_can_still_be_reprioritised` (SC-A08-11). Added in Flow 10, as the A8 counterpart of SC-A06-02; it fails if `reprioritise` refuses a payment past its expiry that nobody has expired.
 - [x] `props::reprioritisation_moves_only_the_priority` (SC-P-14). Added in Flow 10: SC-P-01 and SC-P-02 check reprioritisation too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals, submissions, time steps, revocations and reprioritisations alone. Time steps reach past the default expiry, so that a payment is moved after it. Each bank starts with half its holding deposited. As in SC-P-13, some calls are resolved against the state when they run: a pair of submissions from one bank that queues a covered payment behind an uncovered one; a move to the other priority aimed at a covered normal payment behind its bank's head, which a promotion may settle, or at an uncovered urgent payment ahead of normal ones, which a demotion may release; a move of any queued payment to a random priority, half the time its own; a revocation of any queued payment; and a move of a settled or revoked payment, which a blind id seldom reaches. `make mutate` kills each of these mutants under the pinned seed and seeds 1 to 4 (TESTING.md, "Hand mutants"), and each case is one a unit test already pins: with no closure, a promoted covered payment left queued (SC-A08-03); with no `NotQueued` check, a settled payment moved, which traps in the host (SC-A08-06); with `SamePriority` checked before `NotQueued`, a final payment moved to its own priority (SC-A08-09); with no `SamePriority` check, a move to its own priority accepted (SC-A08-05); with the payment's record not rewritten, its queue and its priority disagree (SC-A08-01); with the moved payment put at the end of its new queue, the queue out of id order (SC-A08-01); with a cut-off at the expiry, a payment refused once its expiry has passed (SC-A08-11); and with a guard that refuses only a settled payment, a revoked payment moved, which traps in the host (SC-A08-09).
 
-## Flow 11: expire, A5 under ADR-0015 (10)
+## Flow 11: expire, A5 under ADR-0015 (12)
 
-`expire` needs no authorization. While `now <= submitted_at + expiry_secs`, it refuses with `NotExpired`. It also needs `NotQueued`, `UnknownPayment`, the `Expired` event and then the closure. When several guards fail, SC-P-02 expects `UnknownPayment`, then `NotQueued`, then `NotExpired`.
+`expire` needs no authorization. While `now <= submitted_at + expiry_secs`, it refuses with `NotExpired`. It also needs `NotQueued`, `UnknownPayment`, the `Expired` event and then the closure. When several guards fail, SC-P-02 expects `UnknownPayment`, then `NotQueued`, then `NotExpired`; SC-P-15 pins it already.
 
-- [ ] `unit::queue_management::a_payment_past_its_expiry_can_be_expired` (SC-A05-01)
-- [ ] `unit::queue_management::a_payment_exactly_at_its_expiry_has_not_expired` (SC-A05-02)
-- [ ] `unit::queue_management::the_expiry_is_configurable` (SC-A05-03)
-- [ ] `unit::queue_management::expiring_the_head_releases_the_payment_behind_it` (SC-A05-04)
-- [ ] `unit::queue_management::each_payment_expires_from_its_own_submission` (SC-A05-05)
-- [ ] `unit::queue_management::a_settled_payment_cannot_be_expired` (SC-A05-06)
-- [ ] `unit::queue_management::a_revoked_payment_cannot_be_expired` (SC-A05-07)
-- [ ] `unit::queue_management::expiring_an_unknown_payment_is_refused` (SC-A05-08)
-- [ ] `unit::queue_management::an_expired_payment_cannot_be_revoked` (SC-A06-05)
-- [ ] `auth::expire_needs_no_authorization` (SC-A05-09)
+- [x] `unit::queue_management::a_payment_past_its_expiry_can_be_expired` (SC-A05-01)
+- [x] `unit::queue_management::a_payment_exactly_at_its_expiry_has_not_expired` (SC-A05-02)
+- [x] `unit::queue_management::the_expiry_is_configurable` (SC-A05-03)
+- [x] `unit::queue_management::expiring_the_head_releases_the_payment_behind_it` (SC-A05-04)
+- [x] `unit::queue_management::each_payment_expires_from_its_own_submission` (SC-A05-05)
+- [x] `unit::queue_management::a_settled_payment_cannot_be_expired` (SC-A05-06)
+- [x] `unit::queue_management::a_revoked_payment_cannot_be_expired` (SC-A05-07)
+- [x] `unit::queue_management::expiring_an_unknown_payment_is_refused` (SC-A05-08)
+- [x] `unit::queue_management::an_expired_payment_cannot_be_revoked` (SC-A06-05)
+- [x] `auth::expire_needs_no_authorization` (SC-A05-09)
+- [x] `unit::queue_management::an_expiry_past_u64_max_never_passes_without_overflow` (SC-A05-10). Added in Flow 11, since `expiry_secs` is a `u64` and no other test sets it near the limit; it fails if `submitted_at + expiry_secs` overflows instead of saturating.
+- [x] `props::expiry_takes_out_only_the_expired_payment` (SC-P-15). Added in Flow 11: SC-P-01 and SC-P-02 check expiry too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals, submissions, time steps, revocations and expiries alone, with `expiry_secs` set to 100 so that time steps reach it. Each bank starts with half its holding deposited. As in SC-P-13, some calls are resolved against the state when they run: a pair of submissions from one bank that queues a covered payment behind an uncovered one; an expiry aimed at a head past its expiry with a covered payment behind it; one aimed at a payment past its expiry behind its head; a time step to exactly a queued payment's expiry, then its expiry; an expiry aimed at a settled, revoked or expired payment still inside its expiry; an expiry of any queued payment; and a revocation aimed at an expired payment. `make mutate` kills each of these mutants under the pinned seed and seeds 1 to 4 (TESTING.md, "Hand mutants"): with no closure, an expired head whose covered successor stays queued (SC-A05-04); with no `NotQueued` check, a settled payment expired, which traps in the host (SC-A05-06); with `NotExpired` checked before `NotQueued`, a final payment inside its expiry refused with `NotExpired`, which no unit test pins; with the boundary excluded, a payment exactly at its expiry expired (SC-A05-02); with the payment left in its queue, or its status left `Queued`, or `queued_count` left as it was, an expired payment still queued or counted (SC-A05-01); with the head of the queue taken out instead of the expired payment, a payment behind its head expired while the head leaves, which no unit test pins; and with `revoke` refusing only settled and revoked payments, an expired payment revoked, which traps in the host (SC-A06-05).
 
 One decision is still open (README): whether a payment can still settle once its expiry has passed but before anyone has expired it. No unit test decides it, but `quint/settlement.qnt` and the tests built on it assume it can: the replay (SC-MB-01) and the property tests (SC-P-01, SC-P-02).
 
@@ -360,8 +362,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 10) | 87 |
-| Still to fix (Flows 11 to 21) | 78 |
-| All | 165 |
+| Already green (Flows 0 to 11) | 99 |
+| Still to fix (Flows 12 to 21) | 68 |
+| All | 167 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, and Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, and Flow 11 added SC-A05-10 and SC-P-15.

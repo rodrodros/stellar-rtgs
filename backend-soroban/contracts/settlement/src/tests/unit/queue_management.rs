@@ -497,3 +497,25 @@ fn expiring_an_unknown_payment_is_refused() {
         Err(Ok(Error::UnknownPayment))
     );
 }
+
+/// SC-A05-10. A5: the expiry is a `u64` configuration value (ADR-0015), so
+/// `submitted_at + expiry_secs` can exceed `u64::MAX`. An expiry that large never passes:
+/// `NotExpired`, not an overflow trap. Added in Flow 11, since no other test sets an expiry
+/// near the type's limit; it fails if the sum overflows instead of saturating.
+#[test]
+fn an_expiry_past_u64_max_never_passes_without_overflow() {
+    let setup = Setup::with_config(
+        2,
+        0,
+        Config {
+            expiry_secs: u64::MAX,
+            ..default_config()
+        },
+    );
+    let client = setup.client();
+    setup.at(1_000);
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    setup.at(u64::MAX);
+    assert_eq!(client.try_expire(&id), Err(Ok(Error::NotExpired)));
+    assert_eq!(client.payment(&id).unwrap().status, Status::Queued);
+}
