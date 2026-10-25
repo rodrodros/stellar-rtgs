@@ -119,6 +119,8 @@ export function describeFacts(facts: TxFacts): string[] {
     );
   }
   for (const r of facts.repos.penalised) parts.push(`repo #${r.id} penalised at ${r.rateBps} bps`);
+  if (facts.revoked.length) parts.push(`revoked ${ids(facts.revoked)}`);
+  for (const r of facts.reprioritised) parts.push(`#${r.id} now ${r.priority}`);
   return parts;
 }
 
@@ -161,6 +163,8 @@ export function formatResult(record: ResultRecord, mode: LogMode, color = false)
       settled: facts.settled,
       ...(facts.offsets.length ? { offsets: facts.offsets } : {}),
       ...(facts.repos.opened.length + facts.repos.repaid.length + facts.repos.penalised.length ? { repos: facts.repos } : {}),
+      ...(facts.revoked.length ? { revoked: facts.revoked } : {}),
+      ...(facts.reprioritised.length ? { reprioritised: facts.reprioritised } : {}),
     });
   }
   const paint = painter(color);

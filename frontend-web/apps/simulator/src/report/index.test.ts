@@ -149,15 +149,17 @@ describe("periodic summary", () => {
     expect(reads.contractHolding).not.toHaveBeenCalled();
   });
 
-  it("doesn't block tick, and reads at most once per summary while a read is slow", async () => {
+  it("doesn't block tick, and doesn't read again while a read is slow", async () => {
     let resolve!: (v: bigint) => void;
     const contractHolding = vi.fn(() => new Promise<bigint>((r) => (resolve = r)));
     const { reporter, lines, world } = setup({ summaryEvery: 10, reads: { contractHolding } });
     reporter.start(INFO);
     vi.advanceTimersByTime(10_000);
     expect(reporter.tick(world)).toBeUndefined();
-    vi.advanceTimersByTime(30_000);
-    reporter.tick(world);
+    for (let i = 0; i < 9; i++) {
+      vi.advanceTimersByTime(1_000);
+      reporter.tick(world);
+    }
     await flush();
     expect(contractHolding).toHaveBeenCalledTimes(1);
     expect(lines).toHaveLength(1);
@@ -216,6 +218,19 @@ describe("periodic summary", () => {
     await flush();
     expect(lines.at(-1)).toContain("couldn't read the contract's holding (Network unreachable)");
     vi.advanceTimersByTime(30_000);
+    reporter.tick(world);
+    await flush();
+    expect(lines.at(-1)).toContain("✓");
+  });
+
+  it("gives up on a read that never returns, so later summaries still print", async () => {
+    const contractHolding = vi.fn().mockReturnValueOnce(new Promise<bigint>(() => {})).mockResolvedValue(BALANCES);
+    const { reporter, lines, world } = setup({ summaryEvery: 30, reads: { contractHolding } });
+    reporter.start(INFO);
+    vi.advanceTimersByTime(30_000);
+    reporter.tick(world);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lines.at(-1)).toContain("couldn't read the contract's holding (Timed out)");
     reporter.tick(world);
     await flush();
     expect(lines.at(-1)).toContain("✓");

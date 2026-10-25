@@ -2,7 +2,7 @@
 // this file keeps the counters, decides when a summary is due and gathers what it shows. The
 // summary's reads (the contract's holding, each lane's XLM) are the only network calls here,
 // and they run in the background so the engine's tick never waits on them.
-import { toRtgsError, type RtgsSession } from "@rtgs/core";
+import { RtgsError, toRtgsError, type RtgsSession } from "@rtgs/core";
 import type { ActionName, Choice, Outcome, Reporter, StartInfo, Summary, WorldView } from "../types.ts";
 import { txFacts } from "./events.ts";
 import { formatFinal, formatResult, formatStart, formatSummary, LOW_XLM, shortAddress, totalsOf, type LogMode, type SummaryBlock } from "./format.ts";
@@ -31,6 +31,18 @@ export interface ReporterOptions {
 
 const CENTRAL_BANK = "Central bank";
 
+/**
+ * Rejects if `promise` hasn't settled within `ms`. The RPC client has no request timeout, and a
+ * read that never returns would otherwise keep every later summary from printing.
+ */
+function within<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new RtgsError("rpc", "Timed out", `No answer within ${ms / 1000} s.`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export function createReporter(options: ReporterOptions): Reporter {
   const { log: mode, reads, summaryEvery } = options;
   const out = options.out ?? ((line: string) => console.log(line));
@@ -56,7 +68,12 @@ export function createReporter(options: ReporterOptions): Reporter {
   async function summarise(world: WorldView): Promise<void> {
     // The lanes are the central bank and the banks the run started with.
     const lanes = [...labels.keys()];
-    const [held, ...xlm] = await Promise.allSettled([reads.contractHolding(), ...lanes.map((a) => reads.xlmBalance(a))]);
+    // A summary's reads get until the next summary is due.
+    const ms = summaryEvery * 1000;
+    const [held, ...xlm] = await Promise.allSettled([
+      within(reads.contractHolding(), ms),
+      ...lanes.map((a) => within(reads.xlmBalance(a), ms)),
+    ]);
     if (stopped) return;
     // Compared with the world as it is when the read returns, not when it was asked for.
     const banks = world.banks();
@@ -120,7 +137,9 @@ export function createReporter(options: ReporterOptions): Reporter {
       lastSummaryAt = now;
       summarising = true;
       void summarise(world)
-        .catch((e: unknown) => out(`summary failed: ${toRtgsError(e).title}`))
+        .catch((e: unknown) => {
+          if (!stopped) out(`summary failed: ${toRtgsError(e).title}`);
+        })
         .finally(() => {
           summarising = false;
         });

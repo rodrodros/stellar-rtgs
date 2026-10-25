@@ -60,6 +60,13 @@ describe("formatResult, pretty", () => {
     expect(full).toContain("repo #7 repaid 200, in full");
   });
 
+  it("prints revocations and reprioritisations", () => {
+    const line = formatResult(record(ok([event({ type: "Revoked", id: 3n }), event({ type: "Reprioritised", id: 4n, priority: "urgent" })]), "revoke"), "pretty");
+    expect(line).toContain("ok 3f2a1b9c revoked #3; #4 now urgent (812 ms)");
+    const json = JSON.parse(formatResult(record(ok([event({ type: "Revoked", id: 3n }), event({ type: "Reprioritised", id: 4n, priority: "urgent" })]), "revoke"), "json"));
+    expect(json).toMatchObject({ revoked: ["3"], reprioritised: [{ id: "4", priority: "urgent" }] });
+  });
+
   it("prints just ok and the hash when the transaction has no contract events", () => {
     expect(formatResult(record(ok(), "issue"), "pretty")).toMatch(/issue +100 USD to Bank 2 \(urgent\) → ok 3f2a1b9c \(812 ms\)$/);
   });
