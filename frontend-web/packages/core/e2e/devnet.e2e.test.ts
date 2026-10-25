@@ -22,6 +22,8 @@ import {
 import { readSettlementWasm } from "../src/node/index.ts";
 
 const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8350/rpc";
+/** lib.sh's config, but with a 10-second expiry so a keeper can reject a payment in the test. */
+const CONFIG = { queueCap: 16, expirySecs: 10, repoTermSecs: 86_400, penaltyRateBps: 500 };
 
 async function healthy(): Promise<boolean> {
   try {
@@ -61,6 +63,7 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     deployment = await bootstrapDevnet({
       network: net,
       wasm: await readSettlementWasm(),
+      config: CONFIG,
       banks: 3,
       onStep: (s) => steps.push(`${s.status} ${s.step}`),
     });
@@ -194,7 +197,7 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
         const s = store.getSnapshot();
         return s.status === "ready" && s.events.some((e) => e.type === "Revoked") && s.banks.size === 3 ? s : undefined;
       });
-      expect(snapshot.config).toEqual({ queueCap: 16, expirySecs: 86_400, repoTermSecs: 86_400, penaltyRateBps: 500 });
+      expect(snapshot.config).toEqual(CONFIG);
       expect(snapshot.queuedCount).toBe(0);
       for (const bank of ids.banks) {
         const live = await session.read.bank(bank.address);
@@ -211,5 +214,31 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     } finally {
       release();
     }
+  });
+
+  it("lets a keeper reject a queued payment once its expiry has passed (ADR-0015)", async (ctx) => {
+    if (session.capabilities.expire !== "available") ctx.skip();
+    const b3 = session.as(ids.banks[2]!);
+    const keeper = session.as(ids.banks[0]!);
+    const queued = await b3.submit({ to: ids.banks[0]!.address, amount: parseAmount("5000"), priority: "normal" });
+    expect(queued.value.disposition).toBe("queued");
+    const id = queued.value.id;
+    expect(await keeper.simulate.expire(id)).toMatchObject({ ok: false, error: { kind: "contract", code: 9 } });
+
+    const payment = (await session.read.payment(id))!;
+    await (async () => {
+      for (;;) {
+        if ((await session.latestLedger()).closeTime > payment.submittedAt + CONFIG.expirySecs) return;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    })();
+    const config = await session.read.config();
+    const now = (await session.latestLedger()).closeTime;
+    expect((await session.read.bank(ids.banks[2]!.address, { config, now })).analysis.normal).toMatchObject({ head: { id }, expired: true });
+
+    const outcome = await keeper.expire(id);
+    expect(outcome.events.map((e) => e.type)).toEqual(["Expired"]);
+    expect((await session.read.payment(id))?.status).toBe("expired");
+    expect(await session.read.queue(ids.banks[2]!.address, "normal")).toEqual([]);
   });
 });

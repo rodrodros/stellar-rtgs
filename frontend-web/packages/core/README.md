@@ -84,7 +84,7 @@ The registry excludes the central bank and the contract. The same account also c
 - **Event retention.** RPC keeps events for its retention window: 120,960 ledgers, about 7 days, by default. `EventFeed` clamps an older start to the oldest retained ledger, and `status()` reports `clamped` and `oldestLedger`. Older history needs an indexer, which this project doesn't have. Payment orders stay readable through the views (`latestPaymentId` + `payments`); only their event trail is lost.
 - **No automated keeper.** `expire` and `convertOverdue` run when someone calls them, for example the central bank app. Running them on a schedule needs a server.
 - **Contract layout.** The contract has no `token()` view, so `tokenOfContract` reads `DataKey::Token` from its instance storage, with `VITE_RTGS_<NET>_TOKEN_ID` as a fallback. A `next_payment_id()` view would replace the gallop search in `latestPaymentId`.
-- **Stub types.** While `credit` and `repo` are stubs, the Wasm's spec doesn't define `Credit` or `Repo`, and 6 of the 12 events aren't in it. The generated client is therefore `@ts-nocheck`. Core owns the domain types and decodes all 12 events from `lib.rs`'s layout. The drift tests fail if a spec event or error no longer matches.
+- **Stub types.** While `credit` and `repo` are stubs, the Wasm's spec doesn't define `Credit` or `Repo`, and the events of entry points not yet implemented aren't in it. The generated client is therefore `@ts-nocheck`. Core owns the domain types and decodes all 12 events from `lib.rs`'s layout. The drift tests fail if a spec event or error no longer matches.
 - **Wallet signing** is unit-tested with a fake kit only. Freighter can't be automated here.
 
 ## Bindings
