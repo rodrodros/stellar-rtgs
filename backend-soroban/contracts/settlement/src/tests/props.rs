@@ -564,4 +564,68 @@ proptest! {
             before = after;
         }
     }
+
+    /// The eager closure leaves every queue at rest, over any sequence of deposits,
+    /// withdrawals and submissions, valid or not (§4.6; ADR-0010):
+    /// - A2, S9, gross: between calls no bank's head in `≺` is covered, so a deposit, or a
+    ///   submission that settles and credits its receiver, settles every covered head and
+    ///   follows the cascade in the same call;
+    /// - S7 under F2: what settles in a call is, per bank, a `≺`-prefix of its queue, so
+    ///   an uncovered urgent head blocks the bank's normal payments (ADR-0008, ADR-0009);
+    /// - A11: a withdrawal settles nothing, as SC-A02-06 pins. A withdrawal only lowers a
+    ///   balance and the queues are at rest before it, so this check restates that test;
+    /// - S3, S5: a settled payment never changes (ADR-0005, ADR-0006);
+    /// - `queued_count` counts the payments queued, from their records;
+    /// - S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    ///
+    /// A refused call, `QueueFull` included, is skipped. The calls need no later entry
+    /// point, so this checks the closure before SC-P-01 can. It checks gross rest alone,
+    /// not k* = 0, so it stays valid once Flow 13's offset exists: S9 still demands that
+    /// no head is covered between calls, as SC-P-01 does.
+    #[test]
+    fn the_closure_leaves_every_queue_at_rest(ops in prop::collection::vec(submission_op(), 1..30)) {
+        let setup = Setup::new(BANKS, FUNDING);
+        let client = setup.client();
+        let mut before = payments(&setup);
+
+        for op in ops {
+            let withdrawal = matches!(op, Op::Withdraw(..));
+            match op {
+                Op::Deposit(bank, amount) => {
+                    let _ = typed(client.try_deposit(setup.bank(bank), &amount));
+                }
+                Op::Withdraw(bank, amount) => {
+                    let _ = typed(client.try_withdraw(setup.bank(bank), &amount));
+                }
+                Op::Submit(from, to, amount, priority) => {
+                    let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
+                }
+                _ => unreachable!(),
+            }
+
+            setup.assert_conserved();
+            let after = payments(&setup);
+            if withdrawal {
+                prop_assert_eq!(&after, &before, "A11: a withdrawal settled something");
+            }
+            for (id, payment) in &before {
+                if is_final(payment.status) {
+                    prop_assert_eq!(Some(payment), after.get(id), "S3: final payment {} changed", id);
+                }
+            }
+            settled_in_order(&before, &after)?;
+            let queued = after.values().filter(|payment| payment.status == Status::Queued).count();
+            prop_assert_eq!(client.queued_count() as usize, queued, "queued_count");
+            for bank in 0..BANKS {
+                if let Some(head) = queued_in_order(&setup, &after, bank).first() {
+                    let (amount, balance) = (after[head].amount, client.balance(setup.bank(bank)));
+                    prop_assert!(
+                        amount > balance,
+                        "S9: bank {}'s head {} ({}) is covered by {}", bank, head, amount, balance
+                    );
+                }
+            }
+            before = after;
+        }
+    }
 }

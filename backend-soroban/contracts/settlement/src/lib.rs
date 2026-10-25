@@ -3,9 +3,10 @@
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other up to the queue cap) and the `balance`, `payment`, `queue`, `queued_count`,
-//! `config` and `central_bank` views. The other entry points are stubs whose unit tests
-//! (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
+//! other up to the queue cap), the eager closure after every balance increase, and the
+//! `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank` views. The
+//! other entry points are stubs whose unit tests (`src/tests/`) are written and red; they
+//! are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -158,7 +159,8 @@ enum DataKey {
     /// How many payments are queued, across all banks.
     QueuedCount,
     Payment(u64),
-    /// The ids `bank` has queued at a priority, head first (ADR-0008, ADR-0009).
+    /// The ids `bank` has queued at a priority, head first (ADR-0008, ADR-0009); no entry
+    /// while the queue is empty.
     Queue(Address, Priority),
 }
 
@@ -294,9 +296,11 @@ fn set_balance(env: &Env, bank: &Address, balance: i128) {
 /// A2: moves the payment's amount from its sender's balance, `from_balance`, to its
 /// receiver's, and records it settled at the ledger's close time. The caller has checked
 /// that `from_balance` covers it. No token moves (S1), and the receiver's sum cannot
-/// overflow, since S1 bounds every balance by the tokens the contract holds.
-fn settle(env: &Env, payment: &mut Payment, from_balance: i128) {
-    set_balance(env, &payment.from, from_balance - payment.amount);
+/// overflow, since S1 bounds every balance by the tokens the contract holds. Returns the
+/// sender's balance after the payment.
+fn settle(env: &Env, payment: &mut Payment, from_balance: i128) -> i128 {
+    let remaining_from_balance = from_balance - payment.amount;
+    set_balance(env, &payment.from, remaining_from_balance);
     let to_balance = Settlement::balance(env.clone(), payment.to.clone());
     set_balance(env, &payment.to, to_balance + payment.amount);
     payment.status = Status::Settled;
@@ -309,6 +313,7 @@ fn settle(env: &Env, payment: &mut Payment, from_balance: i128) {
         amount: payment.amount,
     }
     .publish(env);
+    remaining_from_balance
 }
 
 /// Records the queued payment and puts it at the tail of its sender's queue for its
@@ -317,13 +322,67 @@ fn enqueue(env: &Env, payment: &Payment) {
     put(env, &DataKey::Payment(payment.id), payment);
     let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
     queue.push_back(payment.id);
-    put(
-        env,
-        &DataKey::Queue(payment.from.clone(), payment.priority),
-        &queue,
-    );
+    put_queue(env, &payment.from, payment.priority, &queue);
     let count = Settlement::queued_count(env.clone()) + 1;
     put(env, &DataKey::QueuedCount, &count);
+}
+
+/// The eager closure (§4.6, S9; ADR-0010): settles every covered head of `banks`, urgent
+/// first (S7, ADR-0009), and follows the cascade through the queues of each bank a
+/// settlement credits, all in the calling transaction.
+///
+/// The queues were at rest before the call, so `banks` must hold every bank whose balance
+/// rose or whose queue head changed since: only those can have a covered head. A
+/// settlement raises its receiver's balance, so the receiver joins `banks` unless it is
+/// already waiting there. Under FIFO the order the banks are visited in does not change
+/// what settles (R2). A bank joins only at the start or after a settlement, and each
+/// settlement takes one of the queued payments the cap bounds, so the visits are at most
+/// `banks.len()` plus the settlements: the closure ends, and it ends at rest.
+fn eager_closure(env: &Env, mut banks: Vec<Address>) {
+    let mut settled = 0;
+    while let Some(bank) = banks.pop_front() {
+        let mut balance = Settlement::balance(env.clone(), bank.clone());
+        for priority in [Priority::Urgent, Priority::Normal] {
+            let mut queue = Settlement::queue(env.clone(), bank.clone(), priority);
+            let queue_len = queue.len();
+            while let Some(id) = queue.first() {
+                let mut payment = Settlement::payment(env.clone(), id).unwrap();
+                if !rtgs_core::covers(balance, payment.amount) {
+                    break;
+                }
+                queue.pop_front();
+                balance = settle(env, &mut payment, balance);
+                // The receiver was just credited, so its head may now be covered: it
+                // joins the worklist.
+                if !banks.contains(&payment.to) {
+                    banks.push_back(payment.to);
+                }
+            }
+            if queue.len() < queue_len {
+                settled += queue_len - queue.len();
+                put_queue(env, &bank, priority, &queue);
+            }
+            // The head left queued is not covered. If it is urgent, it blocks the bank's
+            // normal payments (S7).
+            if !queue.is_empty() {
+                break;
+            }
+        }
+    }
+    if settled > 0 {
+        let count = Settlement::queued_count(env.clone()) - settled;
+        put(env, &DataKey::QueuedCount, &count);
+    }
+}
+
+/// Records `bank`'s queue at `priority`, or removes its entry once the queue is empty.
+fn put_queue(env: &Env, bank: &Address, priority: Priority, queue: &Vec<u64>) {
+    let key = DataKey::Queue(bank.clone(), priority);
+    if queue.is_empty() {
+        env.storage().persistent().remove(&key);
+    } else {
+        put(env, &key, queue);
+    }
 }
 
 /// S7 (ADR-0008, ADR-0009): whether `bank` has a payment queued ahead of a new one at
@@ -355,7 +414,8 @@ impl Settlement {
     /// bank's settlement balance. An amount of 0 or less is refused with `InvalidAmount`
     /// before the SAC is called. Whatever the SAC refuses (too low a holding, a holder not
     /// authorized, an overflow, a transfer the bank did not authorize) is reported as
-    /// `TokenTransferFailed`.
+    /// `TokenTransferFailed`. Then the eager closure settles whatever the deposit covers,
+    /// after `Deposited` (S9).
     pub fn deposit(env: Env, bank: Address, amount: i128) -> Result<(), Error> {
         bank.require_auth();
         if amount <= 0 {
@@ -364,7 +424,12 @@ impl Settlement {
         transfer(&env, &bank, &env.current_contract_address(), amount)?;
         let balance = Self::balance(env.clone(), bank.clone()) + amount;
         set_balance(&env, &bank, balance);
-        Deposited { bank, amount }.publish(&env);
+        Deposited {
+            bank: bank.clone(),
+            amount,
+        }
+        .publish(&env);
+        eager_closure(&env, Vec::from_array(&env, [bank]));
         Ok(())
     }
 
@@ -398,7 +463,8 @@ impl Settlement {
     /// payments are queued already: then it is refused with `QueueFull`, before an id is
     /// used (ADR-0010). The cap never refuses a payment that settles at once. Whether it
     /// refuses one that an offset would settle is still open (README): `quint/settlement.qnt`
-    /// settles it, which would move this check after the closure (Flow 13).
+    /// settles it, which would move this check after the closure (Flow 13). A payment that
+    /// settles at once credits its receiver, so the eager closure follows it (S9).
     pub fn submit(
         env: Env,
         from: Address,
@@ -447,6 +513,7 @@ impl Settlement {
         .publish(&env);
         if settles {
             settle(&env, &mut payment, balance);
+            eager_closure(&env, Vec::from_array(&env, [payment.to]));
         } else {
             enqueue(&env, &payment);
         }

@@ -624,3 +624,49 @@ fn a_settled_payment_never_changes() {
 
     assert_eq!(client.payment(&id).unwrap(), before);
 }
+
+/// SC-A02-08. S9 (ADR-0010): the cascade comes back to a bank it has already visited. A's
+/// deposit settles A→B; that credits B, whose payment back to A settles; that credits A,
+/// whose next payment, uncovered on the first visit, settles too. A queue the closure
+/// empties leaves no entry behind.
+#[test]
+fn a_cascade_that_returns_to_a_bank_settles_its_next_payment() {
+    let setup = Setup::new(3, 30);
+    let client = setup.client();
+    let to_b = client.submit(setup.bank(0), setup.bank(1), &30, &NORMAL);
+    let to_c = client.submit(setup.bank(0), setup.bank(2), &20, &NORMAL);
+    let back = client.submit(setup.bank(1), setup.bank(0), &30, &NORMAL);
+
+    client.deposit(setup.bank(0), &30);
+
+    for id in [to_b, back, to_c] {
+        assert_eq!(client.payment(&id).unwrap().status, Status::Settled);
+    }
+    assert_eq!(client.queued_count(), 0);
+    assert_eq!(setup.balances(), std::vec![10, 0, 20]);
+    setup.assert_conserved();
+    setup.env.as_contract(&setup.contract, || {
+        for bank in [setup.bank(0), setup.bank(1)] {
+            let key = DataKey::Queue(bank.clone(), NORMAL);
+            assert!(!setup.env.storage().persistent().has(&key));
+        }
+    });
+}
+
+/// SC-A02-09. S7(a) in the closure (ADR-0009): a queued urgent payment the deposit does
+/// not cover blocks the bank's normal payments, even one the deposit would cover.
+#[test]
+fn an_uncovered_urgent_head_blocks_the_normal_queue_in_the_closure() {
+    let setup = Setup::new(2, 30);
+    let client = setup.client();
+    let urgent = client.submit(setup.bank(0), setup.bank(1), &50, &URGENT);
+    let normal = client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL);
+
+    client.deposit(setup.bank(0), &30);
+
+    assert_eq!(setup.queue(0, URGENT), std::vec![urgent]);
+    assert_eq!(setup.queue(0, NORMAL), std::vec![normal]);
+    assert_eq!(client.queued_count(), 2);
+    assert_eq!(setup.balances(), std::vec![30, 0]);
+    setup.assert_conserved();
+}

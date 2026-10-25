@@ -132,17 +132,20 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 
 One decision is still open (README): what the cap does to a payment that would settle by offset. No unit test decides it, so add no behaviour for it here. But `quint/settlement.qnt` refuses a payment only if it is still queued after the closure, offset included, so it settles such a payment, and the replay (SC-MB-01) assumes it: traces 2, 28, 41 and 43 each settle one by offset.
 
-## Flow 8: the eager closure, gross (7)
+## Flow 8: the eager closure, gross (10)
 
 Build on Flows 3 and 6. After any balance increase, from a deposit or from a settlement that credits a bank, settle every covered head, urgent first. Then follow the cascade through the receivers' queues, all in the same call.
 
-- [ ] `unit::payments::a_deposit_that_covers_the_head_settles_it_in_the_same_call` (SC-A02-01)
-- [ ] `unit::payments::new_liquidity_settles_the_queue_in_order_up_to_the_first_uncovered_payment` (SC-A02-02)
-- [ ] `unit::payments::new_liquidity_settles_urgent_payments_before_normal_ones` (SC-A02-03)
-- [ ] `unit::payments::a_settlement_cascades_through_the_receivers_queue` (SC-A02-04)
-- [ ] `unit::payments::a_submission_that_settles_releases_the_receivers_queue` (SC-A02-05)
-- [ ] `unit::payments::a_withdrawal_settles_nothing` (SC-A02-06). Passes since Flow 5, because there is no closure yet. Check that it still passes once the closure exists, then tick it.
-- [ ] `unit::payments::a_settled_payment_never_changes` (SC-A02-07). Passes since Flow 5, because there is no closure yet. Check that it still passes once the closure exists, then tick it.
+- [x] `unit::payments::a_deposit_that_covers_the_head_settles_it_in_the_same_call` (SC-A02-01)
+- [x] `unit::payments::new_liquidity_settles_the_queue_in_order_up_to_the_first_uncovered_payment` (SC-A02-02)
+- [x] `unit::payments::new_liquidity_settles_urgent_payments_before_normal_ones` (SC-A02-03)
+- [x] `unit::payments::a_settlement_cascades_through_the_receivers_queue` (SC-A02-04)
+- [x] `unit::payments::a_submission_that_settles_releases_the_receivers_queue` (SC-A02-05)
+- [x] `unit::payments::a_withdrawal_settles_nothing` (SC-A02-06). Passed since Flow 5, and still passes with the closure, which a withdrawal never runs.
+- [x] `unit::payments::a_settled_payment_never_changes` (SC-A02-07). Passed since Flow 5, and still passes with the closure.
+- [x] `unit::payments::a_cascade_that_returns_to_a_bank_settles_its_next_payment` (SC-A02-08). Added in Flow 8, since SC-A02-04's cascade never comes back to a bank; it fails if the closure visits each bank only once, or keeps the entry of a queue it empties.
+- [x] `unit::payments::an_uncovered_urgent_head_blocks_the_normal_queue_in_the_closure` (SC-A02-09). Added in Flow 8, since SC-A02-03's urgent payment is covered and settles; it fails if the closure settles a bank's normal payments past an urgent one it does not cover.
+- [x] `props::the_closure_leaves_every_queue_at_rest` (SC-P-12). Added in Flow 8: SC-P-01 checks S9 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. It checks gross rest, no bank's head in `≺` covered, rather than k* = 0, so it stays valid once Flow 13's offset exists. It fails against each of these closures, and each shrunk case is one a unit test already pins: with no closure, a submission that settles and leaves its receiver's covered head queued (SC-A02-05); with no cascade, a deposit whose settlement leaves the receiver's covered head queued (SC-A02-04); with each bank visited once, a cascade that returns to a bank whose next head it now covers (SC-A02-08); and with no urgent block, a normal payment settled past its bank's uncovered urgent one (SC-A02-09). It reads only the views, which show an empty queue the same whether its entry is removed or kept, so a closure that keeps the entry of a queue it empties is left to SC-A02-08.
 
 ## Flow 9: revoke, A6 (11)
 
@@ -352,8 +355,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 7) | 52 |
-| Still to fix (Flows 8 to 21) | 105 |
-| All | 157 |
+| Already green (Flows 0 to 8) | 62 |
+| Still to fix (Flows 9 to 21) | 98 |
+| All | 160 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, and Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, and Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12.
