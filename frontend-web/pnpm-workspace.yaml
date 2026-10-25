@@ -1,3 +1,33 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# No dependency needs its install script: esbuild and the native modules ship prebuilt binaries.
+allowBuilds:
+  '@reown/appkit': false
+  bufferutil: false
+  esbuild: false
+  secp256k1: false
+  utf-8-validate: false
+
+# One version of each shared dependency for every package: write `"react": "catalog:"`.
+catalog:
+  "@creit.tech/stellar-wallets-kit": 2.7.1
+  "@stellar/stellar-sdk": 17.3.0
+  "@types/node": 26.6.5
+  "@types/react": 19.2.18
+  "@types/react-dom": 19.2.7
+  "@vitejs/plugin-react": 6.1.2
+  buffer: 6.0.3
+  react: 19.2.9
+  react-dom: 19.2.9
+  tsx: 4.23.15
+  typescript: 7.0.2
+  vite: 8.3.4
+  vitest: 5.0.4
+
+# Supply-chain hygiene: don't install a release younger than 7 days.
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  # The handbook's pin (01-toolchain.md): the newest SDK that decodes protocol 29 and 30 ledgers.
+  - "@stellar/stellar-sdk@17.3.0"

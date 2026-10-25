@@ -1,0 +1,21 @@
+{
+  "name": "rtgs-stellar-front",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.28.5",
+  "engines": {
+    "node": ">=26"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "vitest run",
+    "test:e2e": "pnpm --filter @rtgs/core test:e2e",
+    "bindings": "pnpm --filter @rtgs/core bindings",
+    "bindings:check": "pnpm --filter @rtgs/core bindings:check",
+    "devnet:bootstrap": "pnpm --filter @rtgs/core devnet:bootstrap"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
