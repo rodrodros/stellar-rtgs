@@ -1,0 +1,45 @@
+import { contract } from "@stellar/stellar-sdk";
+import { describe, expect, it } from "vitest";
+import { CONTRACT_ERRORS, RtgsError, toRtgsError } from "../src/errors.ts";
+import { wasm } from "./helpers.ts";
+
+describe("error mapping", () => {
+  it("has a message for every error case in the deployed Wasm's spec (drift guard)", () => {
+    const cases = contract.Spec.fromWasm(wasm()).errorCases();
+    expect(cases.length).toBeGreaterThanOrEqual(16);
+    for (const c of cases) {
+      expect(CONTRACT_ERRORS[c.value], `error ${c.value}`).toBeDefined();
+      expect(CONTRACT_ERRORS[c.value]!.name).toBe(c.name.toString());
+    }
+  });
+
+  it("maps a contract error in a simulation message", () => {
+    const e = toRtgsError('HostError: Error(Contract, #5)\n\nEvent log (newest first): ...');
+    expect(e).toMatchObject({ kind: "contract", code: 5, title: "Central queue full" });
+    expect(e.detail).toMatch(/queue cap/);
+  });
+
+  it("maps the SDK's Err({ message }) by name", () => {
+    expect(toRtgsError({ error: { message: "SameAccount" } })).toMatchObject({ kind: "contract", code: 4 });
+  });
+
+  it("reads a SAC error as the cash token's when asked", () => {
+    expect(toRtgsError("Error(Contract, #13)", "sac")).toMatchObject({ kind: "token", title: "No trustline" });
+  });
+
+  it("reads a Wasm trap as a stub", () => {
+    expect(toRtgsError("HostError: Error(WasmVm, InvalidAction)")).toMatchObject({ kind: "not-implemented" });
+  });
+
+  it("maps classic result codes, RPC outages and wallet refusals", () => {
+    expect(toRtgsError("tx_bad_seq")).toMatchObject({ kind: "transaction" });
+    expect(toRtgsError("op_not_authorized")).toMatchObject({ kind: "token", title: "Trustline not authorized" });
+    expect(toRtgsError(new TypeError("fetch failed"))).toMatchObject({ kind: "rpc", title: "Network unreachable" });
+    expect(toRtgsError(new Error("User rejected the request"))).toMatchObject({ kind: "wallet" });
+  });
+
+  it("passes an RtgsError through", () => {
+    const e = new RtgsError("config", "x", "y");
+    expect(toRtgsError(e)).toBe(e);
+  });
+});
