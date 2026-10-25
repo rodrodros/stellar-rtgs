@@ -7,7 +7,7 @@
 // let the bank back in, and `recover` reauthorizes whatever a stopped or crashed run left
 // locked.
 import { formatAmount } from "@rtgs/core";
-import type { ActionDef, ActionModule, Actors, World } from "../types.ts";
+import type { ActionDef, ActionModule, Actors, BankState, World } from "../types.ts";
 
 /** With no bank below the floor, `issue` still applies this often, with a small amount. */
 const IDLE_ISSUE_CHANCE = 0.05;
@@ -36,6 +36,10 @@ export interface ReauthorizeParams {
  */
 export function createTokenActions(): ActionModule {
   const deauthorizedAt = new Map<string, number>();
+  // Locked by the world's last read, or by our own record: the record covers a deauthorization
+  // that landed but whose refresh hasn't (or failed to). A stale record only costs a no-op
+  // reauthorization, which clears it.
+  const locked = (b: BankState) => !b.authorized || deauthorizedAt.has(b.address);
 
   const issue: ActionDef<TokenAmountParams> = {
     name: "issue",
@@ -85,8 +89,9 @@ export function createTokenActions(): ActionModule {
     role: "central-bank",
     plan: ({ world, rng }) => {
       // At most one bank locked out at a time.
-      if (world.banks().some((b) => !b.authorized)) return undefined;
-      const b = rng.pick(world.banks());
+      const banks = world.banks();
+      if (banks.length === 0 || banks.some(locked)) return undefined;
+      const b = rng.pick(banks);
       return { bank: b.address, label: b.label, at: world.now() };
     },
     run: async (actors, _actor, p) => {
@@ -105,7 +110,7 @@ export function createTokenActions(): ActionModule {
     plan: ({ world, rng, tuning }) => {
       // A bank found deauthorized with no record (another run's, or someone else's) is due now.
       const due = world.banks().filter((b) => {
-        if (b.authorized) return false;
+        if (!locked(b)) return false;
         const at = deauthorizedAt.get(b.address);
         return at === undefined || world.now() - at >= tuning.deauthorizeSecs;
       });
@@ -126,15 +131,15 @@ export function createTokenActions(): ActionModule {
     group: "token",
     actions: [issue, clawback, deauthorize, reauthorize],
     /**
-     * Reauthorizes every deauthorized bank, one transaction at a time (they share the central
-     * bank's sequence number), then refreshes them. Tries them all before throwing the first
-     * error, so one failure doesn't leave the others locked out.
+     * Reauthorizes every locked bank, one transaction at a time (they share the central bank's
+     * sequence number), then refreshes them. Tries them all before throwing the first error,
+     * so one failure doesn't leave the others locked out.
      */
     async recover(actors: Actors, world: World) {
-      const locked = world.banks().filter((b) => !b.authorized);
-      if (locked.length === 0) return;
+      const banks = world.banks().filter(locked);
+      if (banks.length === 0) return;
       let error: unknown;
-      for (const b of locked) {
+      for (const b of banks) {
         try {
           await actors.tokenAdmin.authorize(b.address, true);
           deauthorizedAt.delete(b.address);
@@ -142,7 +147,12 @@ export function createTokenActions(): ActionModule {
           error ??= e;
         }
       }
-      await world.refresh(locked.map((b) => b.address));
+      try {
+        await world.refresh(banks.map((b) => b.address));
+      } catch (e) {
+        // The reason a bank stayed locked matters more than a failed re-read.
+        error ??= e;
+      }
       if (error !== undefined) throw error;
     },
   };

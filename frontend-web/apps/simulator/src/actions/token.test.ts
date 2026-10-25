@@ -177,6 +177,24 @@ describe("deauthorize and reauthorize", () => {
     expect(reauthorize.plan(ctx(world))).toBeUndefined();
   });
 
+  it("counts its own record as locked when the world's read is stale", async () => {
+    const { deauthorize, reauthorize, world, actors } = setup();
+    world.state.banks = [bank(BANK_1), bank(BANK_2)];
+    const p = deauthorize.plan(ctx(world))!;
+    await deauthorize.run(actors, CB, p);
+    // The refresh after the deauthorization failed: the world still says authorized.
+    expect(planMany(deauthorize, world).every((q) => q === undefined)).toBe(true);
+    expect(reauthorize.plan(ctx(world))).toBeUndefined();
+    world.state.now += TUNING.deauthorizeSecs;
+    expect(reauthorize.plan(ctx(world))).toEqual({ bank: p.bank, label: p.label });
+  });
+
+  it("doesn't deauthorize when there are no banks", () => {
+    const { deauthorize, world } = setup();
+    world.state.banks = [];
+    expect(deauthorize.plan(ctx(world))).toBeUndefined();
+  });
+
   it("reauthorizes at once a bank found deauthorized with no record", () => {
     const { reauthorize, world } = setup();
     world.state.banks[2]!.authorized = false;
@@ -239,6 +257,31 @@ describe("recover", () => {
     await expect(m.recover!(actors, world)).rejects.toThrow("bank 1 refused");
     expect(actors.calls.map((c) => c.args[0])).toEqual([BANK_1, BANK_2]);
     expect(world.refreshed).toEqual([[BANK_1, BANK_2]]);
+  });
+
+  it("also reauthorizes a bank it recorded as deauthorized that the world still shows authorized", async () => {
+    const m = createTokenActions();
+    const deauthorize = action<DeauthorizeParams>(m, "deauthorize");
+    const world = fakeWorld({ banks: [bank(BANK_1)] });
+    const actors = fakeActors();
+    await deauthorize.run(actors, CB, deauthorize.plan(ctx(world))!);
+    await m.recover!(actors, world);
+    expect(actors.calls.at(-1)).toEqual({ as: "token-admin", method: "authorize", args: [BANK_1, true] });
+    expect(world.refreshed).toEqual([[BANK_1]]);
+    // The record is cleared, so deauthorize applies again.
+    expect(deauthorize.plan(ctx(world))).toBeDefined();
+  });
+
+  it("throws the authorization's failure, not a later refresh failure", async () => {
+    const m = createTokenActions();
+    const world = fakeWorld({ banks: [bank(BANK_1, { authorized: false })] });
+    world.refresh = async () => {
+      throw new Error("refresh failed");
+    };
+    const actors = fakeActors(() => {
+      throw new Error("authorize refused");
+    });
+    await expect(m.recover!(actors, world)).rejects.toThrow("authorize refused");
   });
 
   it("clears the record of a bank it reauthorizes", async () => {
