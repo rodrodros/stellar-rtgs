@@ -33,11 +33,21 @@ function fakeSession() {
       bank: vi.fn(async (address: string) => view(address, 0n)),
     },
     registry: {
-      list: () => [{ address: A, sources: ["config"] }, { address: B, sources: ["config"] }],
-      load: async () => [],
+      banks: [
+        { address: A, sources: ["config"] },
+        { address: B, sources: ["config"] },
+      ] as { address: string; sources: string[] }[],
+      listeners: new Set<(b: unknown[]) => void>(),
+      list() {
+        return this.banks;
+      },
+      load: vi.fn(async () => []),
       observe: () => [],
       get: () => undefined,
-      subscribe: () => () => {},
+      subscribe(fn: (b: unknown[]) => void) {
+        this.listeners.add(fn);
+        return () => this.listeners.delete(fn);
+      },
     },
     events: () => ({
       subscribe: (fn: typeof onBatch) => ((onBatch = fn), () => {}),
@@ -49,6 +59,7 @@ function fakeSession() {
   return {
     session: session as unknown as RtgsSession,
     read: session.read,
+    registry: session.registry,
     payments,
     emit: (batch: FeedEvent[]) => onBatch(batch),
     status: (s: Partial<FeedStatus>) => onStatus({ state: "live", clamped: false, ...s }),
@@ -126,5 +137,37 @@ describe("store", () => {
     store.stop();
     await new Promise((r) => setTimeout(r, 20));
     expect(fake.read.bank.mock.calls.length).toBe(calls);
+  });
+
+  it("tries a failed initial load again, and retry() does it at once", async () => {
+    const fake = fakeSession();
+    const config = fake.read.config;
+    let failures = 2;
+    fake.read.config = vi.fn(async () => {
+      if (failures-- > 0) throw new TypeError("fetch failed");
+      return config();
+    });
+    const store = new RtgsStore(fake.session);
+    store.start();
+    await vi.waitFor(() => expect(store.getSnapshot()).toMatchObject({ status: "error", error: { kind: "rpc" } }));
+    store.retry();
+    await vi.waitFor(() => expect(fake.read.config).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 5)); // let the second failure land
+    store.retry();
+    await ready(store);
+    store.stop();
+  });
+
+  it("gives a bank new to the registry its views, and re-reads the registry periodically", async () => {
+    const fake = fakeSession();
+    const store = new RtgsStore(fake.session, { refreshDebounceMs: 1, registryPollMs: 20 });
+    store.start();
+    await ready(store);
+    const C = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
+    fake.registry.banks.push({ address: C, sources: ["ledger"] });
+    for (const l of fake.registry.listeners) l(fake.registry.banks);
+    await vi.waitFor(() => expect(store.getSnapshot().banks.has(C)).toBe(true));
+    await vi.waitFor(() => expect(fake.registry.load.mock.calls.length).toBeGreaterThanOrEqual(3));
+    store.stop();
   });
 });

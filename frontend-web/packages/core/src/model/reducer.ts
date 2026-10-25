@@ -39,6 +39,11 @@ export interface ModelState {
   events: FeedEvent[];
   /** Every bank address the events mention. */
   seen: Set<string>;
+  /**
+   * Steps of payment orders the state doesn't hold yet (a revocation, expiry or
+   * reprioritisation of one submitted before the window); `mergePayments` attaches them.
+   */
+  orphanSteps: Map<bigint, LifecycleStep[]>;
   /** The transaction being folded: its first event, and the ids of any offset in it. */
   tx?: { hash: string; first: RtgsEvent; offsetIds: Set<bigint> };
 }
@@ -46,7 +51,7 @@ export interface ModelState {
 export const MAX_EVENTS = 2000;
 
 export function emptyState(): ModelState {
-  return { payments: new Map(), repos: new Map(), collateral: new Map(), events: [], seen: new Set() };
+  return { payments: new Map(), repos: new Map(), collateral: new Map(), events: [], seen: new Set(), orphanSteps: new Map() };
 }
 
 const FINAL = new Set(["settled", "revoked", "expired"]);
@@ -58,6 +63,11 @@ function step(event: RtgsEvent, kind: LifecycleStep["kind"], extra: Partial<Life
 function addStep(record: PaymentRecord, s: LifecycleStep): PaymentRecord {
   if (record.steps.some((x) => x.eventId === s.eventId)) return record;
   return { ...record, steps: [...record.steps, s].sort((a, b) => (a.eventId < b.eventId ? -1 : 1)) };
+}
+
+function addOrphan(state: ModelState, id: bigint, s: LifecycleStep): void {
+  const steps = state.orphanSteps.get(id) ?? [];
+  if (!steps.some((x) => x.eventId === s.eventId)) state.orphanSteps.set(id, [...steps, s]);
 }
 
 /** Who acted in an event: the bank, or the sender of the payment order it concerns. */
@@ -143,14 +153,20 @@ function apply(state: ModelState, event: RtgsEvent): void {
     case "Revoked":
     case "Expired": {
       const record = payments.get(event.id);
-      if (!record) break;
       const status = event.type === "Revoked" ? "revoked" : "expired";
+      if (!record) {
+        addOrphan(state, event.id, step(event, status));
+        break;
+      }
       payments.set(event.id, addStep({ ...record, status }, step(event, status)));
       break;
     }
     case "Reprioritised": {
       const record = payments.get(event.id);
-      if (!record) break;
+      if (!record) {
+        addOrphan(state, event.id, step(event, "reprioritised", { priority: event.priority }));
+        break;
+      }
       const priority = FINAL.has(record.status) ? record.priority : event.priority;
       payments.set(event.id, addStep({ ...record, priority }, step(event, "reprioritised", { priority: event.priority })));
       break;
@@ -195,6 +211,7 @@ export function applyEvents(state: ModelState, batch: readonly FeedEvent[]): Mod
     collateral: new Map(state.collateral),
     events: state.events,
     seen: new Set(state.seen),
+    orphanSteps: new Map(state.orphanSteps),
     ...(state.tx ? { tx: state.tx } : {}),
   };
   const known = new Set(state.events.map((e) => e.eventId));
@@ -210,17 +227,21 @@ export function applyEvents(state: ModelState, batch: readonly FeedEvent[]): Mod
  */
 export function mergePayments(state: ModelState, payments: readonly Payment[]): ModelState {
   const next = new Map(state.payments);
+  const orphans = new Map(state.orphanSteps);
   for (const p of payments) {
     const known = next.get(p.id);
+    const waiting = orphans.get(p.id) ?? [];
+    orphans.delete(p.id);
+    const steps = [...(known?.steps ?? []), ...waiting].sort((a, b) => (a.eventId < b.eventId ? -1 : 1));
     if (!known) {
-      next.set(p.id, { ...p, steps: [] });
+      next.set(p.id, { ...p, steps });
       continue;
     }
     const status = FINAL.has(known.status) && p.status === "queued" ? known.status : p.status;
     const { partial: _partial, ...rest } = known;
-    next.set(p.id, { ...rest, ...p, status, steps: known.steps });
+    next.set(p.id, { ...rest, ...p, status, steps });
   }
-  return { ...state, payments: next };
+  return { ...state, payments: next, orphanSteps: orphans };
 }
 
 export function mergeRepos(state: ModelState, repos: readonly Repo[]): ModelState {

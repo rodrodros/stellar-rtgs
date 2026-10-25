@@ -118,11 +118,21 @@ export class SettlementReader {
     return latestId((id) => this.payment(id).then((p) => p !== undefined));
   }
 
-  /** Payment orders `from`..`to` inclusive, skipping ids not issued; a few requests at a time. */
+  /**
+   * Payment orders `from`..`to` inclusive, a few requests at a time, skipping ids not issued and
+   * payment orders whose entries are archived (their time to live ran out).
+   */
   async payments(range: { from: bigint; to: bigint }, concurrency = 8): Promise<Payment[]> {
     const ids: bigint[] = [];
     for (let id = range.from; id <= range.to; id++) ids.push(id);
-    const found = await mapLimit(ids, concurrency, (id) => this.payment(id));
+    const found = await mapLimit(ids, concurrency, async (id) => {
+      try {
+        return await this.payment(id);
+      } catch (e) {
+        if (e instanceof RtgsError && e.kind === "archived") return undefined;
+        throw e;
+      }
+    });
     return found.filter((p): p is Payment => p !== undefined);
   }
 }

@@ -215,3 +215,58 @@ describe("event feed recovery and progress", () => {
     expect(stopped).toHaveBeenCalledWith(feed);
   });
 });
+
+describe("event feed robustness", () => {
+  it("recovers from a stale cursor even after another error came first", async () => {
+    vi.useFakeTimers();
+    const { server, mock } = fakeServer([[event(60, 1)]]);
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { pollMs: 1000 });
+    feed.start();
+    await vi.advanceTimersByTimeAsync(0);
+    mock.getEvents.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    mock.getEvents.mockRejectedValueOnce(RANGE_ERROR);
+    await vi.advanceTimersByTimeAsync(1000); // poll: network error
+    await vi.advanceTimersByTimeAsync(2000); // backoff: out of range, restart from the window
+    await vi.advanceTimersByTimeAsync(10);
+    feed.stop();
+    const calls = mock.getEvents.mock.calls.map((c) => c[0]);
+    expect(calls.at(-1)).toMatchObject({ startLedger: 50 });
+    expect(feed.status()).toMatchObject({ clamped: true });
+  });
+
+  it("doesn't change a status object it already published", async () => {
+    vi.useFakeTimers();
+    const { server, mock } = fakeServer([[event(60, 1)]]);
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { pollMs: 1000 });
+    feed.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const published = feed.status();
+    const cursor = published.cursor;
+    mock.getEvents.mockRejectedValueOnce(RANGE_ERROR);
+    await vi.advanceTimersByTimeAsync(1000);
+    feed.stop();
+    expect(published.cursor).toBe(cursor);
+  });
+
+  it("keeps delivering to other listeners, and stays live, when one listener throws", async () => {
+    vi.useFakeTimers();
+    const report = vi.fn();
+    vi.stubGlobal("reportError", report);
+    try {
+      const { server } = fakeServer([[event(60, 1)]]);
+      const feed = new EventFeed({ server, contractId: CONTRACT });
+      const got: FeedEvent[] = [];
+      feed.subscribe(() => {
+        throw new Error("app bug");
+      });
+      feed.subscribe((b) => got.push(...b));
+      feed.start();
+      await vi.advanceTimersByTimeAsync(0);
+      feed.stop();
+      expect(got).toHaveLength(1);
+      expect(report).toHaveBeenCalledWith(expect.objectContaining({ message: "app bug" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

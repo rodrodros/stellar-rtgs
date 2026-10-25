@@ -53,6 +53,12 @@ export interface FeedSource {
 
 const MAX_BACKOFF_MS = 30_000;
 
+function reportListenerError(e: unknown): void {
+  const report = (globalThis as { reportError?: (e: unknown) => void }).reportError;
+  if (report) report(e);
+  else console.error("@rtgs/core: an event feed listener threw", e);
+}
+
 /** The ledger a `getEvents` cursor points into: the high 32 bits of its TOID. */
 export function cursorLedger(cursor: string): number | undefined {
   const toid = cursor.split("-")[0];
@@ -75,6 +81,8 @@ export class EventFeed {
   private generation = 0;
   private lastId = "";
   private failures = 0;
+  /** Set when the feed restarted from the retention window, until a request succeeds again. */
+  private resetSinceSuccess = false;
   private from: FeedStart;
 
   constructor(
@@ -105,6 +113,8 @@ export class EventFeed {
     if (this.running) return;
     this.running = true;
     this.generation += 1;
+    this.failures = 0;
+    this.resetSinceSuccess = false;
     this.hooks.onStart?.(this);
     void this.tick(this.generation);
   }
@@ -169,6 +179,7 @@ export class EventFeed {
       const last = batch.at(-1);
       if (last) this.lastId = last.eventId;
       this.failures = 0;
+      this.resetSinceSuccess = false;
       // RPC scans a bounded range of ledgers per request, so a short page doesn't mean caught
       // up: the cursor's ledger does.
       const reached = cursorLedger(response.cursor);
@@ -182,19 +193,20 @@ export class EventFeed {
         oldestLedger: response.oldestLedger,
         oldestLedgerCloseTime: Number(response.oldestLedgerCloseTime),
       });
-      if (batch.length) for (const l of this.listeners) l(batch);
+      if (batch.length) this.deliver(batch);
       this.schedule(generation, behind ? 0 : (this.options.pollMs ?? 2000));
     } catch (e) {
       if (generation !== this.generation) return;
       const error = toRtgsError(e);
       this.failures += 1;
       // A start or cursor that fell out of the retention window: restart from its oldest
-      // ledger, once, at once.
-      const resumable = this.current.cursor !== undefined || (typeof this.from === "object" && "cursor" in this.from);
-      if (outsideRetention(error) && (resumable || typeof this.from === "object") && this.failures === 1) {
-        delete this.current.cursor;
+      // ledger at once, whatever failed before. Only once until a request succeeds, so a
+      // persistent error can't make it loop without backoff.
+      const resumable = this.current.cursor !== undefined || typeof this.from === "object";
+      if (outsideRetention(error) && resumable && !this.resetSinceSuccess) {
+        this.resetSinceSuccess = true;
         this.from = "retention-start";
-        this.setStatus({ state: "backfilling", clamped: true });
+        this.setStatus({ state: "backfilling", clamped: true, cursor: undefined, cursorLedger: undefined });
         this.schedule(generation, 0);
         return;
       }
@@ -202,6 +214,20 @@ export class EventFeed {
       this.schedule(generation, Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(this.failures, 5)));
     }
   }
+  /**
+   * Gives the batch to every listener. A listener that throws doesn't stop the others or the
+   * feed; its error is reported on its own.
+   */
+  private deliver(batch: FeedEvent[]): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(batch);
+      } catch (e) {
+        reportListenerError(e);
+      }
+    }
+  }
+
   private decode(e: rpc.Api.EventResponse): FeedEvent {
     return decodeFeedEvent(
       {

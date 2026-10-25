@@ -80,6 +80,18 @@ describe("reducer", () => {
     expect(merged.steps.map((x) => x.kind)).toEqual(["settled"]);
   });
 
+  it("keeps the steps of a payment order it doesn't hold yet, and attaches them once read", () => {
+    const s = applyEvents(emptyState(), [
+      ev<"Reprioritised">(5, "t5", { type: "Reprioritised", id: 4n, priority: "urgent" }),
+      ev<"Revoked">(6, "t6", { type: "Revoked", id: 4n }),
+    ]);
+    expect(s.payments.has(4n)).toBe(false);
+    const view: Payment = { id: 4n, from: A, to: B, amount: 1n, priority: "urgent", submittedAt: 1, status: "revoked" };
+    const merged = mergePayments(s, [view]);
+    expect(merged.payments.get(4n)!.steps.map((x) => x.kind)).toEqual(["reprioritised", "revoked"]);
+    expect(merged.orphanSteps.size).toBe(0);
+  });
+
   it("tracks repos and collateral", () => {
     const s = applyEvents(emptyState(), [
       ev<"CollateralSet">(1, "t1", { type: "CollateralSet", bank: A, value: 100n }),

@@ -28,6 +28,10 @@ export const CLAWBACK_LIMITS =
   "it never undoes a final settlement, and it is refused against the settlement contract, whose holdings back every " +
   "bank's settlement balance. A payment sent in error is returned by a new payment from the payee.";
 
+function assertPositive(amount: bigint): void {
+  if (amount <= 0n) throw new RtgsError("token", "Invalid amount", "The amount must be greater than zero.");
+}
+
 export class TokenAdmin {
   private readonly sac: Contract;
 
@@ -62,6 +66,7 @@ export class TokenAdmin {
 
   /** Issues `amount` stroops of cash to a bank: a classic payment from the issuer. */
   async issue(to: string, amount: bigint): Promise<TxOutcome> {
+    assertPositive(amount);
     if (StrKey.isValidContract(to)) {
       const op = this.sac.call("mint", new Address(to).toScVal(), nativeToScVal(amount, { type: "i128" }));
       return { ...(await sendInvoke(this.ctx, this.signer, op, "sac")), value: undefined };
@@ -77,6 +82,7 @@ export class TokenAdmin {
    * so clawing them back would break conservation (S1) without touching any recorded payment.
    */
   async clawback(from: string, amount: bigint): Promise<TxOutcome> {
+    assertPositive(amount);
     if (StrKey.isValidContract(from)) {
       throw new RtgsError("token", "Clawback refused", CLAWBACK_LIMITS);
     }

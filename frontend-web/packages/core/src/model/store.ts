@@ -22,6 +22,11 @@ export interface StoreOptions {
   recentRepos?: number;
   /** How long to gather touched banks before re-reading them. */
   refreshDebounceMs?: number;
+  /**
+   * How often to re-read the bank registry from the central bank's account, so a bank another
+   * app registers shows up (0 turns it off). `session.registry.load()` does it on demand.
+   */
+  registryPollMs?: number;
 }
 
 export interface SystemSnapshot {
@@ -85,6 +90,9 @@ export class RtgsStore {
   private pendingPayments = new Set<bigint>();
   /** Refreshes run one after another, so an older read never overwrites a newer one. */
   private refreshChain: Promise<void> = Promise.resolve();
+  private loadAttempts = 0;
+  private loadTimer: ReturnType<typeof setTimeout> | undefined;
+  private registryTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     private readonly session: RtgsSession,
@@ -147,14 +155,24 @@ export class RtgsStore {
     this.unsubscribers = [];
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.loadTimer) clearTimeout(this.loadTimer);
+    this.loadTimer = undefined;
+    if (this.registryTimer) clearInterval(this.registryTimer);
+    this.registryTimer = undefined;
     this.pending.clear();
     this.pendingPayments.clear();
   }
 
+  /**
+   * The initial load. A failure (an RPC timeout or rate limit) leaves `status: "error"` and
+   * tries again with backoff while the store runs; `retry()` tries again at once.
+   */
   private async load(): Promise<void> {
     const { read, registry } = this.session;
+    this.loadAttempts += 1;
     try {
       const [config, queuedCount, ledger] = await Promise.all([read.config(), read.queuedCount(), this.session.latestLedger()]);
+      if (!this.running) return;
       this.update({ config, queuedCount, ledger });
       try {
         await registry.load();
@@ -168,7 +186,30 @@ export class RtgsStore {
       this.update({ status: "ready" });
       this.followEvents();
     } catch (e) {
+      if (!this.running) return;
       this.update({ status: "error", error: toRtgsError(e) });
+      const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.loadAttempts - 1, 5));
+      this.loadTimer = setTimeout(() => {
+        this.loadTimer = undefined;
+        void this.load();
+      }, delay);
+    }
+  }
+
+  /** After a failed initial load, tries again now instead of waiting for the next retry. */
+  retry(): void {
+    if (!this.running || this.snapshot.status !== "error" || !this.loadTimer) return;
+    clearTimeout(this.loadTimer);
+    this.loadTimer = undefined;
+    void this.load();
+  }
+
+  /** Re-reads the registry; banks it hasn't seen get their views. */
+  private async reloadRegistry(): Promise<void> {
+    try {
+      await this.session.registry.load();
+    } catch {
+      // Kept as it was; the next poll tries again.
     }
   }
 
@@ -208,8 +249,16 @@ export class RtgsStore {
         }
         this.update(patch);
       }),
-      this.session.registry.subscribe(() => this.update({})),
+      this.session.registry.subscribe((banks) => {
+        // A bank new to the registry (registered here, read from the ledger, or seen in an
+        // event) gets its views.
+        for (const b of banks) if (!this.banks.has(b.address)) this.pending.add(b.address);
+        this.update({});
+        this.scheduleRefresh();
+      }),
     );
+    const every = this.options.registryPollMs ?? 30_000;
+    if (every > 0) this.registryTimer = setInterval(() => void this.reloadRegistry(), every);
     feed.start();
   }
 

@@ -116,3 +116,15 @@ describe("wallet signer", () => {
     await expect(signer.signTransaction("XDR", { networkPassphrase: PASSPHRASES.testnet })).rejects.toMatchObject({ kind: "wallet" });
   });
 });
+
+describe("token admin", () => {
+  it("refuses a zero or negative amount before building an operation", async () => {
+    const { TokenAdmin } = await import("../src/token/token-admin.ts");
+    const { Asset } = await import("@stellar/stellar-sdk");
+    const cb = devnetIdentities(devnet!, 0).centralBank;
+    const asset = new Asset("USD", cb.address);
+    const admin = new TokenAdmin({} as never, cb, { sacId: asset.contractId(PASSPHRASES.devnet), code: "USD", issuer: cb.address, asset });
+    await expect(admin.issue(A, 0n)).rejects.toMatchObject({ kind: "token", title: "Invalid amount" });
+    await expect(admin.clawback(A, -5n)).rejects.toMatchObject({ kind: "token", title: "Invalid amount" });
+  });
+});

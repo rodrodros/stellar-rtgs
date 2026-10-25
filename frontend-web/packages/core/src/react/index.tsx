@@ -134,15 +134,19 @@ export function useBankRegistry(): readonly Bank[] {
  */
 export function useLedgerClock(tickMs = 1000): { sequence?: number; closeTime?: number; now?: number } {
   const ledger = useSnapshot((s) => s.ledger);
-  // When this ledger was first seen, recorded during render so the first frame is already right.
-  const received = useRef<{ sequence: number; at: number } | undefined>(undefined);
-  if (ledger && received.current?.sequence !== ledger.sequence) received.current = { sequence: ledger.sequence, at: Date.now() };
+  // The local clock's lead over ledger close time, as small as ever observed: the ledger whose
+  // report arrived soonest after it closed. Taking the minimum keeps `now` from stepping back
+  // when a later report arrives with more lag. Recorded during render so the first frame is right.
+  const offset = useRef<number | undefined>(undefined);
+  if (ledger) {
+    const lead = Date.now() / 1000 - ledger.closeTime;
+    if (offset.current === undefined || lead < offset.current) offset.current = lead;
+  }
   const [, setTick] = useState(0);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), tickMs);
     return () => clearInterval(timer);
   }, [tickMs]);
-  if (!ledger || !received.current) return {};
-  const elapsed = Math.floor((Date.now() - received.current.at) / 1000);
-  return { sequence: ledger.sequence, closeTime: ledger.closeTime, now: ledger.closeTime + elapsed };
+  if (!ledger || offset.current === undefined) return {};
+  return { sequence: ledger.sequence, closeTime: ledger.closeTime, now: Math.floor(Date.now() / 1000 - offset.current) };
 }

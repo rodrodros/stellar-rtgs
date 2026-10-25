@@ -97,6 +97,21 @@ describe("@rtgs/core/react", () => {
     }
   });
 
+  it("never steps back when a later ledger is reported with more lag", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeSession();
+      render(<RtgsProvider session={fake.session}><View /></RtgsProvider>);
+      act(() => void vi.advanceTimersByTime(4000));
+      expect(screen.getByText(/at 1004/)).toBeTruthy();
+      // Ledger 11 closed at 1002 (two seconds ago), reported only now.
+      act(() => fake.set({ ledger: { sequence: 11, closeTime: 1002 } }));
+      expect(screen.getByText(/ledger 11 at 1004/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses hooks outside a provider", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<View />)).toThrow(/RtgsProvider/);

@@ -5,7 +5,7 @@ import { Buffer } from "buffer";
 import { cachedCapabilities, capabilityOverrides, type Capabilities } from "./capabilities.ts";
 import { fromPriority } from "./contract/convert.ts";
 import { SettlementReader, SettlementWriter, mapLimit, type Preview } from "./contract/gateway.ts";
-import { RtgsError } from "./errors.ts";
+import { RtgsError, toRtgsError } from "./errors.ts";
 import { EventFeed, type FeedOptions } from "./events/feed.ts";
 import { analyseQueues, type BankQueues } from "./model/queues.ts";
 import { RtgsStore, type StoreOptions } from "./model/store.ts";
@@ -318,6 +318,8 @@ export async function connect(net: NetworkConfig, options: ConnectOptions = {}):
   try {
     instance = await server.getContractInstance(contractId);
   } catch (e) {
+    // RPC answers a missing instance with { code: 404 }; anything else is a network failure.
+    if ((e as { code?: unknown } | null)?.code !== 404) throw toRtgsError(e);
     throw new RtgsError(
       "config",
       "No settlement contract",

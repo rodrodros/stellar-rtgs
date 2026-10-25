@@ -34,7 +34,7 @@ A session is immutable. To switch networks, call `session.dispose()` and connect
 | Capabilities | `session.capabilities: Record<EntryPoint, "available" \| "stub" \| "unknown">` | Probed by simulating each entry point: a `todo!()` traps. Cached per network, contract and Wasm hash, so reconnecting doesn't probe again. Overrides: `VITE_RTGS_CAPABILITIES=expire=available,credit=stub`. |
 | Signers | `devnetIdentities(net, n)`, `keypairSigner`, `connectWallet(net)`, `disconnectWallet()` (or `signer.disconnect()`) | Devnet keys derive from `VITE_RTGS_DEVNET_SEED`; wallets go through Stellar Wallets Kit (lazy-loaded). Signer methods can be passed around on their own. |
 | Events | `session.events({ from, includeToken, pollMs })` → `EventFeed` | All 12 contract events typed (`RtgsEvent`), cash token events as `TokenEvent`, anything new as `Unknown`. `status()`: `backfilling` until the cursor reaches the latest ledger, then `live`; `cursor`, `cursorLedger`, `oldestLedger`, `retentionWindow`, `clamped`. |
-| Read model | `session.store()` → `{ store, release }`; `store.getSnapshot()` / `subscribe` | `SystemSnapshot`: config, queued count, banks (views), payment orders with lifecycle steps, repos, collateral, recent events, registry, feed status, ledger clock. One shared store per session; `session.store({ feed: { from: { ledger } } })` gives a store of its own, for a replay. A stopped store can't restart. The reducer (`applyEvents`, `emptyState`, `mergePayments`) is exported too. |
+| Read model | `session.store()` → `{ store, release }`; `store.getSnapshot()` / `subscribe` | `SystemSnapshot`: config, queued count, banks (views), payment orders with lifecycle steps, repos, collateral, recent events, registry, feed status, ledger clock. One shared store per session; `session.store({ feed: { from: { ledger } } })` gives a store of its own, for a replay. A stopped store can't restart. A failed initial load (`status: "error"`) is retried with backoff; `store.retry()` retries at once. The store re-reads the bank registry every 30 s (`registryPollMs`), so a bank another app registers appears; `session.registry.load()` does it on demand. The reducer (`applyEvents`, `emptyState`, `mergePayments`) is exported too. |
 | Derived | `flowMatrix(events)`, `netFlows`, `analyseQueues`, `expiresAt`, `isExpired(p, config, now)`, `expirablePayments(payments, config, now)` | Pure functions. Expiry follows the contract: a payment order can be rejected once ledger time is strictly after `expiresAt`. Pass `useLedgerClock().now`, so it stays current between events. |
 | Registry | `session.registry`: `list`, `load`, `nameOf`, `register(cbSigner, {address, name})`, `unregister` | See "Bank registry". |
 | Cash token | `session.token.holding(addr)` / `balance`; `session.tokenAdmin(cbSigner)`: `authorize`, `issue`, `clawback`; `CLAWBACK_LIMITS` | `token-admin.ts` is the only code that assumes the central bank is the issuer and SAC admin (spec fact 3). Clawback from the settlement contract is refused (ADR-0006). |
@@ -55,7 +55,9 @@ A payment order older than the event window has no steps, but its state still co
 
 | Variable | Default |
 |---|---|
-| `VITE_RTGS_DEVNET_RPC_URL` | `http://localhost:8300/rpc` (friendbot is derived from it, C-HB-073) |
+| `VITE_RTGS_DEVNET_RPC_URL` | `http://localhost:8300/rpc` |
+| `VITE_RTGS_DEVNET_FRIENDBOT_URL` | derived from the RPC URL (C-HB-073) |
+| `VITE_RTGS_TESTNET_FRIENDBOT_URL` | `https://friendbot.stellar.org` |
 | `VITE_RTGS_DEVNET_SEED` | `rtgs-devnet-demo` (public demo keys; devnet only) |
 | `VITE_RTGS_<NET>_CONTRACT_ID` | none: devnet discovers it; testnet and mainnet need it, or `<NET>_CENTRAL_BANK` |
 | `VITE_RTGS_<NET>_CENTRAL_BANK` | derived on devnet |
@@ -82,7 +84,7 @@ The registry excludes the central bank and the contract. RPC can't list data ent
 
 ## Limits and flags
 
-- **Event retention.** RPC keeps events for its retention window: 120,960 ledgers, about 7 days, by default. `EventFeed` clamps an older start to the oldest retained ledger, and `status()` reports `clamped` and `oldestLedger`. Older history needs an indexer, which this project doesn't have. Payment orders stay readable through the views (`latestPaymentId` + `payments`); only their event trail is lost.
+- **Event retention.** RPC keeps events for its retention window: 120,960 ledgers, about 7 days, by default. `EventFeed` clamps an older start to the oldest retained ledger, and `status()` reports `clamped` and `oldestLedger`. A saved cursor that has aged out restarts the feed from the window too. Older history needs an indexer, which this project doesn't have. Payment orders stay readable through the views (`latestPaymentId` + `payments`); only their event trail is lost. A payment order whose entry is archived (its time to live ran out) is skipped by `payments()`, and `payment(id)` throws an `archived` error.
 - **No automated keeper.** `expire` and `convertOverdue` run when someone calls them, for example the central bank app. Running them on a schedule needs a server.
 - **Contract layout.** The contract has no `token()` view, so `tokenOfContract` reads `DataKey::Token` from its instance storage, with `VITE_RTGS_<NET>_TOKEN_ID` as a fallback. A `next_payment_id()` view would replace the gallop search in `latestPaymentId`.
 - **Stub types.** While `credit` and `repo` are stubs, the Wasm's spec doesn't define `Credit` or `Repo`, and the events of entry points not yet implemented aren't in it. The generated client is therefore `@ts-nocheck`. Core owns the domain types and decodes all 12 events from `lib.rs`'s layout. The drift tests fail if a spec event or error no longer matches.
