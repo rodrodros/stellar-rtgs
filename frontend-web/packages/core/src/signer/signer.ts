@@ -17,6 +17,8 @@ export interface Signer {
   signTransaction(xdr: string, opts: { networkPassphrase: string }): Promise<string>;
   /** Signs a Soroban authorization entry preimage (base64 XDR), for calls another account submits. */
   signAuthEntry?(entryXdr: string, opts: { networkPassphrase: string }): Promise<string>;
+  /** Wallets only: forgets the connected wallet, so the next `connectWallet` can pick another. */
+  disconnect?(): Promise<void>;
 }
 
 export function assertSamePassphrase(signer: Pick<Signer, "networkPassphrase" | "address">, passphrase: string): void {

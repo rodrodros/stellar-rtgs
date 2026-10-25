@@ -16,27 +16,37 @@ interface RtgsContextValue {
 
 const RtgsContext = createContext<RtgsContextValue | undefined>(undefined);
 
+/** What identifies a network for connecting: its values, not the object's identity. */
+function networkKey(net: NetworkConfig | undefined): string {
+  if (!net) return "";
+  const { id, rpcUrl, passphrase, contractId, centralBank, devnetSeed, allowHttp } = net;
+  return JSON.stringify({ id, rpcUrl, passphrase, contractId, centralBank, devnetSeed, allowHttp });
+}
+
 /**
- * Connects to `network` and reconnects when it (or the options) change, disposing the old
- * session first, so nothing bound to the old network outlives the switch. `key` changes force a
+ * Connects to `network` and reconnects when its values (or the options) change, disposing the
+ * old session first, so nothing bound to the old network outlives the switch. A new but equal
+ * `network` object (e.g. `withOverrides(...)` inline) doesn't reconnect. `key` changes force a
  * reconnect (e.g. after a devnet bootstrap).
  */
 export function useConnection(network: NetworkConfig | undefined, options: ConnectOptions = {}, key?: unknown) {
   const [state, setState] = useState<{ session?: RtgsSession; connecting: boolean; error?: RtgsError }>({ connecting: !!network });
   const [attempt, setAttempt] = useState(0);
   const optionsKey = JSON.stringify({ contractId: options.contractId, ack: options.acknowledgeMainnet });
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
+  const netKey = networkKey(network);
+  const latest = useRef({ network, options });
+  latest.current = { network, options };
 
   useEffect(() => {
-    if (!network) {
+    const { network: net, options: opts } = latest.current;
+    if (!net) {
       setState({ connecting: false });
       return;
     }
     let cancelled = false;
     let session: RtgsSession | undefined;
     setState({ connecting: true });
-    connect(network, optionsRef.current).then(
+    connect(net, opts).then(
       (s) => {
         session = s;
         if (cancelled) s.dispose();
@@ -50,7 +60,7 @@ export function useConnection(network: NetworkConfig | undefined, options: Conne
       cancelled = true;
       session?.dispose();
     };
-  }, [network, optionsKey, key, attempt]);
+  }, [netKey, optionsKey, key, attempt]);
 
   const reconnect = useCallback(() => setAttempt((n) => n + 1), []);
   return { ...state, reconnect };
@@ -124,13 +134,15 @@ export function useBankRegistry(): readonly Bank[] {
  */
 export function useLedgerClock(tickMs = 1000): { sequence?: number; closeTime?: number; now?: number } {
   const ledger = useSnapshot((s) => s.ledger);
-  const [receivedAt, setReceivedAt] = useState(() => Date.now());
+  // When this ledger was first seen, recorded during render so the first frame is already right.
+  const received = useRef<{ sequence: number; at: number } | undefined>(undefined);
+  if (ledger && received.current?.sequence !== ledger.sequence) received.current = { sequence: ledger.sequence, at: Date.now() };
   const [, setTick] = useState(0);
-  useEffect(() => setReceivedAt(Date.now()), [ledger]);
   useEffect(() => {
     const timer = setInterval(() => setTick((n) => n + 1), tickMs);
     return () => clearInterval(timer);
   }, [tickMs]);
-  if (!ledger) return {};
-  return { sequence: ledger.sequence, closeTime: ledger.closeTime, now: ledger.closeTime + Math.floor((Date.now() - receivedAt) / 1000) };
+  if (!ledger || !received.current) return {};
+  const elapsed = Math.floor((Date.now() - received.current.at) / 1000);
+  return { sequence: ledger.sequence, closeTime: ledger.closeTime, now: ledger.closeTime + elapsed };
 }

@@ -6,18 +6,20 @@
 // Framework-agnostic: `subscribe` / `getSnapshot` fit React's `useSyncExternalStore`.
 import type { Capabilities } from "../capabilities.ts";
 import { latestId, mapLimit } from "../contract/gateway.ts";
-import { toRtgsError, type RtgsError } from "../errors.ts";
+import { RtgsError, toRtgsError } from "../errors.ts";
 import type { EventFeed, FeedOptions, FeedStatus } from "../events/feed.ts";
 import type { Bank } from "../registry/banks.ts";
 import type { LedgerClock } from "../rpc.ts";
 import type { BankView, RtgsSession } from "../session.ts";
-import type { Config, FeedEvent, Repo } from "../types.ts";
+import type { Config, FeedEvent, Payment, Repo } from "../types.ts";
 import { applyEvents, emptyState, mergePayments, mergeRepos, type ModelState, type PaymentRecord } from "./reducer.ts";
 
 export interface StoreOptions {
   feed?: FeedOptions;
   /** How many of the newest payment orders to read from the views at start. */
   recentPayments?: number;
+  /** How many of the newest repos to read, once `repo` is implemented. */
+  recentRepos?: number;
   /** How long to gather touched banks before re-reading them. */
   refreshDebounceMs?: number;
 }
@@ -77,7 +79,12 @@ export class RtgsStore {
   private unsubscribers: (() => void)[] = [];
   private pending = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | undefined;
-  private running = false;
+  /** A store runs once: `start()` after `stop()` throws; make a new one instead. */
+  private phase: "new" | "running" | "stopped" = "new";
+  /** Payment orders an event mentioned that the store doesn't know in full. */
+  private pendingPayments = new Set<bigint>();
+  /** Refreshes run one after another, so an older read never overwrites a newer one. */
+  private refreshChain: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly session: RtgsSession,
@@ -120,18 +127,28 @@ export class RtgsStore {
     for (const l of this.listeners) l();
   }
 
+  private get running(): boolean {
+    return this.phase === "running";
+  }
+
   start(): void {
-    if (this.running) return;
-    this.running = true;
+    if (this.phase === "stopped") {
+      throw new RtgsError("config", "Store stopped", "A stopped store can't restart; get a new one from session.store().");
+    }
+    if (this.phase === "running") return;
+    this.phase = "running";
     void this.load();
   }
 
   stop(): void {
-    this.running = false;
+    this.phase = "stopped";
     this.feed?.stop();
     for (const u of this.unsubscribers) u();
     this.unsubscribers = [];
     if (this.timer) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.pending.clear();
+    this.pendingPayments.clear();
   }
 
   private async load(): Promise<void> {
@@ -170,7 +187,9 @@ export class RtgsStore {
     if (capabilities.repo !== "available") return;
     const last = await latestId(async (id) => (await read.repo(id)) !== undefined);
     if (last === undefined) return;
-    const ids = Array.from({ length: Number(last) + 1 }, (_, i) => BigInt(i));
+    const count = BigInt(this.options.recentRepos ?? 200);
+    const from = last + 1n > count ? last + 1n - count : 0n;
+    const ids = Array.from({ length: Number(last - from) + 1 }, (_, i) => from + BigInt(i));
     const repos = (await mapLimit(ids, 8, (id) => read.repo(id))).filter((r): r is Repo => !!r);
     this.model = mergeRepos(this.model, repos);
   }
@@ -183,8 +202,9 @@ export class RtgsStore {
       feed.onStatus((status) => {
         const patch: Partial<SystemSnapshot> = { feed: status };
         if (status.latestLedger !== undefined && status.latestLedgerCloseTime !== undefined) {
+          // A new object only for a new ledger, so the ledger clock doesn't restart every poll.
           const seen = this.snapshot.ledger?.sequence ?? 0;
-          if (status.latestLedger >= seen) patch.ledger = { sequence: status.latestLedger, closeTime: status.latestLedgerCloseTime };
+          if (status.latestLedger > seen) patch.ledger = { sequence: status.latestLedger, closeTime: status.latestLedgerCloseTime };
         }
         this.update(patch);
       }),
@@ -194,45 +214,66 @@ export class RtgsStore {
   }
 
   private onEvents(batch: FeedEvent[]): void {
+    if (!this.running) return;
     this.model = applyEvents(this.model, batch);
     const added = this.session.registry.observe(this.model.seen);
-    for (const e of batch) for (const a of touchedBy(e, this.model)) this.pending.add(a);
+    for (const e of batch) {
+      for (const a of touchedBy(e, this.model)) this.pending.add(a);
+      // An event about a payment order older than what the store loaded: read it in full.
+      if (e.type === "Settled" || e.type === "Revoked" || e.type === "Expired" || e.type === "Reprioritised") {
+        const known = this.model.payments.get(e.id);
+        if (!known || known.partial) this.pendingPayments.add(e.id);
+      }
+    }
     for (const a of added) this.pending.add(a);
     this.update({});
     this.scheduleRefresh();
   }
 
   private scheduleRefresh(): void {
-    if (this.timer || !this.pending.size) return;
+    if (this.timer || (!this.pending.size && !this.pendingPayments.size)) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
       const banks = [...this.pending];
+      const payments = [...this.pendingPayments];
       this.pending.clear();
-      void this.refresh(banks);
+      this.pendingPayments.clear();
+      void this.enqueue(banks, payments);
     }, this.options.refreshDebounceMs ?? 250);
   }
 
+  private enqueue(banks: string[] | undefined, payments: bigint[] = []): Promise<void> {
+    this.refreshChain = this.refreshChain.then(() => this.runRefresh(banks, payments));
+    return this.refreshChain;
+  }
+
   /** Re-reads the given banks (default: all known) and the queued count from the views. */
-  async refresh(banks?: string[]): Promise<void> {
+  refresh(banks?: string[]): Promise<void> {
+    return this.enqueue(banks);
+  }
+
+  private async runRefresh(banks: string[] | undefined, payments: bigint[]): Promise<void> {
+    if (!this.running) return;
     try {
       const queuedCount = await this.session.read.queuedCount();
+      if (payments.length) {
+        const found = await mapLimit(payments, 8, (id) => this.session.read.payment(id));
+        if (!this.running) return;
+        this.model = mergePayments(this.model, found.filter((p): p is Payment => !!p));
+      }
       await this.refreshBanks(banks ?? this.session.registry.list().map((b) => b.address));
-      this.update({ queuedCount });
+      if (this.running) this.update({ queuedCount });
     } catch (e) {
-      this.update({ error: toRtgsError(e) });
+      if (this.running) this.update({ error: toRtgsError(e) });
     }
   }
 
   private async refreshBanks(addresses: string[]): Promise<void> {
     const known = new Set(this.session.registry.list().map((b) => b.address));
     const targets = addresses.filter((a) => known.has(a));
-    const views = await mapLimit(targets, 4, (address) =>
-      this.session.read.bank(address, {
-        ...(this.snapshot.config ? { config: this.snapshot.config } : {}),
-        ...(this.snapshot.ledger ? { now: this.snapshot.ledger.closeTime } : {}),
-      }),
-    );
-    if (!this.running && this.snapshot.status !== "loading") return;
+    const config = this.snapshot.config;
+    const views = await mapLimit(targets, 4, (address) => this.session.read.bank(address, config ? { config } : {}));
+    if (!this.running) return;
     const banks = new Map(this.banks);
     for (const view of views) {
       const name = this.session.registry.get(view.address)?.name;

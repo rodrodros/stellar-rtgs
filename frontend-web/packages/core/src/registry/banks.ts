@@ -111,7 +111,11 @@ export class BankRegistry {
   /** The central bank registers (or renames) a bank on its account. */
   async register(cb: Signer, entry: { address: string; name?: string }): Promise<TxOutcome> {
     const outcome = await registerBank(this.ctx, cb, this.centralBank, entry);
-    this.add(entry, "ledger");
+    // Mirror what the ledger now holds: the trimmed name, or none (the devnet label, if any).
+    this.add({ address: entry.address }, "ledger");
+    const known = this.banks.get(entry.address)!;
+    const name = entry.name?.trim() || this.devnetName(entry.address);
+    this.banks.set(entry.address, name ? { ...known, name } : { address: known.address, sources: known.sources });
     this.emit();
     return outcome;
   }

@@ -44,6 +44,34 @@ function failure(codes: string[], cause?: unknown): RtgsError {
   return new RtgsError("transaction", "Transaction failed", `The network refused it: ${codes.join(", ")}.`, { cause });
 }
 
+/**
+ * The contract error a failed Soroban transaction reports in its diagnostic events, preferring
+ * one raised by `contractId`.
+ */
+export function diagnosticContractError(response: { diagnosticEventsXdr?: xdr.DiagnosticEvent[] }, contractId?: string): number | undefined {
+  let any: number | undefined;
+  for (const diagnostic of response.diagnosticEventsXdr ?? []) {
+    const body = diagnostic.event.body.v0;
+    for (const value of [...body.topics, body.data]) {
+      if (value.type !== "scvError" || value.error.type !== "sceContract") continue;
+      if (contractId && contractIdOf(diagnostic.event) === contractId) return value.error.contractCode;
+      any ??= value.error.contractCode;
+    }
+  }
+  return any;
+}
+
+/** Why a transaction failed when applied: its contract error if it has one, else its result codes. */
+export function failedTransaction(
+  response: rpc.Api.GetFailedTransactionResponse,
+  contractId: string | undefined,
+  source: "settlement" | "sac" = "settlement",
+): RtgsError {
+  const code = diagnosticContractError(response, contractId);
+  if (code !== undefined) return toRtgsError(`Error(Contract, #${code})`, source);
+  return failure(resultCodes(response.resultXdr), response);
+}
+
 /** The settlement contract's events in a confirmed transaction, with RPC's event ids. */
 export function outcomeEvents(
   response: rpc.Api.GetSuccessfulTransactionResponse,
@@ -75,8 +103,16 @@ export function outcomeEvents(
   return events;
 }
 
+export function notConfirmed(txHash: string): RtgsError {
+  return new RtgsError("transaction", "Not confirmed", `Transaction ${txHash} was not seen in a closed ledger in time.`);
+}
+
 /** Polls until the transaction is in a closed ledger; throws on failure. */
-export async function confirm(ctx: TxContext, txHash: string): Promise<TxOutcome<xdr.ScVal | undefined>> {
+export async function confirm(
+  ctx: TxContext,
+  txHash: string,
+  source: "settlement" | "sac" = "settlement",
+): Promise<TxOutcome<xdr.ScVal | undefined>> {
   let response: rpc.Api.GetTransactionResponse;
   try {
     response = await ctx.server.pollTransaction(txHash, { attempts: POLL_ATTEMPTS, sleepStrategy: () => 1000 });
@@ -92,12 +128,17 @@ export async function confirm(ctx: TxContext, txHash: string): Promise<TxOutcome
       events: outcomeEvents(response, txHash, ctx.contractId),
     };
   }
-  if (response.status === rpc.Api.GetTransactionStatus.FAILED) throw failure(resultCodes(response.resultXdr), response);
-  throw new RtgsError("transaction", "Not confirmed", `Transaction ${txHash} was not seen in a closed ledger in time.`);
+  if (response.status === rpc.Api.GetTransactionStatus.FAILED) throw failedTransaction(response, ctx.contractId, source);
+  throw notConfirmed(txHash);
 }
 
 /** Signs with `signer` (refusing another network) and sends; returns the confirmed outcome. */
-export async function signAndSend(ctx: TxContext, signer: Signer, tx: Transaction): Promise<TxOutcome<xdr.ScVal | undefined>> {
+export async function signAndSend(
+  ctx: TxContext,
+  signer: Signer,
+  tx: Transaction,
+  source: "settlement" | "sac" = "settlement",
+): Promise<TxOutcome<xdr.ScVal | undefined>> {
   assertSamePassphrase(signer, ctx.net.passphrase);
   const signedXdr = await signer.signTransaction(tx.toXDR(), { networkPassphrase: ctx.net.passphrase });
   const signed = TransactionBuilder.fromXDR(signedXdr, ctx.net.passphrase);
@@ -113,7 +154,7 @@ export async function signAndSend(ctx: TxContext, signer: Signer, tx: Transactio
   if (sent.status === "TRY_AGAIN_LATER") {
     throw new RtgsError("transaction", "Network busy", "RPC asked to try again later.");
   }
-  return confirm(ctx, sent.hash);
+  return confirm(ctx, sent.hash, source);
 }
 
 async function builder(ctx: TxContext, source: string): Promise<TransactionBuilder> {
@@ -156,7 +197,7 @@ export async function sendInvoke(
   } catch (e) {
     throw toRtgsError(e, source);
   }
-  return signAndSend(ctx, signer, prepared);
+  return signAndSend(ctx, signer, prepared, source);
 }
 
 /** Simulates one read-only Soroban operation and returns its value. */

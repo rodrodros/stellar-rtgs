@@ -1,5 +1,5 @@
 // The cash token: a classic asset used through its Stellar Asset Contract (ADR-0003).
-import { Asset, Contract, scValToNative, StrKey } from "@stellar/stellar-sdk";
+import { Asset, Contract, scValToNative, StrKey, type xdr } from "@stellar/stellar-sdk";
 import { RtgsError, toRtgsError } from "../errors.ts";
 import { simulateRead, type TxContext } from "../tx.ts";
 
@@ -18,9 +18,14 @@ export interface CashToken {
  * contract has no `token()` view yet; this is the one place that relies on its storage layout,
  * and `fallback` (from config) covers a layout change.
  */
-export async function tokenOfContract(ctx: TxContext, contractId: string, fallback?: string): Promise<string> {
+export async function tokenOfContract(
+  ctx: TxContext,
+  contractId: string,
+  fallback?: string,
+  instance?: xdr.ScContractInstance,
+): Promise<string> {
   try {
-    const instance = await ctx.server.getContractInstance(contractId);
+    instance ??= await ctx.server.getContractInstance(contractId);
     for (const entry of instance.storage ?? []) {
       const key = scValToNative(entry.key) as unknown;
       if (Array.isArray(key) && key[0] === "Token") return String(scValToNative(entry.val));

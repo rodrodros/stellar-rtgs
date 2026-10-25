@@ -10,8 +10,9 @@
 //   6. the SAC admin authorizes the contract to hold the cash token;
 //   7. publish the contract id and the bank registry on the central bank's account.
 //
-// Every step checks what is already there first, so a rerun resumes. The devnet is reset
-// often, after which everything is created afresh.
+// Every step checks what is already there first, so a rerun resumes; a published contract
+// running another Wasm is replaced. The devnet is reset often, after which everything is
+// created afresh.
 import { Asset, AuthClawbackEnabledFlag, AuthRequiredFlag, AuthRevocableFlag, hash, Operation } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { Client as SettlementClient } from "../generated/settlement.ts";
@@ -135,14 +136,19 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
   });
 
   const contractId = await run("contract", async () => {
+    let why = "";
     if (!options.fresh) {
       const { contractId: published } = await discoverDeployment(ctx, cb.address);
-      if (published && (await exists(() => server.getContractInstance(published)))) {
+      const runs = published ? await deployedWasmHash(ctx, published) : undefined;
+      // Reuse the published contract only if it runs this Wasm: after `pnpm bindings`, an old
+      // contract would lack what the new bindings expect.
+      if (published && runs === Buffer.from(hash(Buffer.from(wasm))).toString("hex")) {
         return { value: published, skipped: true, detail: published };
       }
+      if (runs) why = ` (replaces ${published}, which runs an older Wasm)`;
     }
     const id = await deploySettlement(ctx, cb, wasm, token.sacId, config);
-    return { value: id, detail: id };
+    return { value: id, detail: id + why };
   });
 
   await run("authorize-contract", async () => {
@@ -173,6 +179,16 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
     centralBank: cb.address,
     banks: ids.banks.map((b) => ({ label: b.label!, address: b.address })),
   };
+}
+
+/** The hex hash of the Wasm a contract runs, or undefined if there is no such contract. */
+async function deployedWasmHash(ctx: TxContext, contractId: string): Promise<string | undefined> {
+  try {
+    const { executable } = await ctx.server.getContractInstance(contractId);
+    return executable.type === "contractExecutableWasm" ? Buffer.from(executable.wasmHash.value).toString("hex") : "";
+  } catch {
+    return undefined;
+  }
 }
 
 async function exists(read: () => Promise<unknown>): Promise<boolean> {

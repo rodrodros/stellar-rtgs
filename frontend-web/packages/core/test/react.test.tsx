@@ -82,6 +82,21 @@ describe("@rtgs/core/react", () => {
     }
   });
 
+  it("doesn't jump back when the same ledger is reported again", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeSession();
+      render(<RtgsProvider session={fake.session}><View /></RtgsProvider>);
+      act(() => void vi.advanceTimersByTime(3000));
+      act(() => fake.set({ ledger: { sequence: 10, closeTime: 1000 } }));
+      expect(screen.getByText(/ledger 10 at 1003/)).toBeTruthy();
+      act(() => fake.set({ ledger: { sequence: 11, closeTime: 1005 } }));
+      expect(screen.getByText(/ledger 11 at 1005/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses hooks outside a provider", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<View />)).toThrow(/RtgsProvider/);

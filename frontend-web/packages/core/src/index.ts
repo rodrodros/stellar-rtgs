@@ -7,10 +7,13 @@ export {
   PASSPHRASES,
   defaultNetwork,
   devnetFriendbotUrl,
+  ledgerUrl,
   loadNetworks,
   mainnetEnabled,
   overridesStore,
   parseBanks,
+  readEnv,
+  txUrl,
   withOverrides,
   type BankEntry,
   type Env,
@@ -24,7 +27,7 @@ export type { LedgerClock } from "./rpc.ts";
 // Signers
 export type { Signer } from "./signer/signer.ts";
 export { CENTRAL_BANK_LABEL, bankLabel, deriveDevnetKeypair, devnetIdentities, keypairSigner, type DevnetIdentities } from "./signer/keypair.ts";
-export { connectWallet } from "./signer/wallet.ts";
+export { connectWallet, disconnectWallet } from "./signer/wallet.ts";
 
 // Contract
 export { NO_ID, type Preview } from "./contract/gateway.ts";
@@ -33,10 +36,10 @@ export type * from "./types.ts";
 
 // Events and read models
 export { EVENT_SCHEMAS } from "./events/decode.ts";
-export { EventFeed, type FeedOptions, type FeedStart, type FeedStatus } from "./events/feed.ts";
+export { EventFeed, cursorLedger, type FeedOptions, type FeedStart, type FeedStatus } from "./events/feed.ts";
 export { RtgsStore, type StoreOptions, type SystemSnapshot } from "./model/store.ts";
-export type { LifecycleStep, PaymentRecord } from "./model/reducer.ts";
-export { analyseQueues, covers, expiresAt, type BankQueues, type QueueAnalysis } from "./model/queues.ts";
+export { applyEvents, emptyState, mergePayments, mergeRepos, type LifecycleStep, type ModelState, type PaymentRecord } from "./model/reducer.ts";
+export { analyseQueues, covers, expirablePayments, expiresAt, isExpired, type BankQueues, type QueueAnalysis } from "./model/queues.ts";
 export { flowMatrix, netFlows, type FlowMatrix } from "./model/flows.ts";
 
 // Bank registry and the cash token

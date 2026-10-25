@@ -34,6 +34,13 @@ describe("devnet keypair signer", () => {
     expect(() => keypairSigner(Keypair.random(), { passphrase: PASSPHRASES.mainnet })).toThrow(/devnet/);
   });
 
+  it("keeps its network check when a method is passed around on its own", async () => {
+    const { signTransaction } = keypairSigner(Keypair.random(), devnet!);
+    await expect(signTransaction(tx(Networks.TESTNET), { networkPassphrase: Networks.TESTNET })).rejects.toMatchObject({
+      kind: "network-mismatch",
+    });
+  });
+
   it("signs devnet transactions and refuses another passphrase", async () => {
     const kp = Keypair.random();
     const signer = keypairSigner(kp, devnet!);
@@ -80,6 +87,22 @@ describe("wallet signer", () => {
     const signer = walletSigner(kit, A, testnet!);
     await expect(signer.signTransaction("XDR", { networkPassphrase: PASSPHRASES.testnet })).rejects.toThrow(/another network/);
     expect(kit.signTransaction).not.toHaveBeenCalled();
+  });
+
+  it("checks the wallet's network before signing an auth entry too", async () => {
+    const kit = fakeKit(PASSPHRASES.mainnet);
+    const signer = walletSigner(kit, A, testnet!);
+    await expect(signer.signAuthEntry!("ENTRY", { networkPassphrase: PASSPHRASES.testnet })).rejects.toMatchObject({ kind: "network-mismatch" });
+    expect(kit.signAuthEntry).not.toHaveBeenCalled();
+  });
+
+  it("works when its methods are passed around on their own, and can disconnect", async () => {
+    const kit = fakeKit();
+    const { signTransaction, disconnect } = walletSigner(kit, A, testnet!);
+    await expect(signTransaction("XDR", { networkPassphrase: PASSPHRASES.mainnet })).rejects.toMatchObject({ kind: "network-mismatch" });
+    expect(await signTransaction("XDR", { networkPassphrase: PASSPHRASES.testnet })).toBe("XDR+signed");
+    await disconnect!();
+    expect(kit.disconnect).toHaveBeenCalled();
   });
 
   it("is not offered on the devnet", async () => {

@@ -21,20 +21,22 @@ function assertDevnet(passphrase: string): void {
 export function keypairSigner(keypair: Keypair, net: Pick<NetworkConfig, "passphrase">, label?: string): Signer {
   assertDevnet(net.passphrase);
   const sdk = contract.basicNodeSigner(keypair, DEVNET);
-  return {
+  // Methods close over `signer`, not `this`, so they work when passed around on their own.
+  const signer: Signer = {
     kind: "devnet-keypair",
     address: keypair.publicKey(),
     networkPassphrase: DEVNET,
     ...(label === undefined ? {} : { label }),
     async signTransaction(xdr, opts) {
-      assertSamePassphrase(this, opts.networkPassphrase);
+      assertSamePassphrase(signer, opts.networkPassphrase);
       return (await sdk.signTransaction(xdr, { networkPassphrase: DEVNET })).signedTxXdr;
     },
     async signAuthEntry(entry, opts) {
-      assertSamePassphrase(this, opts.networkPassphrase);
+      assertSamePassphrase(signer, opts.networkPassphrase);
       return (await sdk.signAuthEntry(entry, { networkPassphrase: DEVNET })).signedAuthEntry;
     },
   };
+  return signer;
 }
 
 /** `sha256(seed + ":" + label)` as an ed25519 seed. Public by design: devnet demo keys. */

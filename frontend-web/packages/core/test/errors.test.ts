@@ -38,6 +38,16 @@ describe("error mapping", () => {
     expect(toRtgsError(new Error("User rejected the request"))).toMatchObject({ kind: "wallet" });
   });
 
+  it("maps a missing contract and a missing data entry", () => {
+    expect(toRtgsError("HostError: Error(Storage, MissingValue)")).toMatchObject({ kind: "config", title: "Nothing deployed there" });
+    expect(toRtgsError("tx_failed op_success op_name_not_found")).toMatchObject({ title: "No such data entry" });
+  });
+
+  it("names the cash token's issuer, not the central bank (spec fact 3)", () => {
+    for (const t of Object.values(CONTRACT_ERRORS)) expect(t.detail).not.toMatch(/central bank/i);
+    expect(toRtgsError("op_not_authorized").detail).not.toMatch(/central bank/i);
+  });
+
   it("passes an RtgsError through", () => {
     const e = new RtgsError("config", "x", "y");
     expect(toRtgsError(e)).toBe(e);

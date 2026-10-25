@@ -23,6 +23,11 @@ export interface LifecycleStep {
 export interface PaymentRecord extends Payment {
   /** The steps the event feed has seen; empty for a payment order older than its window. */
   steps: LifecycleStep[];
+  /**
+   * Built from a `Settled` event alone: its priority class and submission time are unknown
+   * (shown as normal and the settlement time) until the store reads it from the views.
+   */
+  partial?: true;
 }
 
 export interface ModelState {
@@ -113,6 +118,7 @@ function apply(state: ModelState, event: RtgsEvent): void {
         submittedAt: event.closedAt,
         status: "queued" as const,
         steps: [],
+        partial: true as const,
       };
       const submittedHere = record.steps.some((s) => s.kind === "submitted" && s.txHash === event.txHash);
       const first = state.tx.first;
@@ -211,7 +217,8 @@ export function mergePayments(state: ModelState, payments: readonly Payment[]): 
       continue;
     }
     const status = FINAL.has(known.status) && p.status === "queued" ? known.status : p.status;
-    next.set(p.id, { ...known, ...p, status, steps: known.steps });
+    const { partial: _partial, ...rest } = known;
+    next.set(p.id, { ...rest, ...p, status, steps: known.steps });
   }
   return { ...state, payments: next };
 }

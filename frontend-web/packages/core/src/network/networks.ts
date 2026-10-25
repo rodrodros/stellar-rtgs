@@ -31,6 +31,29 @@ export interface NetworkConfig {
   /** The seed devnet identities derive from (devnet only). */
   devnetSeed?: string;
   allowHttp: boolean;
+  /** Block explorer URL templates, with `{hash}` and `{ledger}`; none for the devnet. */
+  explorer?: { txUrl: string; ledgerUrl: string };
+}
+
+const STELLAR_EXPERT = (path: "testnet" | "public") => ({
+  txUrl: `https://stellar.expert/explorer/${path}/tx/{hash}`,
+  ledgerUrl: `https://stellar.expert/explorer/${path}/ledger/{ledger}`,
+});
+
+/** A link to a transaction on the network's explorer, if it has one. */
+export function txUrl(net: Pick<NetworkConfig, "explorer">, hash: string): string | undefined {
+  return net.explorer?.txUrl.replace("{hash}", encodeURIComponent(hash));
+}
+
+/** A link to a ledger on the network's explorer, if it has one. */
+export function ledgerUrl(net: Pick<NetworkConfig, "explorer">, ledger: number): string | undefined {
+  return net.explorer?.ledgerUrl.replace("{ledger}", String(ledger));
+}
+
+function explorerFrom(env: Env, net: string, fallback?: { txUrl: string; ledgerUrl: string }) {
+  const txUrl = readEnv(env, `${net}_EXPLORER_TX_URL`) ?? fallback?.txUrl;
+  const ledgerUrl = readEnv(env, `${net}_EXPLORER_LEDGER_URL`) ?? fallback?.ledgerUrl;
+  return txUrl && ledgerUrl ? { explorer: { txUrl, ledgerUrl } } : {};
 }
 
 /** The public demo seed. Devnet only: the signers refuse any other network. */
@@ -41,7 +64,8 @@ const TESTNET_FRIENDBOT = "https://friendbot.stellar.org";
 
 export type Env = Record<string, string | boolean | undefined>;
 
-function read(env: Env, name: string): string | undefined {
+/** `VITE_RTGS_<name>` (Vite), else `RTGS_<name>` (Node); empty counts as unset. */
+export function readEnv(env: Env, name: string): string | undefined {
   const value = env[`VITE_RTGS_${name}`] ?? env[`RTGS_${name}`];
   if (value === undefined || value === "") return undefined;
   return String(value);
@@ -92,7 +116,7 @@ function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]
 }
 
 export function mainnetEnabled(env: Env): boolean {
-  return read(env, "ENABLE_MAINNET") === "true";
+  return readEnv(env, "ENABLE_MAINNET") === "true";
 }
 
 /**
@@ -100,44 +124,47 @@ export function mainnetEnabled(env: Env): boolean {
  * it has no default RPC, so `VITE_RTGS_MAINNET_RPC_URL` must be set too.
  */
 export function loadNetworks(env: Env = {}): NetworkConfig[] {
-  const devnetRpc = read(env, "DEVNET_RPC_URL") ?? DEFAULT_DEVNET_RPC;
+  const devnetRpc = readEnv(env, "DEVNET_RPC_URL") ?? DEFAULT_DEVNET_RPC;
   const networks: NetworkConfig[] = [
     {
       id: "devnet",
       label: "Devnet (local)",
       rpcUrl: devnetRpc,
       passphrase: PASSPHRASES.devnet,
-      friendbotUrl: read(env, "DEVNET_FRIENDBOT_URL") ?? devnetFriendbotUrl(devnetRpc),
-      ...optional("contractId", read(env, "DEVNET_CONTRACT_ID")),
-      ...optional("centralBank", read(env, "DEVNET_CENTRAL_BANK")),
-      banks: parseBanks(read(env, "DEVNET_BANKS")),
-      devnetSeed: read(env, "DEVNET_SEED") ?? DEFAULT_DEVNET_SEED,
+      friendbotUrl: readEnv(env, "DEVNET_FRIENDBOT_URL") ?? devnetFriendbotUrl(devnetRpc),
+      ...optional("contractId", readEnv(env, "DEVNET_CONTRACT_ID")),
+      ...optional("centralBank", readEnv(env, "DEVNET_CENTRAL_BANK")),
+      banks: parseBanks(readEnv(env, "DEVNET_BANKS")),
+      devnetSeed: readEnv(env, "DEVNET_SEED") ?? DEFAULT_DEVNET_SEED,
       allowHttp: true,
+      ...explorerFrom(env, "DEVNET"),
     },
   ];
-  const testnetRpc = read(env, "TESTNET_RPC_URL") ?? DEFAULT_TESTNET_RPC;
+  const testnetRpc = readEnv(env, "TESTNET_RPC_URL") ?? DEFAULT_TESTNET_RPC;
   networks.push({
     id: "testnet",
     label: "Testnet",
     rpcUrl: testnetRpc,
     passphrase: PASSPHRASES.testnet,
-    friendbotUrl: read(env, "TESTNET_FRIENDBOT_URL") ?? TESTNET_FRIENDBOT,
-    ...optional("contractId", read(env, "TESTNET_CONTRACT_ID")),
-    ...optional("centralBank", read(env, "TESTNET_CENTRAL_BANK")),
-    banks: parseBanks(read(env, "TESTNET_BANKS")),
+    friendbotUrl: readEnv(env, "TESTNET_FRIENDBOT_URL") ?? TESTNET_FRIENDBOT,
+    ...optional("contractId", readEnv(env, "TESTNET_CONTRACT_ID")),
+    ...optional("centralBank", readEnv(env, "TESTNET_CENTRAL_BANK")),
+    banks: parseBanks(readEnv(env, "TESTNET_BANKS")),
     allowHttp: isLocal(testnetRpc),
+    ...explorerFrom(env, "TESTNET", STELLAR_EXPERT("testnet")),
   });
   if (mainnetEnabled(env)) {
-    const mainnetRpc = read(env, "MAINNET_RPC_URL") ?? "";
+    const mainnetRpc = readEnv(env, "MAINNET_RPC_URL") ?? "";
     networks.push({
       id: "mainnet",
       label: "Mainnet",
       rpcUrl: mainnetRpc,
       passphrase: PASSPHRASES.mainnet,
-      ...optional("contractId", read(env, "MAINNET_CONTRACT_ID")),
-      ...optional("centralBank", read(env, "MAINNET_CENTRAL_BANK")),
-      banks: parseBanks(read(env, "MAINNET_BANKS")),
+      ...optional("contractId", readEnv(env, "MAINNET_CONTRACT_ID")),
+      ...optional("centralBank", readEnv(env, "MAINNET_CENTRAL_BANK")),
+      banks: parseBanks(readEnv(env, "MAINNET_BANKS")),
       allowHttp: false,
+      ...explorerFrom(env, "MAINNET", STELLAR_EXPERT("public")),
     });
   }
   return networks;
@@ -145,7 +172,7 @@ export function loadNetworks(env: Env = {}): NetworkConfig[] {
 
 /** The network to select first: `VITE_RTGS_DEFAULT_NETWORK` if offered and not mainnet, else devnet. */
 export function defaultNetwork(networks: NetworkConfig[], env: Env = {}): NetworkConfig {
-  const wanted = read(env, "DEFAULT_NETWORK");
+  const wanted = readEnv(env, "DEFAULT_NETWORK");
   const found = networks.find((n) => n.id === wanted && n.id !== "mainnet");
   return found ?? networks.find((n) => n.id === "devnet") ?? networks[0]!;
 }

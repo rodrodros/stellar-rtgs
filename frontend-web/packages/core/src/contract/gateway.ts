@@ -5,7 +5,7 @@ import { rpc, scValToNative, type contract } from "@stellar/stellar-sdk";
 import { Client as SettlementClient } from "../generated/settlement.ts";
 import { contractError, CONTRACT_ERRORS, RtgsError, toRtgsError } from "../errors.ts";
 import { sdkSigning, type Signer, assertSamePassphrase } from "../signer/signer.ts";
-import { outcomeEvents, type TxContext } from "../tx.ts";
+import { signAndSend, type TxContext } from "../tx.ts";
 import type { Config, Credit, Payment, Priority, Repo, TxOutcome } from "../types.ts";
 import { fromPriority, toConfig, toCredit, toPayment, toRepo } from "./convert.ts";
 
@@ -184,27 +184,16 @@ export class SettlementWriter {
     }
   }
 
-  /** Simulates, signs, sends and confirms; the outcome carries the call's value and events. */
+  /**
+   * Simulates, signs, sends and confirms; the outcome carries the call's value and events. The
+   * assembled transaction goes through core's own send path, so a failure when applied is
+   * reported with its contract error or result codes.
+   */
   async send<T>(make: (c: Client) => Promise<Assembled<unknown>>): Promise<TxOutcome<T>> {
     const tx = await build(() => make(this.client));
     simulated(tx);
-    let sent: contract.SentTransaction<unknown>;
-    try {
-      sent = await tx.signAndSend();
-    } catch (e) {
-      throw toRtgsError(e);
-    }
-    const response = sent.getTransactionResponse;
-    const txHash = sent.sendTransactionResponse?.hash ?? "";
-    if (!response || response.status !== rpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new RtgsError("transaction", "Transaction failed", `Transaction ${txHash} did not succeed.`);
-    }
-    return {
-      txHash,
-      ledger: response.ledger,
-      closedAt: Number(response.createdAt),
-      value: unwrap<T>(sent.result),
-      events: outcomeEvents(response, txHash, this.ctx.contractId),
-    };
+    const outcome = await signAndSend(this.ctx, this.signer, tx.built!);
+    const value = outcome.value === undefined ? undefined : tx.options.parseResultXdr(outcome.value);
+    return { ...outcome, value: unwrap<T>(value) };
   }
 }

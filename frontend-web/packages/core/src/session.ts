@@ -1,14 +1,15 @@
 // A session: one network, one settlement contract. It is immutable; switching networks means
 // `dispose()` and `connect()` again, which also drops every signer bound to the old network.
 import { Operation } from "@stellar/stellar-sdk";
-import { capabilityOverrides, probeCapabilities, type Capabilities } from "./capabilities.ts";
+import { Buffer } from "buffer";
+import { cachedCapabilities, capabilityOverrides, type Capabilities } from "./capabilities.ts";
 import { fromPriority } from "./contract/convert.ts";
 import { SettlementReader, SettlementWriter, mapLimit, type Preview } from "./contract/gateway.ts";
 import { RtgsError } from "./errors.ts";
 import { EventFeed, type FeedOptions } from "./events/feed.ts";
 import { analyseQueues, type BankQueues } from "./model/queues.ts";
 import { RtgsStore, type StoreOptions } from "./model/store.ts";
-import type { Env, NetworkConfig } from "./network/networks.ts";
+import { readEnv, type Env, type NetworkConfig } from "./network/networks.ts";
 import { BankRegistry } from "./registry/banks.ts";
 import { discoverDeployment } from "./registry/ledger.ts";
 import { assertNetwork, latestLedger, rpcServer, type LedgerClock, type RpcServer } from "./rpc.ts";
@@ -56,7 +57,7 @@ export class RtgsReader extends SettlementReader {
   }
 
   /** Balance, both queues as payment orders, what blocks their heads, and credit. */
-  async bank(address: string, opts: { config?: Config; now?: number; known?: Map<bigint, Payment> } = {}): Promise<BankView> {
+  async bank(address: string, opts: { config?: Config; known?: Map<bigint, Payment> } = {}): Promise<BankView> {
     const [balance, urgentIds, normalIds, credit] = await Promise.all([
       this.balance(address),
       this.queue(address, "urgent"),
@@ -66,7 +67,7 @@ export class RtgsReader extends SettlementReader {
     const load = async (ids: bigint[]) =>
       (await mapLimit(ids, 8, async (id) => opts.known?.get(id) ?? this.payment(id))).filter((p): p is Payment => !!p);
     const queues = { urgent: await load(urgentIds), normal: await load(normalIds) };
-    const view: BankView = { address, balance, queues, analysis: analyseQueues(balance, queues, opts.config, opts.now) };
+    const view: BankView = { address, balance, queues, analysis: analyseQueues(balance, queues, opts.config) };
     if (credit) view.credit = credit;
     return view;
   }
@@ -172,7 +173,8 @@ export class RtgsSession {
   readonly registry: BankRegistry;
   readonly token: CashTokenReader;
   private readonly ctx: TxContext & { contractId: string };
-  private sharedStore: { store: RtgsStore; users: number } | undefined;
+  private sharedStore: { store: RtgsStore; users: number; key: string } | undefined;
+  private readonly ownStores = new Set<RtgsStore>();
   private disposed = false;
   private readonly feeds = new Set<EventFeed>();
 
@@ -211,20 +213,47 @@ export class RtgsSession {
   /** A new event feed; `includeToken` adds the cash token's SAC events. Stopped on dispose. */
   events(options: FeedOptions = {}): EventFeed {
     this.assertLive();
-    const feed = new EventFeed({ server: this.server, contractId: this.contractId, sacId: this.cashToken.sacId }, options);
-    this.feeds.add(feed);
-    return feed;
+    return new EventFeed({ server: this.server, contractId: this.contractId, sacId: this.cashToken.sacId }, options, {
+      onStart: (feed) => this.feeds.add(feed),
+      onStop: (feed) => this.feeds.delete(feed),
+    });
   }
 
   /**
-   * The shared read model. Each caller must `release()` it; the store stops when the last one
-   * does, or on dispose.
+   * The read model. Without `feed.from` it is the session's shared store, created with the
+   * first caller's options; a later caller asking for other options gets an error rather than
+   * silently different behaviour. With `feed.from` (a replay from a chosen ledger or cursor) it
+   * is a store of its own. Either way each caller must `release()` it; a store stops when its
+   * last user releases it, or on dispose.
    */
   store(options: StoreOptions = {}): { store: RtgsStore; release: () => void } {
     this.assertLive();
+    if (options.feed?.from !== undefined) {
+      const store = new RtgsStore(this, options);
+      this.ownStores.add(store);
+      store.start();
+      let released = false;
+      return {
+        store,
+        release: () => {
+          if (released) return;
+          released = true;
+          store.stop();
+          this.ownStores.delete(store);
+        },
+      };
+    }
+    const key = JSON.stringify(options);
+    if (this.sharedStore && this.sharedStore.key !== key) {
+      throw new RtgsError(
+        "config",
+        "Store options differ",
+        "The session's shared store was created with other options; pass feed.from for a store of your own.",
+      );
+    }
     if (!this.sharedStore) {
       const store = new RtgsStore(this, options);
-      this.sharedStore = { store, users: 0 };
+      this.sharedStore = { store, users: 0, key };
       store.start();
     }
     const shared = this.sharedStore;
@@ -250,10 +279,11 @@ export class RtgsSession {
 
   dispose(): void {
     this.disposed = true;
-    for (const feed of this.feeds) feed.stop();
-    this.feeds.clear();
+    for (const feed of [...this.feeds]) feed.stop();
     this.sharedStore?.store.stop();
     this.sharedStore = undefined;
+    for (const store of this.ownStores) store.stop();
+    this.ownStores.clear();
   }
 }
 
@@ -284,11 +314,23 @@ export async function connect(net: NetworkConfig, options: ConnectOptions = {}):
         : `Set the ${net.label} contract id.`,
     );
   }
+  let instance;
+  try {
+    instance = await server.getContractInstance(contractId);
+  } catch (e) {
+    throw new RtgsError(
+      "config",
+      "No settlement contract",
+      `Nothing is deployed at ${contractId} on ${net.label}; it may have been reset. Clear the contract id or run the bootstrap.`,
+      { cause: e },
+    );
+  }
+  const wasmHash = instance.executable.type === "contractExecutableWasm" ? Buffer.from(instance.executable.wasmHash.value).toString("hex") : "";
   const reader = new SettlementReader({ ...ctx, contractId });
   const centralBank = await reader.centralBank();
-  const fallback = options.env?.[`VITE_RTGS_${net.id.toUpperCase()}_TOKEN_ID`];
-  const sacId = await tokenOfContract(ctx, contractId, typeof fallback === "string" ? fallback : undefined);
+  const env = options.env ?? {};
+  const sacId = await tokenOfContract(ctx, contractId, readEnv(env, `${net.id.toUpperCase()}_TOKEN_ID`), instance);
   const cashToken = await readCashToken(ctx, sacId);
-  const capabilities = await probeCapabilities(reader, centralBank, capabilityOverrides(options.env ?? {}));
+  const capabilities = await cachedCapabilities(`${net.passphrase}|${contractId}|${wasmHash}`, reader, centralBank, capabilityOverrides(env));
   return new RtgsSession(net, server, contractId, centralBank, cashToken, capabilities);
 }

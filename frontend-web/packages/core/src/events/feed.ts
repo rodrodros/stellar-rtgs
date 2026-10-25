@@ -25,18 +25,23 @@ export interface FeedOptions {
 }
 
 export interface FeedStatus {
+  /** `backfilling` until the feed has read up to the latest ledger, then `live`. */
   state: "idle" | "backfilling" | "live" | "error";
   /** Resume from here to continue without gaps. */
   cursor?: string;
+  /** The ledger the cursor has read up to. */
+  cursorLedger?: number;
   /** The ledger the feed started from, after clamping to the retention window. */
   startLedger?: number;
-  /** True if the requested start was older than the retention window. */
+  /** True if the requested start (or a saved cursor) was older than the retention window. */
   clamped: boolean;
   latestLedger?: number;
   latestLedgerCloseTime?: number;
   /** The oldest ledger RPC still serves: nothing older can be replayed. */
   oldestLedger?: number;
   oldestLedgerCloseTime?: number;
+  /** How many ledgers RPC keeps (its retention window). */
+  retentionWindow?: number;
   error?: RtgsError;
 }
 
@@ -48,19 +53,38 @@ export interface FeedSource {
 
 const MAX_BACKOFF_MS = 30_000;
 
+/** The ledger a `getEvents` cursor points into: the high 32 bits of its TOID. */
+export function cursorLedger(cursor: string): number | undefined {
+  const toid = cursor.split("-")[0];
+  if (!toid || !/^\d+$/.test(toid)) return undefined;
+  return Number(BigInt(toid) >> 32n);
+}
+
+/** RPC's refusal of a start or cursor outside its retention window. */
+function outsideRetention(error: RtgsError): boolean {
+  return /ledger range|retention|cursor/i.test(error.detail);
+}
+
 export class EventFeed {
   private readonly listeners = new Set<(batch: FeedEvent[]) => void>();
   private readonly statusListeners = new Set<(status: FeedStatus) => void>();
   private current: FeedStatus = { state: "idle", clamped: false };
   private timer: ReturnType<typeof setTimeout> | undefined;
   private running = false;
+  /** Bumped by every start and stop, so a tick from an earlier run can't schedule another. */
+  private generation = 0;
   private lastId = "";
   private failures = 0;
+  private from: FeedStart;
 
   constructor(
     private readonly source: FeedSource,
     private readonly options: FeedOptions = {},
-  ) {}
+    /** Lets an owner (the session) track running feeds, to stop them on dispose. */
+    private readonly hooks: { onStart?: (feed: EventFeed) => void; onStop?: (feed: EventFeed) => void } = {},
+  ) {
+    this.from = options.from ?? "retention-start";
+  }
 
   /** Receives each batch of new events, in order. */
   subscribe(listener: (batch: FeedEvent[]) => void): () => void {
@@ -80,14 +104,18 @@ export class EventFeed {
   start(): void {
     if (this.running) return;
     this.running = true;
-    void this.tick();
+    this.generation += 1;
+    this.hooks.onStart?.(this);
+    void this.tick(this.generation);
   }
 
   stop(): void {
     this.running = false;
+    this.generation += 1;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.setStatus({ state: "idle" });
+    this.hooks.onStop?.(this);
   }
 
   private setStatus(patch: Partial<FeedStatus>): void {
@@ -96,9 +124,9 @@ export class EventFeed {
     for (const l of this.statusListeners) l(this.current);
   }
 
-  private schedule(ms: number): void {
-    if (!this.running) return;
-    this.timer = setTimeout(() => void this.tick(), ms);
+  private schedule(generation: number, ms: number): void {
+    if (generation !== this.generation) return;
+    this.timer = setTimeout(() => void this.tick(generation), ms);
   }
 
   private filters(): rpc.Api.EventFilter[] {
@@ -107,60 +135,73 @@ export class EventFeed {
     return [{ type: "contract", contractIds: ids }];
   }
 
-  /** The first request: a start ledger within the retention window, or a cursor. */
+  /** The first request: a start ledger within the retention window, or a saved cursor. */
   private async firstRequest(limit: number): Promise<rpc.Api.GetEventsRequest> {
-    const from = this.options.from ?? "retention-start";
-    if (typeof from === "object" && "cursor" in from) return { filters: this.filters(), cursor: from.cursor, limit };
     const health = await this.source.server.getHealth();
+    this.setStatus({
+      oldestLedger: health.oldestLedger,
+      latestLedger: health.latestLedger,
+      retentionWindow: health.ledgerRetentionWindow,
+    });
+    const from = this.from;
+    if (typeof from === "object" && "cursor" in from) return { filters: this.filters(), cursor: from.cursor, limit };
     let startLedger = health.oldestLedger;
-    let clamped = false;
+    let clamped = this.current.clamped;
     if (from === "now") startLedger = health.latestLedger;
     else if (typeof from === "object") {
-      clamped = from.ledger < health.oldestLedger;
+      clamped = clamped || from.ledger < health.oldestLedger;
       startLedger = Math.min(Math.max(from.ledger, health.oldestLedger), health.latestLedger);
     }
-    this.setStatus({ startLedger, clamped, oldestLedger: health.oldestLedger, latestLedger: health.latestLedger });
+    this.setStatus({ startLedger, clamped });
     return { filters: this.filters(), startLedger, limit };
   }
 
-  private async tick(): Promise<void> {
-    if (!this.running) return;
+  private async tick(generation: number): Promise<void> {
+    if (generation !== this.generation) return;
     const limit = this.options.pageLimit ?? 1000;
     try {
       const request: rpc.Api.GetEventsRequest = this.current.cursor
         ? { filters: this.filters(), cursor: this.current.cursor, limit }
         : await this.firstRequest(limit);
       const response = await this.source.server.getEvents(request);
-      if (!this.running) return;
+      if (generation !== this.generation) return;
       const batch = response.events.filter((e) => e.id > this.lastId).map((e) => this.decode(e));
       const last = batch.at(-1);
       if (last) this.lastId = last.eventId;
       this.failures = 0;
-      const full = response.events.length >= limit;
+      // RPC scans a bounded range of ledgers per request, so a short page doesn't mean caught
+      // up: the cursor's ledger does.
+      const reached = cursorLedger(response.cursor);
+      const behind = response.events.length >= limit || (reached !== undefined && reached < response.latestLedger);
       this.setStatus({
-        state: full ? "backfilling" : "live",
+        state: behind ? "backfilling" : "live",
         cursor: response.cursor,
+        ...(reached === undefined ? {} : { cursorLedger: reached }),
         latestLedger: response.latestLedger,
         latestLedgerCloseTime: Number(response.latestLedgerCloseTime),
         oldestLedger: response.oldestLedger,
         oldestLedgerCloseTime: Number(response.oldestLedgerCloseTime),
       });
       if (batch.length) for (const l of this.listeners) l(batch);
-      this.schedule(full ? 0 : (this.options.pollMs ?? 2000));
+      this.schedule(generation, behind ? 0 : (this.options.pollMs ?? 2000));
     } catch (e) {
-      if (!this.running) return;
+      if (generation !== this.generation) return;
       const error = toRtgsError(e);
-      // A cursor that fell out of the retention window: restart from its oldest ledger.
-      if (this.current.cursor && /cursor|out of range|before|retention/i.test(error.detail)) {
-        delete this.current.cursor;
-        this.setStatus({ clamped: true });
-      }
       this.failures += 1;
+      // A start or cursor that fell out of the retention window: restart from its oldest
+      // ledger, once, at once.
+      const resumable = this.current.cursor !== undefined || (typeof this.from === "object" && "cursor" in this.from);
+      if (outsideRetention(error) && (resumable || typeof this.from === "object") && this.failures === 1) {
+        delete this.current.cursor;
+        this.from = "retention-start";
+        this.setStatus({ state: "backfilling", clamped: true });
+        this.schedule(generation, 0);
+        return;
+      }
       this.setStatus({ state: "error", error });
-      this.schedule(Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(this.failures, 5)));
+      this.schedule(generation, Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(this.failures, 5)));
     }
   }
-
   private decode(e: rpc.Api.EventResponse): FeedEvent {
     return decodeFeedEvent(
       {

@@ -72,12 +72,12 @@ export class TokenAdmin {
   }
 
   /**
-   * Claws back `amount` stroops a bank holds in its trustline (ADR-0006). Refused against the
-   * settlement contract: its holdings back the settlement balances, so clawing them back would
-   * break conservation (S1) without touching any recorded payment.
+   * Claws back `amount` stroops a bank holds in its trustline (ADR-0006). Refused against any
+   * contract, the settlement contract first of all: its holdings back the settlement balances,
+   * so clawing them back would break conservation (S1) without touching any recorded payment.
    */
-  async clawback(from: string, amount: bigint, settlementContractId?: string): Promise<TxOutcome> {
-    if (StrKey.isValidContract(from) || from === settlementContractId) {
+  async clawback(from: string, amount: bigint): Promise<TxOutcome> {
+    if (StrKey.isValidContract(from)) {
       throw new RtgsError("token", "Clawback refused", CLAWBACK_LIMITS);
     }
     return sendClassic(this.ctx, this.signer, [

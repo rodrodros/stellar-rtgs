@@ -28,18 +28,18 @@ A session is immutable. To switch networks, call `session.dispose()` and connect
 
 | Area | What | Notes |
 |---|---|---|
-| Networks | `loadNetworks(env)`, `defaultNetwork`, `withOverrides`, `overridesStore(localStorage, app)` | Env vars below. Runtime overrides per app and network. |
-| Reads | `session.read`: `config`, `centralBank`, `queuedCount`, `balance`, `payment`, `queue`, `credit`, `repo`, `bank(addr)`, `latestPaymentId`, `payments({from,to})` | `bank()` = balance + both queues as payment orders + `QueueAnalysis` (head, `covered`, `blockedBy: "uncovered" \| "urgent-queued"`, `expiresAt`, `expired`) + credit when implemented. |
+| Networks | `loadNetworks(env)`, `defaultNetwork`, `withOverrides`, `overridesStore(localStorage, app)`, `txUrl(net, hash)`, `ledgerUrl(net, seq)` | Env vars below. Runtime overrides per app and network. Explorer links default to stellar.expert on testnet and mainnet, none on the devnet. |
+| Reads | `session.read`: `config`, `centralBank`, `queuedCount`, `balance`, `payment`, `queue`, `credit`, `repo`, `bank(addr)`, `latestPaymentId`, `payments({from,to})` | `bank()` = balance + both queues as payment orders + `QueueAnalysis` (head, `covered`, `blockedBy: "uncovered" \| "urgent-queued"`, `expiresAt`) + credit when implemented. |
 | Writes | `session.as(signer)` → `RtgsActor`: `deposit`, `withdraw`, `submit`, `revoke`, `reprioritise`, `repay`, `setCollateral`, `openRepo`, `expire`, `convertOverdue`, `openTrustline`; `actor.simulate.*` dry runs | Each returns `TxOutcome { txHash, ledger, closedAt, value, events }`. `submit`'s value is `{ id, disposition: "settled" \| "queued" }`. |
-| Capabilities | `session.capabilities: Record<EntryPoint, "available" \| "stub" \| "unknown">` | Probed by simulating each entry point: a `todo!()` traps. Overrides: `VITE_RTGS_CAPABILITIES=expire=available,credit=stub`. |
-| Signers | `devnetIdentities(net, n)`, `keypairSigner`, `connectWallet(net)` | Devnet keys derive from `VITE_RTGS_DEVNET_SEED`; wallets go through Stellar Wallets Kit (lazy-loaded). |
-| Events | `session.events({ from, includeToken, pollMs })` → `EventFeed` | All 12 contract events typed (`RtgsEvent`), cash token events as `TokenEvent`, anything new as `Unknown`. |
-| Read model | `session.store()` → `{ store, release }`; `store.getSnapshot()` / `subscribe` | `SystemSnapshot`: config, queued count, banks (views), payment orders with lifecycle steps, repos, collateral, recent events, registry, feed status, ledger clock. |
-| Derived | `flowMatrix(events)`, `netFlows`, `analyseQueues`, `expiresAt` | Pure functions. |
+| Capabilities | `session.capabilities: Record<EntryPoint, "available" \| "stub" \| "unknown">` | Probed by simulating each entry point: a `todo!()` traps. Cached per network, contract and Wasm hash, so reconnecting doesn't probe again. Overrides: `VITE_RTGS_CAPABILITIES=expire=available,credit=stub`. |
+| Signers | `devnetIdentities(net, n)`, `keypairSigner`, `connectWallet(net)`, `disconnectWallet()` (or `signer.disconnect()`) | Devnet keys derive from `VITE_RTGS_DEVNET_SEED`; wallets go through Stellar Wallets Kit (lazy-loaded). Signer methods can be passed around on their own. |
+| Events | `session.events({ from, includeToken, pollMs })` → `EventFeed` | All 12 contract events typed (`RtgsEvent`), cash token events as `TokenEvent`, anything new as `Unknown`. `status()`: `backfilling` until the cursor reaches the latest ledger, then `live`; `cursor`, `cursorLedger`, `oldestLedger`, `retentionWindow`, `clamped`. |
+| Read model | `session.store()` → `{ store, release }`; `store.getSnapshot()` / `subscribe` | `SystemSnapshot`: config, queued count, banks (views), payment orders with lifecycle steps, repos, collateral, recent events, registry, feed status, ledger clock. One shared store per session; `session.store({ feed: { from: { ledger } } })` gives a store of its own, for a replay. A stopped store can't restart. The reducer (`applyEvents`, `emptyState`, `mergePayments`) is exported too. |
+| Derived | `flowMatrix(events)`, `netFlows`, `analyseQueues`, `expiresAt`, `isExpired(p, config, now)`, `expirablePayments(payments, config, now)` | Pure functions. Expiry follows the contract: a payment order can be rejected once ledger time is strictly after `expiresAt`. Pass `useLedgerClock().now`, so it stays current between events. |
 | Registry | `session.registry`: `list`, `load`, `nameOf`, `register(cbSigner, {address, name})`, `unregister` | See "Bank registry". |
 | Cash token | `session.token.holding(addr)` / `balance`; `session.tokenAdmin(cbSigner)`: `authorize`, `issue`, `clawback`; `CLAWBACK_LIMITS` | `token-admin.ts` is the only code that assumes the central bank is the issuer and SAC admin (spec fact 3). Clawback from the settlement contract is refused (ADR-0006). |
 | Errors | `RtgsError { kind, code?, title, detail }`, `toRtgsError(e)` | Contract codes 1–16, SAC errors, classic result codes, RPC, wallet, stubs (`not-implemented`). |
-| Devnet | `bootstrapDevnet({ network, wasm, banks, cash, config, onStep })`, `loadSettlementWasm()` | Browser or Node (`pnpm devnet:bootstrap`). |
+| Devnet | `bootstrapDevnet({ network, wasm, banks, cash, config, onStep })`, `loadSettlementWasm()` | Browser or Node (`pnpm devnet:bootstrap`). A rerun reuses the deployment, unless the published contract runs another Wasm: then it deploys a new one. |
 | React | `useConnection`, `RtgsProvider`, `useSession`, `useStore`, `useSnapshot(selector)`, `useCapabilities`, `useEvents`, `useFeedStatus`, `useBankRegistry`, `useLedgerClock` | From `@rtgs/core/react`. No components. |
 
 ### Payment lifecycle
@@ -49,7 +49,7 @@ A session is immutable. To switch networks, call `session.dispose()` and connect
 - `via: "eager-closure"`: released later, with `trigger: { type, actor, paymentId? }` naming the action in the same transaction that released it, for example another bank's `Deposited`.
 - `via: "offset"`: in an `Offset`.
 
-A payment order older than the event window has no steps, but its state still comes from the views.
+A payment order older than the event window has no steps, but its state still comes from the views. One the store first meets in a `Settled` event is marked `partial` until the store has read it from the views.
 
 ## Env
 
@@ -61,6 +61,7 @@ A payment order older than the event window has no steps, but its state still co
 | `VITE_RTGS_<NET>_CENTRAL_BANK` | derived on devnet |
 | `VITE_RTGS_<NET>_BANKS` | none. `G…:Name,G…:Name` or JSON `[{ "address", "name" }]` |
 | `VITE_RTGS_<NET>_TOKEN_ID` | none. A fallback if the contract's token can't be read |
+| `VITE_RTGS_<NET>_EXPLORER_TX_URL`, `_EXPLORER_LEDGER_URL` | stellar.expert on testnet and mainnet. Templates with `{hash}` and `{ledger}` |
 | `VITE_RTGS_TESTNET_RPC_URL` | `https://soroban-testnet.stellar.org` |
 | `VITE_RTGS_ENABLE_MAINNET` | off. `true` lists mainnet |
 | `VITE_RTGS_MAINNET_RPC_URL` | none; required for mainnet |
@@ -77,7 +78,7 @@ The contract keeps no list of banks (spec fact 2). The registry is the union of 
 - the devnet identities;
 - every address the event feed mentions.
 
-The registry excludes the central bank and the contract. The same account also carries `rtgs.settlement`, the contract id, which is how every app finds the current devnet deployment after a reset, with no server and whatever its origin.
+The registry excludes the central bank and the contract. RPC can't list data entries, so readers scan indices in batches of 50 and stop at the first batch with no bank. Registration fills the lowest free index, but if 50 consecutive indices are unregistered, the banks above them are no longer found. The same account also carries `rtgs.settlement`, the contract id, which is how every app finds the current devnet deployment after a reset, with no server and whatever its origin.
 
 ## Limits and flags
 
@@ -100,7 +101,12 @@ The script runs `stellar contract bindings typescript`, which stellar-cli 28.1.0
 ## Tests
 
 ```sh
-pnpm test                # unit tests, including Wasm drift guards and a Vite browser build
+pnpm test                # unit tests, including Wasm drift guards, recorded devnet events and a Vite browser build
 IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../stellar-implementation devnet-up
 RTGS_DEVNET_RPC=http://localhost:8350/rpc pnpm test:e2e   # bootstraps a fresh deployment each run
+docker rm -f impl-fe-core
 ```
+
+Remove only your own container. Don't use `make devnet-down` while other devnets run: `devnet/down.sh` deletes the shared `.devnet/` folder of stellar-cli identities that every devnet uses.
+
+`RTGS_RECORD_FIXTURES=1` on an e2e run rewrites `test/fixtures/devnet-events.json`, the raw events the unit tests decode.

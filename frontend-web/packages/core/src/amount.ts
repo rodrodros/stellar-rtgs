@@ -12,12 +12,19 @@ export function formatAmount(stroops: bigint, decimals = CASH_DECIMALS): string 
   return `${negative ? "-" : ""}${whole}${fraction ? `.${fraction}` : ""}`;
 }
 
-/** `"1234.5"` -> `12345000000n`. Throws on anything but a plain decimal with at most `decimals` places. */
-export function parseAmount(text: string, decimals = CASH_DECIMALS): bigint {
-  const match = /^(-)?(\d+)(?:\.(\d+))?$/.exec(text.trim().replaceAll(",", ""));
+/**
+ * `"1234.5"` or `"1,234.5"` -> `12345000000n`. Throws on anything but a plain decimal with at
+ * most `decimals` places; commas only as thousands separators. No entry point takes a negative
+ * amount, so a sign is refused unless `allowNegative`.
+ */
+export function parseAmount(text: string, opts: { decimals?: number; allowNegative?: boolean } = {}): bigint {
+  const decimals = opts.decimals ?? CASH_DECIMALS;
+  const match = /^(-)?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?$/.exec(text.trim());
   if (!match) throw new Error(`not an amount: "${text}"`);
-  const [, sign, whole, fraction = ""] = match;
+  const [, sign, grouped, fraction = ""] = match;
+  if (sign && !opts.allowNegative) throw new Error(`"${text}" is negative`);
+  const whole = grouped!.replaceAll(",", "");
   if (fraction.length > decimals) throw new Error(`"${text}" has more than ${decimals} decimal places`);
-  const stroops = BigInt(whole!) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0");
+  const stroops = BigInt(whole) * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, "0") || "0");
   return sign ? -stroops : stroops;
 }

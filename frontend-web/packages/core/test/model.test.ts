@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyEvents, emptyState, mergePayments } from "../src/model/reducer.ts";
-import { analyseQueues, expiresAt } from "../src/model/queues.ts";
+import { analyseQueues, expirablePayments, expiresAt, isExpired } from "../src/model/queues.ts";
 import { flowMatrix, netFlows } from "../src/model/flows.ts";
 import type { Config, Payment, RtgsEvent } from "../src/types.ts";
 import { A, B, C, meta } from "./helpers.ts";
@@ -63,8 +63,21 @@ describe("reducer", () => {
     expect(s.payments.get(1n)!.status).toBe("expired");
     const view: Payment = { id: 0n, from: A, to: B, amount: 10n, priority: "urgent", submittedAt: 1, status: "queued" };
     expect(mergePayments(s, [view]).payments.get(0n)!.status).toBe("revoked");
-    // Replaying the same events changes nothing.
+  });
+
+  it("ignores events it has already applied (same event ids)", () => {
+    const s = applyEvents(emptyState(), [submitted(1, "t1", 0n), settled(2, "t2", 0n)]);
     expect(applyEvents(s, s.events).payments).toEqual(s.payments);
+  });
+
+  it("marks a payment order known only from its settlement as partial until the views fill it in", () => {
+    const s = applyEvents(emptyState(), [settled(5, "t5", 9n, A, B, 7n)]);
+    expect(s.payments.get(9n)).toMatchObject({ status: "settled", partial: true });
+    const view: Payment = { id: 9n, from: A, to: B, amount: 7n, priority: "urgent", submittedAt: 3, status: "settled", settledAt: 25 };
+    const merged = mergePayments(s, [view]).payments.get(9n)!;
+    expect(merged).toMatchObject({ priority: "urgent", submittedAt: 3, status: "settled" });
+    expect(merged.partial).toBeUndefined();
+    expect(merged.steps.map((x) => x.kind)).toEqual(["settled"]);
   });
 
   it("tracks repos and collateral", () => {
@@ -94,16 +107,29 @@ describe("queue analysis", () => {
   });
 
   it("blocks normal payments behind queued urgent ones (S7)", () => {
-    const q = analyseQueues(1000n, { urgent: [p(1n, 5000n, "urgent")], normal: [p(0n, 1n, "normal")] }, config, 1050);
-    expect(q.urgent).toMatchObject({ length: 1, covered: false, blockedBy: "uncovered", expiresAt: 1100, expired: false });
+    const q = analyseQueues(1000n, { urgent: [p(1n, 5000n, "urgent")], normal: [p(0n, 1n, "normal")] }, config);
+    expect(q.urgent).toMatchObject({ length: 1, covered: false, blockedBy: "uncovered", expiresAt: 1100 });
     expect(q.normal).toMatchObject({ covered: true, blockedBy: "urgent-queued" });
   });
 
-  it("reports an uncovered head and its expiry on the ledger clock", () => {
-    const q = analyseQueues(0n, { urgent: [], normal: [p(0n, 1n, "normal", 900)] }, config, 1000);
-    expect(q.normal).toMatchObject({ blockedBy: "uncovered", expiresAt: 1000, expired: true });
-    expect(q.urgent).toMatchObject({ length: 0, covered: false, expired: false });
+  it("reports an uncovered head and its expiry", () => {
+    const q = analyseQueues(0n, { urgent: [], normal: [p(0n, 1n, "normal", 900)] }, config);
+    expect(q.normal).toMatchObject({ blockedBy: "uncovered", expiresAt: 1000 });
+    expect(q.urgent).toMatchObject({ length: 0, covered: false });
+    expect(q.urgent.expiresAt).toBeUndefined();
     expect(expiresAt(p(0n, 1n, "normal", 5), config)).toBe(105);
+  });
+
+  it("expires strictly after the expiry, as the contract does (NotExpired at the boundary)", () => {
+    const payment = p(0n, 1n, "normal", 900);
+    expect(isExpired(payment, config, 1000)).toBe(false);
+    expect(isExpired(payment, config, 1001)).toBe(true);
+    expect(isExpired({ ...payment, status: "settled" }, config, 5000)).toBe(false);
+  });
+
+  it("lists every expirable queued payment order, not just heads, oldest first", () => {
+    const list = [p(3n, 1n, "normal", 950), p(1n, 1n, "urgent", 800), p(2n, 1n, "normal", 990), { ...p(0n, 1n, "normal", 0), status: "revoked" as const }];
+    expect(expirablePayments(list, config, 1060).map((x) => x.id)).toEqual([1n, 3n]);
   });
 
   it("covers exactly when the balance after paying is non-negative", () => {

@@ -1,5 +1,6 @@
-// What a bank's queues look like right now: heads, what blocks them, expiry (ADR-0008,
-// ADR-0009, ADR-0015). Pure functions of views and the ledger clock.
+// What a bank's queues look like: heads, what blocks them, expiry (ADR-0008, ADR-0009,
+// ADR-0015). Pure functions of the views; whether something has expired depends on the ledger
+// clock, so it is asked with `isExpired(…, now)` rather than stored.
 import type { Config, Payment, Priority } from "../types.ts";
 
 export interface QueueAnalysis {
@@ -14,10 +15,8 @@ export interface QueueAnalysis {
    * has urgent payment orders queued, which go first (S7).
    */
   blockedBy?: "uncovered" | "urgent-queued";
-  /** When the head may be rejected (Unix seconds of ledger close time). */
+  /** The head's expiry; see `expiresAt`. */
   expiresAt?: number;
-  /** Whether the head's expiry has passed: a keeper may reject it now. */
-  expired: boolean;
 }
 
 export interface BankQueues {
@@ -25,9 +24,22 @@ export interface BankQueues {
   normal: QueueAnalysis;
 }
 
-/** The ledger time after which a queued payment order may be rejected (ADR-0015). */
+/**
+ * A queued payment order's expiry (ADR-0015), in ledger time. The contract rejects it only
+ * once the ledger time is strictly after this (`expire` refuses with `NotExpired` at it).
+ */
 export function expiresAt(payment: Payment, config: Config): number {
   return payment.submittedAt + config.expirySecs;
+}
+
+/** Whether a keeper may reject the queued payment order at ledger time `now`. */
+export function isExpired(payment: Payment, config: Config, now: number): boolean {
+  return payment.status === "queued" && now > expiresAt(payment, config);
+}
+
+/** Every queued payment order a keeper may reject at `now`, oldest first. */
+export function expirablePayments(payments: Iterable<Payment>, config: Config, now: number): Payment[] {
+  return [...payments].filter((p) => isExpired(p, config, now)).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
 /** `rtgs_core::covers`: paying leaves the sender's balance non-negative. */
@@ -35,30 +47,21 @@ export function covers(balance: bigint, amount: bigint): boolean {
   return balance - amount >= 0n;
 }
 
-function analyse(priority: Priority, queue: Payment[], balance: bigint, urgentQueued: boolean, config?: Config, now?: number): QueueAnalysis {
+function analyse(priority: Priority, queue: Payment[], balance: bigint, urgentQueued: boolean, config?: Config): QueueAnalysis {
   const head = queue[0];
-  const analysis: QueueAnalysis = { priority, length: queue.length, covered: false, expired: false };
+  const analysis: QueueAnalysis = { priority, length: queue.length, covered: false };
   if (!head) return analysis;
   analysis.head = head;
   analysis.covered = covers(balance, head.amount);
   if (priority === "normal" && urgentQueued) analysis.blockedBy = "urgent-queued";
   else if (!analysis.covered) analysis.blockedBy = "uncovered";
-  if (config) {
-    analysis.expiresAt = expiresAt(head, config);
-    analysis.expired = now !== undefined && now >= analysis.expiresAt;
-  }
+  if (config) analysis.expiresAt = expiresAt(head, config);
   return analysis;
 }
 
-/** `now`: the latest ledger's close time, the RTGS's clock (not the local clock). */
-export function analyseQueues(
-  balance: bigint,
-  queues: { urgent: Payment[]; normal: Payment[] },
-  config?: Config,
-  now?: number,
-): BankQueues {
+export function analyseQueues(balance: bigint, queues: { urgent: Payment[]; normal: Payment[] }, config?: Config): BankQueues {
   return {
-    urgent: analyse("urgent", queues.urgent, balance, false, config, now),
-    normal: analyse("normal", queues.normal, balance, queues.urgent.length > 0, config, now),
+    urgent: analyse("urgent", queues.urgent, balance, false, config),
+    normal: analyse("normal", queues.normal, balance, queues.urgent.length > 0, config),
   };
 }

@@ -7,7 +7,7 @@ import type { contract } from "@stellar/stellar-sdk";
 import { isWasmTrap } from "./errors.ts";
 import { fromPriority } from "./contract/convert.ts";
 import { mapLimit, NO_ID, type SettlementReader } from "./contract/gateway.ts";
-import type { Env } from "./network/networks.ts";
+import { readEnv, type Env } from "./network/networks.ts";
 
 export const ENTRY_POINTS = [
   "deposit",
@@ -76,8 +76,29 @@ export function parseCapabilityOverrides(text: string | undefined): Partial<Capa
 }
 
 export function capabilityOverrides(env: Env): Partial<Capabilities> {
-  const text = env.VITE_RTGS_CAPABILITIES ?? env.RTGS_CAPABILITIES;
-  return parseCapabilityOverrides(typeof text === "string" ? text : undefined);
+  return parseCapabilityOverrides(readEnv(env, "CAPABILITIES"));
+}
+
+/**
+ * Probe results per network, contract and Wasm hash: the same code answers the same way, so a
+ * reconnect or a network switch back doesn't repeat the 12 simulations.
+ */
+const probed = new Map<string, Capabilities>();
+
+/** `probeCapabilities`, cached by `key` (passphrase, contract id and Wasm hash). */
+export async function cachedCapabilities(
+  key: string,
+  reader: SettlementReader,
+  someone: string,
+  overrides: Partial<Capabilities> = {},
+): Promise<Capabilities> {
+  let caps = probed.get(key);
+  if (!caps) {
+    caps = await probeCapabilities(reader, someone);
+    // Don't cache a probe that couldn't decide, e.g. during an RPC hiccup.
+    if (!Object.values(caps).includes("unknown")) probed.set(key, caps);
+  }
+  return { ...caps, ...overrides };
 }
 
 /** `someone`: any address, e.g. the central bank. */

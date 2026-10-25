@@ -51,12 +51,13 @@ async function assertWalletNetwork(kit: WalletKit, passphrase: string): Promise<
 }
 
 export function walletSigner(kit: WalletKit, address: string, net: NetworkConfig): Signer {
-  return {
+  // Methods close over `signer`, not `this`, so they work when passed around on their own.
+  const signer: Signer = {
     kind: "wallet",
     address,
     networkPassphrase: net.passphrase,
     async signTransaction(xdr, opts) {
-      assertSamePassphrase(this, opts.networkPassphrase);
+      assertSamePassphrase(signer, opts.networkPassphrase);
       await assertWalletNetwork(kit, net.passphrase);
       try {
         return (await kit.signTransaction(xdr, { networkPassphrase: net.passphrase, address })).signedTxXdr;
@@ -65,14 +66,17 @@ export function walletSigner(kit: WalletKit, address: string, net: NetworkConfig
       }
     },
     async signAuthEntry(entry, opts) {
-      assertSamePassphrase(this, opts.networkPassphrase);
+      assertSamePassphrase(signer, opts.networkPassphrase);
+      await assertWalletNetwork(kit, net.passphrase);
       try {
         return (await kit.signAuthEntry(entry, { networkPassphrase: net.passphrase, address })).signedAuthEntry;
       } catch (e) {
         throw walletError(e);
       }
     },
+    disconnect: () => kit.disconnect(),
   };
+  return signer;
 }
 
 function walletError(e: unknown): RtgsError {
@@ -95,4 +99,10 @@ export async function connectWallet(net: NetworkConfig, kit?: WalletKit): Promis
   }
   await assertWalletNetwork(k, net.passphrase);
   return walletSigner(k, address, net);
+}
+
+/** Forgets the connected wallet, if the kit was ever loaded; `connectWallet` then asks again. */
+export async function disconnectWallet(): Promise<void> {
+  if (!kitPromise) return;
+  await (await kitPromise).disconnect();
 }

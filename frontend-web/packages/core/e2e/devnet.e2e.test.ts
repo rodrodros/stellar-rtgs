@@ -2,7 +2,9 @@
 //   IMPL_NAME=impl-fe-core IMPL_PORT=8350 make -C ../stellar-implementation devnet-up
 //   RTGS_DEVNET_RPC=http://localhost:8350/rpc pnpm test:e2e
 // Each run uses a fresh seed, so it bootstraps its own central bank, banks and contract.
-import { Keypair } from "@stellar/stellar-sdk";
+import { writeFileSync } from "node:fs";
+import { Keypair, xdr } from "@stellar/stellar-sdk";
+import { decodeBody } from "../src/events/decode.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   bootstrapDevnet,
@@ -12,6 +14,7 @@ import {
   loadNetworks,
   parseAmount,
   PASSPHRASES,
+  isExpired,
   withOverrides,
   type Deployment,
   type DevnetIdentities,
@@ -90,6 +93,22 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     await expect(connect({ ...net, id: "testnet", passphrase: PASSPHRASES.testnet })).rejects.toMatchObject({ kind: "network-mismatch" });
   });
 
+  it("reports a contract id with nothing deployed as a configuration error", async () => {
+    await expect(connect(net, { contractId: "CBBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEE5XW" })).rejects.toMatchObject({
+      kind: "config",
+      title: "No settlement contract",
+    });
+  });
+
+  it("reuses the deployment when the bootstrap runs again", async () => {
+    const again: string[] = [];
+    const rerun = await bootstrapDevnet({ network: net, wasm: await readSettlementWasm(), config: CONFIG, banks: 3, onStep: (s) => again.push(`${s.status} ${s.step}`) });
+    expect(rerun.contractId).toBe(deployment.contractId);
+    expect(again.filter((s) => !s.startsWith("start"))).toEqual(
+      ["fund", "issuer-flags", "sac", "banks", "contract", "authorize-contract", "publish"].map((s) => `skipped ${s}`),
+    );
+  });
+
   it("refuses mainnet without the app's confirmation", async () => {
     await expect(connect({ ...net, id: "mainnet", passphrase: PASSPHRASES.mainnet })).rejects.toMatchObject({
       kind: "mainnet-not-acknowledged",
@@ -122,6 +141,20 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
       expect(b.name).toMatch(/^Bank \d$/);
       expect(b.sources).toEqual(expect.arrayContaining(["ledger", "devnet"]));
     }
+  });
+
+  it("registers, renames and unregisters a bank with or without a name", async () => {
+    const extra = Keypair.random().publicKey();
+    await session.registry.register(ids.centralBank, { address: extra });
+    expect(session.registry.get(extra)).toEqual({ address: extra, sources: ["ledger"] });
+    await session.registry.register(ids.centralBank, { address: extra, name: "  Extra Bank  " });
+    expect(session.registry.get(extra)!.name).toBe("Extra Bank");
+    await session.registry.register(ids.centralBank, { address: extra });
+    expect(session.registry.get(extra)!.name).toBeUndefined();
+    await session.registry.unregister(ids.centralBank, extra);
+    expect(session.registry.get(extra)).toBeUndefined();
+    const ledger = await session.registry.load();
+    expect(ledger.some((b) => b.address === extra)).toBe(false);
   });
 
   it("refuses a signer bound to another network, and a token admin that isn't the issuer", () => {
@@ -174,24 +207,30 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     expect(view.balance).toBe(parseAmount("50"));
     expect(view.queues.urgent).toEqual([]);
 
+    const withdrawal = await b1.withdraw(parseAmount("100"));
+    expect(withdrawal.events.map((e) => e.type)).toEqual(["Withdrawn"]);
+
     // The feed delivers the same events, with the same ids, in order.
-    const all = [...deposit.events, ...atOnce.events, ...normal.events, ...urgent.events, ...release.events];
-    const last = release.events.at(-1)!;
+    const all = [...deposit.events, ...atOnce.events, ...normal.events, ...urgent.events, ...release.events, ...withdrawal.events];
+    const last = withdrawal.events.at(-1)!;
     await waitFor("the feed to catch up", () => seen.some((e) => e.eventId === last.eventId));
     feed.stop();
     const fromFeed = seen.filter((e) => e.type !== "Token");
     for (const e of all) expect(fromFeed.find((f) => f.eventId === e.eventId)).toEqual(e);
     const types = fromFeed.map((e) => e.type);
-    expect(types).toEqual(["Deposited", "Submitted", "Settled", "Submitted", "Submitted", "Reprioritised", "Revoked", "Deposited", "Settled"]);
+    expect(types).toEqual([
+      "Deposited", "Submitted", "Settled", "Submitted", "Submitted", "Reprioritised", "Revoked", "Deposited", "Settled", "Withdrawn",
+    ]);
     expect(feed.status()).toMatchObject({ clamped: false });
 
-    // The cash token holdings moved with the deposits.
-    expect(await session.token.balance(b1.address)).toBe(parseAmount("9000"));
-    expect(await session.token.balance(session.contractId)).toBe(parseAmount("1250"));
+    // The cash token holdings moved with the deposits and the withdrawal.
+    expect(await session.token.balance(b1.address)).toBe(parseAmount("9100"));
+    expect(await session.token.balance(session.contractId)).toBe(parseAmount("1150"));
   });
 
   it("keeps a store that converges with the views and explains each settlement", async () => {
     const { store, release } = session.store({ feed: { pollMs: 500 } });
+    expect(() => session.store({ recentPayments: 5 })).toThrow(/other options/);
     try {
       const snapshot = await waitFor("the store to load and replay", () => {
         const s = store.getSnapshot();
@@ -234,11 +273,36 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     })();
     const config = await session.read.config();
     const now = (await session.latestLedger()).closeTime;
-    expect((await session.read.bank(ids.banks[2]!.address, { config, now })).analysis.normal).toMatchObject({ head: { id }, expired: true });
+    const head = (await session.read.bank(ids.banks[2]!.address, { config })).analysis.normal.head!;
+    expect(head.id).toBe(id);
+    expect(isExpired(head, config, now)).toBe(true);
 
     const outcome = await keeper.expire(id);
     expect(outcome.events.map((e) => e.type)).toEqual(["Expired"]);
     expect((await session.read.payment(id))?.status).toBe("expired");
     expect(await session.read.queue(ids.banks[2]!.address, "normal")).toEqual([]);
+  });
+
+  it("decodes the run's raw events as the feed did, and records them as unit fixtures on request", async () => {
+    const health = await session.server.getHealth();
+    const raw = await session.server._getEvents({
+      startLedger: health.oldestLedger,
+      filters: [{ type: "contract", contractIds: [session.contractId] }],
+      limit: 1000,
+    });
+    const fixtures = raw.events.map((e) => {
+      const body = decodeBody(
+        (e.topic ?? []).map((t) => xdr.ScVal.fromXdr(t, "base64")),
+        xdr.ScVal.fromXdr(e.value, "base64"),
+      );
+      return { topic: e.topic ?? [], value: e.value, expected: body };
+    });
+    const types = new Set(fixtures.map((f) => f.expected.type));
+    for (const t of ["Deposited", "Withdrawn", "Submitted", "Settled", "Reprioritised", "Revoked"]) expect(types.has(t as never)).toBe(true);
+    expect(types.has("Unknown")).toBe(false);
+    if (process.env.RTGS_RECORD_FIXTURES) {
+      const json = JSON.stringify(fixtures, (_k, v) => (typeof v === "bigint" ? { $bigint: v.toString() } : v), 2);
+      writeFileSync(new URL("../test/fixtures/devnet-events.json", import.meta.url), json + "\n");
+    }
   });
 });

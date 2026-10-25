@@ -7,7 +7,9 @@
 //   rtgs.bname.<i>    its display name
 //
 // Keys and values are at most 64 bytes. RPC can't list an account's data entries, so readers
-// scan indices in batches until a whole batch is missing.
+// scan indices in batches of 50 and stop at the first batch with no bank. Registration fills
+// the lowest free index, so gaps stay small; but if 50 consecutive indices are unregistered,
+// the banks above them are no longer found.
 import { Keypair, Operation, StrKey, xdr } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { RtgsError, toRtgsError } from "../errors.ts";
@@ -101,7 +103,9 @@ export async function registerBank(
   let index = same?.index ?? 0;
   if (!same) while (used.has(index)) index++;
   const ops = [Operation.manageData({ name: bankKey(index), value: bank.address })];
-  ops.push(Operation.manageData({ name: nameKey(index), value: name ? name : null }));
+  // Deleting a data entry that doesn't exist fails the transaction (op_name_not_found).
+  if (name) ops.push(Operation.manageData({ name: nameKey(index), value: name }));
+  else if (same?.name) ops.push(Operation.manageData({ name: nameKey(index), value: null }));
   return sendClassic(ctx, cb, ops);
 }
 
@@ -109,10 +113,9 @@ export async function unregisterBank(ctx: TxContext, cb: Signer, centralBank: st
   assertCentralBank(cb, centralBank);
   const bank = (await readLedgerBanks(ctx, centralBank)).find((b) => b.address === address);
   if (!bank) throw new RtgsError("config", "Not registered", `${address} is not in the bank registry.`);
-  return sendClassic(ctx, cb, [
-    Operation.manageData({ name: bankKey(bank.index), value: null }),
-    Operation.manageData({ name: nameKey(bank.index), value: null }),
-  ]);
+  const ops = [Operation.manageData({ name: bankKey(bank.index), value: null })];
+  if (bank.name) ops.push(Operation.manageData({ name: nameKey(bank.index), value: null }));
+  return sendClassic(ctx, cb, ops);
 }
 
 /** The settlement contract the central bank published, if any. */

@@ -47,7 +47,7 @@ export const CONTRACT_ERRORS: Readonly<Record<number, ErrorText>> = {
     name: "TokenTransferFailed",
     title: "Cash token transfer refused",
     detail:
-      "The cash token refused to move the funds into or out of the settlement contract. Check the bank's cash token holding and that the central bank has authorized its trustline.",
+      "The cash token refused to move the funds into or out of the settlement contract. Check the bank's cash token holding and that the cash token's issuer has authorized its trustline.",
   },
   3: {
     name: "InsufficientFunds",
@@ -120,7 +120,7 @@ export const SAC_ERRORS: Readonly<Record<number, ErrorText>> = {
   11: {
     name: "BalanceDeauthorizedError",
     title: "Holder not authorized",
-    detail: "The central bank has not authorized this holder of the cash token.",
+    detail: "The cash token's issuer has not authorized this holder.",
   },
   12: { name: "OverflowError", title: "Holding limit exceeded", detail: "The holder's balance would overflow its limit." },
   13: {
@@ -138,12 +138,13 @@ const RESULT_CODES: Readonly<Record<string, [RtgsErrorKind, string, string]>> = 
   tx_no_account: ["transaction", "No such account", "The source account does not exist on this network; fund it first."],
   tx_bad_auth: ["transaction", "Bad signature", "The transaction was not signed by the right key for this network."],
   op_no_trust: ["token", "No trustline", "The account has no trustline for the cash token."],
-  op_not_authorized: ["token", "Trustline not authorized", "The central bank has not authorized this trustline."],
+  op_not_authorized: ["token", "Trustline not authorized", "The cash token's issuer has not authorized this trustline."],
   op_underfunded: ["token", "Cash token holding too low", "The account doesn't hold enough of the cash token."],
   op_line_full: ["token", "Holding limit exceeded", "The receiver's trustline limit is too low."],
   op_low_reserve: ["transaction", "Not enough XLM for the reserve", "The account needs more XLM to add this entry."],
   op_no_issuer: ["token", "No issuer", "The cash token's issuing account doesn't exist."],
   op_cant_clawback: ["token", "Clawback not possible", "This trustline was not created with clawback enabled."],
+  op_name_not_found: ["transaction", "No such data entry", "The account has no data entry with that name."],
 };
 
 export function contractError(code: number, cause?: unknown): RtgsError {
@@ -196,6 +197,11 @@ export function toRtgsError(e: unknown, source: "settlement" | "sac" = "settleme
   }
   if (isWasmTrap(text)) {
     return new RtgsError("not-implemented", "Not implemented yet", "The deployed settlement contract doesn't implement this entry point yet.", {
+      cause: e,
+    });
+  }
+  if (/Error\(Storage, MissingValue\)/.test(text)) {
+    return new RtgsError("config", "Nothing deployed there", "No contract (or no entry it needs) exists at that address on this network; it may have been reset.", {
       cause: e,
     });
   }

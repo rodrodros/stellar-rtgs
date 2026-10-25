@@ -13,13 +13,18 @@ describe("amounts", () => {
   it("parses decimals exactly and round-trips", () => {
     expect(parseAmount("1234.5")).toBe(12_345_000_000n);
     expect(parseAmount(" 1,000 ")).toBe(10_000_000_000n);
+    expect(parseAmount("1,234,567.5")).toBe(12_345_675_000_000n);
     expect(parseAmount("0.0000001")).toBe(1n);
-    for (const s of ["0", "7", "0.1", "-3.25", "99999999999.9999999"]) expect(formatAmount(parseAmount(s))).toBe(s);
+    for (const s of ["0", "7", "0.1", "99999999999.9999999"]) expect(formatAmount(parseAmount(s))).toBe(s);
+    expect(formatAmount(parseAmount("-3.25", { allowNegative: true }))).toBe("-3.25");
   });
 
   it("refuses what it can't represent", () => {
     expect(() => parseAmount("1.00000001")).toThrow(/decimal places/);
     expect(() => parseAmount("abc")).toThrow(/not an amount/);
     expect(() => parseAmount("1e5")).toThrow();
+    expect(() => parseAmount("1,2,3")).toThrow(/not an amount/);
+    expect(() => parseAmount("12,34")).toThrow(/not an amount/);
+    expect(() => parseAmount("-1")).toThrow(/negative/);
   });
 });

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { contract, xdr } from "@stellar/stellar-sdk";
 import { describe, expect, it } from "vitest";
 import { decodeBody, decodeTokenBody, EVENT_SCHEMAS, eventId } from "../src/events/decode.ts";
@@ -105,5 +106,22 @@ describe("event ids", () => {
     expect(eventId(96, 1, 0, 0)).toBe("0000000412316864512-0000000000");
     expect(eventId(96, 1, 0, 1) > eventId(96, 1, 0, 0)).toBe(true);
     expect(eventId(97, 1, 0, 0) > eventId(96, 9, 0, 5)).toBe(true);
+  });
+});
+
+describe("events recorded from a devnet run (test/fixtures/devnet-events.json)", () => {
+  // Re-record with: RTGS_RECORD_FIXTURES=1 RTGS_DEVNET_RPC=... pnpm test:e2e
+  const fixtures = JSON.parse(readFileSync(new URL("./fixtures/devnet-events.json", import.meta.url), "utf8"), (_k, v) =>
+    v && typeof v === "object" && "$bigint" in v ? BigInt(v.$bigint) : v,
+  ) as { topic: string[]; value: string; expected: object }[];
+
+  it("covers every event the deployed contract emits so far", () => {
+    const types = new Set(fixtures.map((f) => (f.expected as { type: string }).type));
+    for (const t of ["Deposited", "Withdrawn", "Submitted", "Settled", "Reprioritised", "Revoked", "Expired"]) expect(types).toContain(t);
+  });
+
+  it.each(fixtures.map((f, i) => [i, f] as const))("decodes recorded event %i", (_i, f) => {
+    const topics = f.topic.map((t) => xdr.ScVal.fromXdr(t, "base64"));
+    expect(decodeBody(topics, xdr.ScVal.fromXdr(f.value, "base64"))).toEqual(f.expected);
   });
 });

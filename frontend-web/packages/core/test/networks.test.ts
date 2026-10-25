@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultNetwork,
+  ledgerUrl,
+  txUrl,
   loadNetworks,
   overridesStore,
   parseBanks,
@@ -58,6 +60,20 @@ describe("network registry", () => {
   it("parses a JSON bank list and rejects a malformed one", () => {
     expect(parseBanks(JSON.stringify([{ address: A, name: "X" }]))).toEqual([{ address: A, name: "X" }]);
     expect(() => parseBanks('[{"name":"no address"}]')).toThrow(/bank list/);
+  });
+
+  it("links transactions and ledgers to an explorer, except on the devnet", () => {
+    const nets = loadNetworks({ VITE_RTGS_ENABLE_MAINNET: "true", VITE_RTGS_MAINNET_RPC_URL: "https://rpc.example" });
+    const [devnet, testnet, mainnet] = nets;
+    expect(txUrl(devnet!, "ab")).toBeUndefined();
+    expect(txUrl(testnet!, "ab")).toBe("https://stellar.expert/explorer/testnet/tx/ab");
+    expect(ledgerUrl(mainnet!, 7)).toBe("https://stellar.expert/explorer/public/ledger/7");
+    const custom = loadNetworks({
+      VITE_RTGS_DEVNET_EXPLORER_TX_URL: "http://localhost:9000/tx/{hash}",
+      VITE_RTGS_DEVNET_EXPLORER_LEDGER_URL: "http://localhost:9000/l/{ledger}",
+    })[0]!;
+    expect(txUrl(custom, "cd")).toBe("http://localhost:9000/tx/cd");
+    expect(ledgerUrl(withOverrides(custom, { contractId: "C" }), 3)).toBe("http://localhost:9000/l/3");
   });
 
   it("applies runtime overrides; an empty string clears a field", () => {

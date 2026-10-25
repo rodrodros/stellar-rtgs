@@ -1,6 +1,6 @@
 import { Contract, rpc } from "@stellar/stellar-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EventFeed } from "../src/events/feed.ts";
+import { cursorLedger, EventFeed } from "../src/events/feed.ts";
 import type { RpcServer } from "../src/rpc.ts";
 import type { FeedEvent } from "../src/types.ts";
 import { A, addr, CB, CONTRACT, i128, map, SAC, sym } from "./helpers.ts";
@@ -120,5 +120,98 @@ describe("event feed", () => {
     await drain(feed, 4);
     expect(got).toHaveLength(1);
     expect(states).toContain("live");
+  });
+});
+
+const toidCursor = (ledger: number) => `${((BigInt(ledger + 1) << 32n) - 1n).toString().padStart(19, "0")}-4294967295`;
+const RANGE_ERROR = { code: -32600, message: "startLedger must be within the ledger range: 50 - 200" };
+
+describe("event feed recovery and progress", () => {
+  it("reads the ledger from a cursor", () => {
+    expect(cursorLedger(toidCursor(55))).toBe(55);
+    expect(cursorLedger("0000000240518168575-4294967295")).toBe(55);
+    expect(cursorLedger("nonsense")).toBeUndefined();
+  });
+
+  it("keeps fetching without delay, as backfilling, until the cursor reaches the latest ledger", async () => {
+    vi.useFakeTimers();
+    const { server, mock } = fakeServer([]);
+    const cursors = [toidCursor(10_049), toidCursor(20_049), toidCursor(200)];
+    let call = 0;
+    mock.getEvents.mockImplementation(async () => ({
+      events: [],
+      cursor: cursors[Math.min(call++, 2)]!,
+      latestLedger: call <= 2 ? 30_000 : 200,
+      oldestLedger: 50,
+      latestLedgerCloseTime: "1800000200",
+      oldestLedgerCloseTime: "1800000050",
+    }));
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { pollMs: 60_000 });
+    const states: string[] = [];
+    feed.onStatus((s) => states.push(s.state));
+    feed.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(mock.getEvents).toHaveBeenCalledTimes(3);
+    expect(states.filter((s) => s !== "idle")).toEqual(["backfilling", "backfilling", "live"]);
+    expect(feed.status()).toMatchObject({ cursorLedger: 200, retentionWindow: 120960 });
+    feed.stop();
+  });
+
+  it("restarts from the oldest retained ledger when its cursor fell out of the window", async () => {
+    vi.useFakeTimers();
+    const { server, mock, requests } = fakeServer([[event(60, 1)], [], [event(70, 1)]]);
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { pollMs: 1000 });
+    feed.start();
+    await vi.advanceTimersByTimeAsync(0);
+    mock.getEvents.mockRejectedValueOnce(RANGE_ERROR);
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(10);
+    feed.stop();
+    expect(requests.at(-1)).toMatchObject({ startLedger: 50 });
+    expect(feed.status()).toMatchObject({ clamped: true });
+  });
+
+  it("recovers from a saved cursor that is out of the window, too", async () => {
+    vi.useFakeTimers();
+    const { server, mock, requests } = fakeServer([[event(60, 1)]]);
+    mock.getEvents.mockRejectedValueOnce(RANGE_ERROR);
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { from: { cursor: toidCursor(2) } });
+    const got: FeedEvent[] = [];
+    feed.subscribe((b) => got.push(...b));
+    feed.start();
+    await vi.advanceTimersByTimeAsync(10);
+    feed.stop();
+    expect(mock.getEvents.mock.calls[0]![0]).toMatchObject({ cursor: toidCursor(2) });
+    expect(requests[0]).toMatchObject({ startLedger: 50 });
+    expect(got).toHaveLength(1);
+    expect(feed.status().clamped).toBe(true);
+  });
+
+  it("runs one polling loop after stop() and start() in quick succession", async () => {
+    vi.useFakeTimers();
+    const { server, mock } = fakeServer([]);
+    mock.getEvents.mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      return { events: [], cursor: toidCursor(200), latestLedger: 200, oldestLedger: 50, latestLedgerCloseTime: "1", oldestLedgerCloseTime: "1" };
+    });
+    const feed = new EventFeed({ server, contractId: CONTRACT }, { pollMs: 100 });
+    feed.start();
+    feed.stop();
+    feed.start();
+    await vi.advanceTimersByTimeAsync(2000);
+    feed.stop();
+    // One loop: a call every ~150 ms (50 ms request + 100 ms poll); two loops would double it.
+    expect(mock.getEvents.mock.calls.length).toBeLessThanOrEqual(15);
+  });
+
+  it("tells its owner when it starts and stops", () => {
+    const { server } = fakeServer([]);
+    const started = vi.fn();
+    const stopped = vi.fn();
+    const feed = new EventFeed({ server, contractId: CONTRACT }, {}, { onStart: started, onStop: stopped });
+    feed.start();
+    feed.stop();
+    expect(started).toHaveBeenCalledWith(feed);
+    expect(stopped).toHaveBeenCalledWith(feed);
   });
 });
