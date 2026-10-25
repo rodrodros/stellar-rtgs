@@ -61,6 +61,22 @@ export function diagnosticContractError(response: { diagnosticEventsXdr?: xdr.Di
   return any;
 }
 
+/**
+ * Whether a failed transaction reached for storage its simulation didn't foresee (the host's
+ * `Error(Storage, ExceededLimit)`: a key outside the footprint, or more bytes than it reserved).
+ * Another transaction changed the contract's state in between, e.g. took the payment id this
+ * one's simulation expected, or queued a payment its eager closure now reads.
+ */
+export function footprintRace(response: { diagnosticEventsXdr?: xdr.DiagnosticEvent[] }): boolean {
+  for (const diagnostic of response.diagnosticEventsXdr ?? []) {
+    const body = diagnostic.event.body.v0;
+    for (const value of [...body.topics, body.data]) {
+      if (value.type === "scvError" && value.error.type === "sceStorage" && value.error.code.name === "scecExceededLimit") return true;
+    }
+  }
+  return false;
+}
+
 /** Why a transaction failed when applied: its contract error if it has one, else its result codes. */
 export function failedTransaction(
   response: rpc.Api.GetFailedTransactionResponse,
@@ -69,7 +85,18 @@ export function failedTransaction(
 ): RtgsError {
   const code = diagnosticContractError(response, contractId);
   if (code !== undefined) return toRtgsError(`Error(Contract, #${code})`, source);
-  return failure(resultCodes(response.resultXdr), response);
+  const codes = resultCodes(response.resultXdr);
+  // Past a successful simulation, running out of the resources it reserved means the same:
+  // the state grew in between (e.g. the eager closure now has more queue to work through).
+  if (footprintRace(response) || codes.includes("op_resource_limit_exceeded")) {
+    return new RtgsError(
+      "transaction",
+      "State changed",
+      `Another transaction changed the contract's state after this one was prepared, so it no longer fits; send it again (${codes.join(", ")}).`,
+      { cause: response },
+    );
+  }
+  return failure(codes, response);
 }
 
 /** The settlement contract's events in a confirmed transaction, with RPC's event ids. */

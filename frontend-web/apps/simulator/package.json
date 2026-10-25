@@ -1,0 +1,23 @@
+{
+  "name": "@rtgs/simulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A headless simulation that keeps the devnet's banks transacting until stopped",
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@rtgs/core": "workspace:*",
+    "@stellar/stellar-sdk": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

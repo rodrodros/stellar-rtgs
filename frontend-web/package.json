@@ -11,6 +11,7 @@
     "dev:central-bank": "pnpm --filter @rtgs/central-bank dev",
     "dev:participant": "pnpm --filter @rtgs/participant dev",
     "dev:observer": "pnpm --filter @rtgs/observer dev",
+    "simulate": "pnpm --filter @rtgs/simulator start --",
     "build": "pnpm -r --if-present build",
     "preview": "pnpm --parallel --filter \"./apps/*\" preview",
     "typecheck": "pnpm -r --if-present typecheck",
