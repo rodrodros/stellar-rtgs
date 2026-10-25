@@ -60,7 +60,7 @@ try {
   if (missing.length > 0) {
     fail(
       `No cash token trustline for ${missing.map((b) => `${b.label} (${b.address})`).join(", ")}.\n` +
-        `Run \`pnpm devnet:bootstrap --banks ${args.banks}\` first.`,
+        `Run \`pnpm devnet:bootstrap --banks ${args.banks}${args.seed ? ` --seed ${args.seed}` : ""}\` first.`,
     );
   }
 } catch (e) {
@@ -107,10 +107,14 @@ const engine = new Engine({
 // The first signal (or --duration) stops gracefully: drain, then recover. A second signal
 // gives up on that.
 let stopping: Promise<void> | undefined;
+let code = 0;
 const stop = () => {
   if (!stopping) {
     console.error("Stopping: draining in-flight transactions (Ctrl-C again to force)");
-    stopping = engine.stop().catch((e: unknown) => console.error(`stop failed: ${(e as Error).message}`));
+    stopping = engine.stop().catch((e: unknown) => {
+      console.error(`stop failed: ${(e as Error).message}`);
+      code = 1;
+    });
   }
   return stopping;
 };
@@ -135,16 +139,16 @@ reporter.start({
   capabilities: session.capabilities,
 });
 
-let code = 0;
 try {
-  await engine.run();
-  // `run` also resolves on --max-actions, without a stop; and `stop` is where recover runs,
-  // so wait for it (it is safe to call twice) before tearing down.
-  if (stopping) await stopping;
-  else await engine.stop();
-} catch (e) {
-  console.error(`simulate failed: ${(e as Error).message}`);
-  code = 1;
+  try {
+    await engine.run();
+  } catch (e) {
+    console.error(`simulate failed: ${(e as Error).message}`);
+    code = 1;
+  }
+  // `run` also resolves on --max-actions (or rejects) without a stop, and `stop` is where
+  // recover runs, so wait for it (it is safe to call twice) before tearing down.
+  await stop();
 } finally {
   clearTimeout(timer);
   try {

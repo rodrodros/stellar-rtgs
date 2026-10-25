@@ -81,6 +81,9 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
     for (const flag of ["rpc", "seed", "contract"] as const) {
       if (values[flag]?.trim() === "") throw new ArgError(`--${flag} must not be empty`);
     }
+    if (values.rpc !== undefined && !/^https?:$/.test(URL.parse(values.rpc)?.protocol ?? "")) {
+      throw new ArgError(`--rpc must be an http(s) URL, not "${values.rpc}"`);
+    }
     const parsed: CliArgs = {
       banks: integer("--banks", values.banks, 2),
       profile: profile as ProfileName,
@@ -93,7 +96,11 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
     if (values.seed !== undefined) parsed.seed = values.seed;
     if (values.contract !== undefined) parsed.contract = values.contract;
     if (values["max-actions"] !== undefined) parsed.maxActions = integer("--max-actions", values["max-actions"], 1);
-    if (values.duration !== undefined) parsed.duration = positive("--duration", values.duration);
+    if (values.duration !== undefined) {
+      parsed.duration = positive("--duration", values.duration);
+      // setTimeout fires at once beyond 2^31 - 1 ms.
+      if (parsed.duration > MAX_DURATION) throw new ArgError(`--duration must be at most ${MAX_DURATION} seconds, not "${values.duration}"`);
+    }
     return { kind: "run", args: parsed };
   } catch (e) {
     if (e instanceof ArgError) return { kind: "error", message: e.message };
@@ -102,6 +109,9 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
 }
 
 class ArgError extends Error {}
+
+/** Whole seconds in setTimeout's 2^31 - 1 ms. */
+const MAX_DURATION = 2_147_483;
 
 function defaultRandomSeed(): number {
   return Math.floor(Math.random() * 2 ** 32);

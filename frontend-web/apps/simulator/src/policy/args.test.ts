@@ -76,6 +76,8 @@ describe("parseCliArgs", () => {
     expect(error(["--banks", ""])).toBe('--banks must be a number, not ""');
     expect(error(["--seed", ""])).toBe("--seed must not be empty");
     expect(error(["--rpc", " "])).toBe("--rpc must not be empty");
+    expect(error(["--rpc", "localhost:8300"])).toBe('--rpc must be an http(s) URL, not "localhost:8300"');
+    expect(error(["--duration", "3000000"])).toBe('--duration must be at most 2147483 seconds, not "3000000"');
   });
 
   it("needs a value for string flags", () => {
