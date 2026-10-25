@@ -92,7 +92,7 @@ export function failedTransaction(
     return new RtgsError(
       "transaction",
       "State changed",
-      "Another transaction changed the settlement contract's state after this one was prepared, so it no longer fits; send it again.",
+      `Another transaction changed the contract's state after this one was prepared, so it no longer fits; send it again (${codes.join(", ")}).`,
       { cause: response },
     );
   }

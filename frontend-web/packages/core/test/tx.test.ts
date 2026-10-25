@@ -43,7 +43,9 @@ describe("failed transactions", () => {
       diagnosticEventsXdr: [],
       resultXdr: xdr.TransactionResult.fromXdrObject({ feeCharged: 100n, result: { code: -1, results: [{ code: 0, tr: { type: 24, invokeHostFunctionResult: { code: -3 } } }] }, ext: { v: 0 } } as never),
     } as never;
-    expect(failedTransaction(failed, undefined).title).toBe("State changed");
+    const error = failedTransaction(failed, undefined);
+    expect(error.title).toBe("State changed");
+    expect(error.detail).toContain("op_resource_limit_exceeded");
   });
 
   it("leaves any other trap to its result codes", () => {

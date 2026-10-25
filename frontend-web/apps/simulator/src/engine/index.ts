@@ -219,9 +219,10 @@ export class Engine {
         return await choice.action.run(this.options.actors, choice.actor, choice.params);
       } catch (e) {
         const delay = delays[retry];
-        if (delay === undefined || this.closed || classify(e) !== "transient") throw e;
+        // Once stopping, give up rather than back off: the drain is waiting on this lane.
+        if (delay === undefined || this.stopping || classify(e) !== "transient") throw e;
         await sleep(jitter(delay));
-        if (this.closed) throw e;
+        if (this.stopping) throw e;
       }
     }
   }

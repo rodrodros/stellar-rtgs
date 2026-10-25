@@ -28,7 +28,7 @@ function balanceKey(contract: string, holder: string): xdr.LedgerKey {
       contract: new Address(contract).toScAddress(),
       durability: xdr.ContractDataDurability.persistent,
       key: nativeToScVal(["Balance", holder], { type: ["symbol", "address"] }),
-    } as never),
+    }),
   );
 }
 

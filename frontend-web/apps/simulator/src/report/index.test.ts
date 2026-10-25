@@ -2,7 +2,7 @@ import { allAvailable, RtgsError, type RtgsEvent, type RtgsEventBody } from "@rt
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BANK_1, BANK_2, BANK_3, bank, CB, CONTRACT, fakeWorld, txOutcome, USD } from "../../test/fakes.ts";
 import type { ActionDef, ActionName, Choice, Outcome, StartInfo } from "../types.ts";
-import { createReporter, LOW_XLM, type ReporterReads } from "./index.ts";
+import { createReporter, createReporterReads, LOW_XLM, type ReporterReads } from "./index.ts";
 
 function choice(name: ActionName, actor = BANK_1): Choice {
   const action: ActionDef<unknown> = {
@@ -258,5 +258,15 @@ describe("periodic summary", () => {
     resolve({ held: BALANCES, recorded: BALANCES });
     await flush();
     expect(lines.at(-1)).toContain("simulation stopped");
+  });
+});
+
+describe("createReporterReads", () => {
+  it("adds every bank the registry knows to the conservation read", async () => {
+    const readConservation = vi.fn(async (_accounts: readonly string[]) => ({ held: 5n, recorded: 5n }));
+    const session = { readConservation, registry: { list: () => [{ address: BANK_3, sources: ["ledger"] }, { address: "GOTHER", sources: ["events"] }] } };
+    const reads = createReporterReads(session as never);
+    expect(await reads.conservation([BANK_1, CB, CONTRACT, BANK_3])).toEqual({ held: 5n, recorded: 5n });
+    expect(new Set(readConservation.mock.calls[0]![0])).toEqual(new Set([BANK_1, CB, CONTRACT, BANK_3, "GOTHER"]));
   });
 });

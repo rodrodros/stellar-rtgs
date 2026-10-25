@@ -203,6 +203,21 @@ describe("Engine", () => {
     await e.stop();
   });
 
+  it("stops retrying once stop begins, so the drain isn't kept waiting", async () => {
+    const def = action(async () => {
+      throw toRtgsError("tx_bad_seq");
+    });
+    const r = reporter();
+    const e = engine({ policy: policy(def, (idle) => (def.calls.length === 0 && idle.includes(BANK_1) ? [{ action: def, actor: BANK_1, params: null }] : [])), reporter: r });
+    void e.run();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(def.calls).toHaveLength(1);
+    const stopped = e.stop();
+    await vi.advanceTimersByTimeAsync(15_000);
+    await stopped;
+    expect(def.calls).toHaveLength(1);
+  });
+
   it("classifies outcomes: a race is refused, anything else failed, a thrown non-error too", async () => {
     const thrown: Record<string, unknown> = {
       [BANK_1]: toRtgsError("Error(Contract, #7)"),

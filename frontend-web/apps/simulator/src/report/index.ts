@@ -74,7 +74,8 @@ export function createReporter(options: ReporterOptions): Reporter {
     const lanes = [...labels.keys()];
     // A summary's reads get until the next summary is due.
     const ms = summaryEvery * 1000;
-    // Every bank, plus the central bank (a lane) and the contract, as the central bank app checks.
+    // The simulated banks, the central bank (a lane) and the contract; createReporterReads adds
+    // every other bank the registry knows, as the central bank app's check does.
     const accounts = [...new Set([...world.banks().map((b) => b.address), ...lanes, world.contractId])];
     const [held, ...xlm] = await Promise.allSettled([
       within(reads.conservation(accounts), ms),
@@ -164,8 +165,11 @@ export function createReporter(options: ReporterOptions): Reporter {
 
 export function createReporterReads(session: RtgsSession): ReporterReads {
   return {
+    // The registry adds banks the run doesn't drive (registered in the apps, or beyond --banks):
+    // their balances are in the contract's holding too.
     conservation: async (accounts) => {
-      const { held, recorded } = await session.readConservation(accounts);
+      const all = [...new Set([...accounts, ...session.registry.list().map((b) => b.address)])];
+      const { held, recorded } = await session.readConservation(all);
       return { held, recorded };
     },
     // The one RPC read the simulator makes itself: core has no XLM balance helper.
