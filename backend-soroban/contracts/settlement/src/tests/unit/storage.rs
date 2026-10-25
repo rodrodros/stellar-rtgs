@@ -194,8 +194,11 @@ fn offsets_published(setup: &Setup) -> usize {
         .count()
 }
 
-/// What a cost test's call measured, and so may use at most: its test-host footprint
-/// entries and its event bytes.
+/// What a cost test's call measured: its test-host footprint entries, which it may use at
+/// most, and its event bytes, which it must publish exactly. Exactly, so that pricing the
+/// events too low fails as well as pricing them too high: with contract banks instead of
+/// Stellar accounts, every clearing test publishes fewer bytes and fails (Flow 15's
+/// review).
 struct Budget {
     footprint: u32,
     events: u32,
@@ -214,7 +217,7 @@ fn assert_cleared_the_queue(
     assert_within_mainnet_limits(setup, returned);
     let used = setup.env.cost_estimate().resources();
     assert!(test_host_footprint(setup) <= budget.footprint, "{used:?}");
-    assert!(used.contract_events_size_bytes <= budget.events, "{used:?}");
+    assert_eq!(used.contract_events_size_bytes, budget.events, "{used:?}");
     assert_eq!(offsets_published(setup), offsets);
     assert_eq!(setup.client().queued_count(), 0);
     assert_eq!(setup.balances(), expected);
@@ -271,10 +274,19 @@ fn covered_submit_clears_the_queue(
 // payments, so a covered `submit` at the cap settles 63 payments across 64 accounts, one
 // more of each than a deposit can. SC-ST-08 is that worst case for entries.
 //
+// Since Flow 15 the cap refuses only a payment still queued after the closure, so a
+// payment that completes an offset over a full queue is accepted too: it settles 63
+// payments across 63 accounts, within the same bound (SC-ST-10). A submission the cap
+// refuses does the work of one that queues, the payment queued and an offset that settles
+// nothing, before the refusal rolls it back. That offset reads every queued payment, its
+// queue and both its accounts, so its worst case has a distinct sender and receiver for
+// each payment (SC-ST-11). `revoke` and `expire` free a slot, and `reprioritise` settles at
+// most the queued payments.
+//
 // Events cost too: each payment the call settles publishes a `Settled` event naming two
 // banks, about 250 bytes with account banks, and an offset adds one `Offset` event with
-// every id. SC-ST-09, a covered `submit` that makes the full ring feasible, publishes the
-// most.
+// every id. SC-ST-10, a submission that completes an offset over the full queue, publishes
+// the most.
 //
 // Three limits come close, and they count differently. Mainnet allows 16,384 bytes of
 // events and return value, 200 written entries, and 400 footprint entries counted once
@@ -293,9 +305,16 @@ fn covered_submit_clears_the_queue(
 // and SC-ST-04 and SC-ST-06 16,384, which their return value takes over Mainnet's limit.
 // So 62 is the most this layout and these events fit.
 //
+// Measured in Flow 15 at 62: SC-ST-10 392, 194 and 16,268, or 16,280 with its return
+// value, 104 bytes short of the limit, less than one `Settled` event; its queue alternates
+// priorities, so it writes both indexes and ties SC-ST-08 for the most entries. At 63 it
+// needed 16,532. SC-ST-11, a refusal, 267 entries, 6 writes, no events and about 38M
+// instructions.
+//
 // Each test also holds its call to what it measured, its budget, so that one needless
 // entry, or a larger event, fails the test it adds to instead of waiting for the limit.
-// Raise a budget only for an entry or an event field a flow adds on purpose, and say why.
+// The event bytes are held exactly, so that events priced too low fail too. Change a
+// budget only for an entry or an event field a flow changes on purpose, and say why.
 //
 // Not priced: the tests mock authorization. On the network, a bank that signs rather than
 // being the transaction's source account also costs a read of its account and a nonce
@@ -491,7 +510,7 @@ fn a_gross_cascade_down_a_tree_of_both_priorities_fits_in_one_transaction() {
 /// pays bank 0 what the tree needs. That is `n + 1` payments across `n + 2` accounts, one
 /// more of each than any deposit can settle. Every balance ends at 1 but the outside
 /// bank's, at 0. Added in Flow 14's review: at 392 test-host footprint entries and 194
-/// writes, it uses the most entries of any call at the cap.
+/// writes, it ties SC-ST-10 for the most entries of any call at the cap.
 #[test]
 fn a_covered_submission_cascading_down_a_full_tree_fits_in_one_transaction() {
     let n = QUEUE_CAP_UNDER_TEST as usize;
@@ -520,9 +539,9 @@ fn a_covered_submission_cascading_down_a_full_tree_fits_in_one_transaction() {
 /// `n + 1` banks: the ring of `n` (`submit_ring`) and bank `n` outside it. The call
 /// publishes the submission, its settlement, the offset and a settlement per queued
 /// payment. Bank 0 and the outside bank end at 0, and every other bank at 1. Added in
-/// Flow 14's review: its 16,256 event bytes, 16,268 with its return value, leave the least
-/// room of any call at the cap, and with account banks a ring of 63 measured 16,508, which
-/// set the cap at 62.
+/// Flow 14's review: its 16,256 event bytes, 16,268 with its return value, left the least
+/// room of any call at the cap until Flow 15's SC-ST-10, and with account banks a ring of
+/// 63 measured 16,508, which set the cap at 62.
 #[test]
 fn a_covered_submission_that_makes_a_full_ring_feasible_fits_in_one_transaction() {
     let n = QUEUE_CAP_UNDER_TEST as usize;
@@ -542,4 +561,102 @@ fn a_covered_submission_that_makes_a_full_ring_feasible_fits_in_one_transaction(
         },
         &expected,
     );
+}
+
+/// SC-ST-10. ADR-0010's cap for a submission the closure settles: with the queue full, a
+/// payment that completes an offset is accepted (SC-A01-23), so one `submit` settles one
+/// payment more than the cap by offset (A3, S23), within Mainnet's limits.
+///
+/// `n + 1` banks in a ring, bank `i` paying the next `100 - i`. Bank 0 holds `n`, and the
+/// other banks 0, so the `n` payments of banks 1 to `n` queue, the queue is full, and bank
+/// 0's payment of 100 is not covered alone. It completes the ring: the offset touches
+/// every bank, every queue and all `n + 1` payments, and changes every balance, bank 0's
+/// to 0 and every other bank's to 1. The queued payments alternate priorities, so the
+/// offset writes both indexes: that is the most it writes, and with SC-ST-08 the least
+/// room in the footprint, as well as the least room in events. Added in Flow 15; red
+/// first, since the closing payment was refused with `QueueFull`. Its ring had one
+/// priority until Flow 15's review, which measured 391 entries.
+#[test]
+fn a_submission_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = ring_but_bank_0(n);
+    let client = setup.client();
+
+    let id = client.submit(setup.bank(0), setup.bank(1), &100, &NORMAL);
+
+    let mut expected = std::vec![1_i128; n + 1];
+    expected[0] = 0;
+    assert_cleared_the_queue(
+        &setup,
+        &xdr::ScVal::U64(id),
+        1,
+        &Budget {
+            footprint: 392,
+            events: 16_268,
+        },
+        &expected,
+    );
+    assert_eq!(client.payment(&id).unwrap().status, Status::Settled);
+}
+
+/// The contract from its Wasm with `n + 1` banks in a ring, bank `i` paying the next
+/// `100 - i`, urgent from an odd bank and normal from an even one, and the queue full: bank
+/// 0 holds `n` and has paid nothing yet, and the payments of banks 1 to `n` are queued,
+/// since the other banks hold 0.
+fn ring_but_bank_0(n: usize) -> Setup {
+    let setup = at_the_cap(n + 1);
+    let client = setup.client();
+    setup.mint(setup.bank(0), n as i128);
+    client.deposit(setup.bank(0), &(n as i128));
+    for i in 1..=n {
+        client.submit(
+            setup.bank(i),
+            setup.bank((i + 1) % (n + 1)),
+            &(100 - i as i128),
+            if i % 2 == 1 { &URGENT } else { &NORMAL },
+        );
+    }
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+    setup
+}
+
+/// SC-ST-11. ADR-0010's cap for a refusal: since Flow 15 a submission at the cap is queued
+/// and the eager closure runs before the cap is checked, so even a refused one pays for an
+/// offset over the whole queue. It still fails with `QueueFull`, not a resource error,
+/// within Mainnet's limits, and leaves the queue as it was.
+///
+/// The worst case for a refusal: the offset reads every queued payment, its sender's queue
+/// and both its accounts, so `n + 1` payments from distinct senders to distinct receivers,
+/// of both priorities, read the most. Bank `i`, for 1 to `n`, pays 1 to its own bank
+/// `n + i`, urgent from an odd bank and normal from an even one, and every balance is 0, so
+/// all `n` queue. Bank 0 then pays bank `2n + 1` 1: no prefix is feasible, the offset
+/// settles nothing, and the payment is refused. Added in Flow 15; it passed before, when
+/// the refusal came first, and fails if a refusal at the cap goes over Mainnet's limits
+/// instead of returning `QueueFull`. Flow 15's review replaced this test's first fixture, a
+/// ring that reads `n + 1` accounts, with this shape, which reads `2n + 2`.
+#[test]
+fn a_submission_refused_at_the_cap_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(2 * n + 2);
+    let client = setup.client();
+    for i in 1..=n {
+        let priority = if i % 2 == 1 { URGENT } else { NORMAL };
+        client.submit(setup.bank(i), setup.bank(n + i), &1, &priority);
+    }
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+
+    assert_eq!(
+        client.try_submit(setup.bank(0), setup.bank(2 * n + 1), &1, &NORMAL),
+        Err(Ok(Error::QueueFull))
+    );
+
+    assert_within_mainnet_limits(&setup, &xdr::ScVal::Void);
+    assert!(
+        test_host_footprint(&setup) <= 267,
+        "over its budget of 267: {:?}",
+        setup.env.cost_estimate().resources()
+    );
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+    assert_eq!(client.payment(&(n as u64)), None);
+    setup.assert_conserved();
 }

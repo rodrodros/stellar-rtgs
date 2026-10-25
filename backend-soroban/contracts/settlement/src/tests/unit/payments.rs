@@ -180,8 +180,9 @@ fn ids_are_increasing_sequence_numbers() {
 }
 
 /// SC-A01-09. A1, ADR-0010's queue cap: at `queue_cap` queued payments, another uncovered
-/// payment is refused with `QueueFull`, but a covered one still settles, since it never
-/// queues.
+/// payment that no offset settles would stay queued, so it is refused with `QueueFull`,
+/// but a covered one still settles, since it never queues. SC-A01-23 is the uncovered
+/// payment that an offset settles.
 #[test]
 fn the_queue_cap_refuses_only_payments_that_would_queue() {
     let setup = Setup::with_config(
@@ -259,9 +260,9 @@ fn a_settled_payment_does_not_count_toward_the_queue_cap() {
 }
 
 /// SC-A01-18. A1, ADR-0010 with S7: at the cap, a covered payment that would wait behind the
-/// sender's own queued payment would queue, so it is refused with `QueueFull` like an
-/// uncovered one (`queueBounded`). The sender's queued urgent payments block both a normal
-/// payment (S7(a)) and an urgent one (S7(b), ADR-0008, ADR-0009).
+/// sender's own queued payment would stay queued, so it is refused with `QueueFull` like
+/// an uncovered one (`queueBounded`). The sender's queued urgent payments block both a
+/// normal payment (S7(a)) and an urgent one (S7(b), ADR-0008, ADR-0009).
 #[test]
 fn at_the_queue_cap_a_covered_payment_blocked_by_the_senders_queue_is_refused() {
     let setup = Setup::with_config(
@@ -292,8 +293,8 @@ fn at_the_queue_cap_a_covered_payment_blocked_by_the_senders_queue_is_refused() 
 /// SC-A01-19. ADR-0010: the cap counts the queued payments of every bank, and applies to
 /// either priority. Two banks fill it, so a third bank's uncovered urgent payment, with
 /// nothing of its own queued, is refused with `QueueFull` (A1). The payment is more than
-/// everything queued to its sender, so no offset could settle it either (F1): the test
-/// holds whatever is decided about the cap and the offset (README).
+/// everything queued to its sender, so no offset could settle it either (F1), and it
+/// stays queued.
 #[test]
 fn the_queue_cap_counts_every_banks_queue_and_refuses_an_urgent_payment_too() {
     let setup = Setup::with_config(
@@ -374,6 +375,106 @@ fn at_the_queue_cap_a_covered_urgent_payment_settles_past_queued_normal_ones() {
     assert_eq!(client.payment(&id).unwrap().status, Status::Settled);
     assert_eq!(client.queued_count(), 2);
     assert_eq!(setup.balances(), std::vec![90, 10, 0]);
+}
+
+/// SC-A01-23. A1, A3, S23, ADR-0010: at the cap, a payment that would settle at once in
+/// an offset is accepted, since it never stays queued. The cap refuses only a payment
+/// still queued after the eager closure, as the model does (`quint/settlement.qnt`,
+/// decided with the user on 2026-10-25). Added in Flow 15: it fails if the cap is checked
+/// before the closure, which refuses the payment that would clear the gridlock.
+#[test]
+fn at_the_queue_cap_a_payment_that_completes_an_offset_settles() {
+    let setup = Setup::with_config(
+        2,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let client = setup.client();
+    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    client.submit(setup.bank(0), setup.bank(1), &30, &NORMAL);
+    assert_eq!(client.queued_count(), 2);
+
+    let id = client.submit(setup.bank(1), setup.bank(0), &80, &NORMAL);
+
+    assert_eq!(id, 2);
+    assert_eq!(
+        setup.our_events(),
+        std::vec![
+            setup.ev(Submitted {
+                id,
+                from: setup.bank(1).clone(),
+                to: setup.bank(0).clone(),
+                amount: 80,
+                priority: NORMAL,
+            }),
+            setup.ev(Offset {
+                ids: soroban_sdk::vec![&setup.env, 0, 1, 2],
+            }),
+            setup.ev(Settled {
+                id: 0,
+                from: setup.bank(0).clone(),
+                to: setup.bank(1).clone(),
+                amount: 50,
+            }),
+            setup.ev(Settled {
+                id: 1,
+                from: setup.bank(0).clone(),
+                to: setup.bank(1).clone(),
+                amount: 30,
+            }),
+            setup.ev(Settled {
+                id,
+                from: setup.bank(1).clone(),
+                to: setup.bank(0).clone(),
+                amount: 80,
+            }),
+        ]
+    );
+    assert_eq!(client.queued_count(), 0);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
+    setup.assert_conserved();
+}
+
+/// SC-A01-24. A1, S11, ADR-0010: a payment the cap refuses leaves no trace, although the
+/// contract queued it and ran the eager closure before refusing it. The refusal rolls the
+/// call back: its id is not used (S11), no payment is recorded and the queues are
+/// unchanged.
+/// Added in Flow 15, since `submit` now refuses after writing; it fails if a refused
+/// payment keeps its id, its record or its place in the queue.
+#[test]
+fn a_payment_refused_at_the_queue_cap_leaves_no_trace() {
+    let setup = Setup::with_config(
+        2,
+        0,
+        Config {
+            queue_cap: 2,
+            ..default_config()
+        },
+    );
+    let client = setup.client();
+    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    client.submit(setup.bank(1), setup.bank(0), &80, &NORMAL);
+
+    assert_eq!(
+        client.try_submit(setup.bank(0), setup.bank(1), &10, &URGENT),
+        Err(Ok(Error::QueueFull))
+    );
+    assert!(setup.our_events().is_empty());
+
+    assert_eq!(client.payment(&2), None);
+    assert_eq!(client.queued_count(), 2);
+    assert!(setup.queue(0, URGENT).is_empty());
+    assert_eq!(setup.queue(0, NORMAL), std::vec![0]);
+    assert_eq!(setup.queue(1, NORMAL), std::vec![1]);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
+    // Bank 1's deposit makes the offset of payments 0 and 1 feasible, which empties the
+    // queue and leaves bank 0 30, so the next payment settles and takes the unused id 2.
+    setup.mint(setup.bank(1), 30);
+    client.deposit(setup.bank(1), &30);
+    assert_eq!(client.submit(setup.bank(0), setup.bank(1), &10, &NORMAL), 2);
 }
 
 // ---------------------------------------------------------------------------------------

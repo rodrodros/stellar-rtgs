@@ -119,18 +119,18 @@ Within a priority, payments are strictly first in, first out. While a bank has a
 
 ## Flow 7: the queue cap, ADR-0010 (8)
 
-`QueueFull` refuses only a payment that would queue. A covered payment with nothing of its sender's queued ahead of it still settles.
+`QueueFull` refuses only a payment that would stay queued. A covered payment with nothing of its sender's queued ahead of it still settles, and since Flow 15 so does one that an offset settles (SC-A01-23).
 
 - [x] `unit::payments::the_queue_cap_refuses_only_payments_that_would_queue` (SC-A01-09)
 - [x] `unit::payments::one_below_the_queue_cap_a_payment_still_queues` (SC-A01-10). This is the boundary partner of SC-A01-09. Passed since Flow 5, and still passes with the cap.
 - [x] `unit::payments::at_the_queue_cap_a_covered_payment_blocked_by_the_senders_queue_is_refused` (SC-A01-18). Added in Flow 7, since SC-A01-09's covered payment comes from a bank with nothing queued; it fails if the cap checks cover alone and lets a covered payment queue behind the sender's own past the cap. The sender's queued payments are urgent, and both a normal and an urgent payment are refused, so it also fails if only the same priority's queue counts as ahead.
-- [x] `unit::payments::the_queue_cap_counts_every_banks_queue_and_refuses_an_urgent_payment_too` (SC-A01-19). Added in Flow 7, since it is the only cap test where the refused payment's sender has nothing queued and other banks fill the cap; it fails if the cap counts only the sender's queue, or (like SC-A01-18) applies to normal payments only. The refused payment is more than everything queued to its sender, so no offset could settle it, and the test holds whatever is decided about the cap and the offset.
+- [x] `unit::payments::the_queue_cap_counts_every_banks_queue_and_refuses_an_urgent_payment_too` (SC-A01-19). Added in Flow 7, since it is the only cap test where the refused payment's sender has nothing queued and other banks fill the cap; it fails if the cap counts only the sender's queue, or (like SC-A01-18) applies to normal payments only. The refused payment is more than everything queued to its sender, so no offset could settle it, and the cap refuses it under either rule for the offset (Flow 15).
 - [x] `unit::payments::at_the_queue_cap_a1s_guards_come_before_queue_full` (SC-A01-20). Added in Flow 7, so that a unit test pins what SC-P-11 checks: it fails if `QueueFull` comes before `InvalidAmount` or `SameAccount`.
 - [x] `unit::payments::at_the_queue_cap_a_covered_urgent_payment_settles_past_queued_normal_ones` (SC-A01-21). Added in Flow 7, SC-A01-13's case at the cap: it fails if the cap refuses an urgent payment because its bank has normal ones queued.
 - [x] `unit::payments::a_settled_payment_does_not_count_toward_the_queue_cap` (SC-A01-22). Added in Flow 7, since no other cap test settles a payment before the cap is reached; it fails if the cap counts every payment submitted rather than those queued.
 - [x] `props::submissions_never_queue_past_the_cap` (SC-P-11). Added in Flow 7: SC-P-01 checks the cap too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone, with a cap of 3. At the cap it lets a payment that would not settle by cover either be refused or settle in its own submission, so it stays valid once Flow 13's offset exists. It counts the queued payments from their records, so it also fails if `queued_count` drifts from them, and it fails if `QueueFull` comes before A1's guards. It checks after every call that balances move only by the call's own deposit or withdrawal and the payments it settles (S4), conservation, that no balance goes negative and S7's order, so a payment that settles at the cap must be booked, paid for, and must not overtake its sender's queue. With no cap it fails: its shrunk case is a fourth uncovered payment queued past a cap of 3, which SC-A01-09 already pins. With a cap that checks cover alone it fails too: its shrunk case is a covered payment queued behind its sender's own at the cap, which SC-A01-18 already pins.
 
-One decision is still open (README): what the cap does to a payment that would settle by offset. No unit test decides it, so add no behaviour for it here. But `quint/settlement.qnt` refuses a payment only if it is still queued after the closure, offset included, so it settles such a payment, and the replay (SC-MB-01) assumes it: traces 2, 28, 41 and 43 each settle one by offset.
+One decision was left open here (README): what the cap does to a payment that would settle by offset. `quint/settlement.qnt` refuses a payment only if it is still queued after the closure, offset included, and the replay (SC-MB-01) assumes it: traces 2, 28, 41 and 43 each settle one by offset. Flow 15 decided it with the user: the payment settles (SC-A01-23).
 
 ## Flow 8: the eager closure, gross (10)
 
@@ -249,7 +249,7 @@ Step 1 needs every bank with a queued payment. Since Flow 5, queues are stored o
 
 Done in Flow 13 as `QueuedBanks`, a list kept by `put_queue` (the offset rewrites it at most once, when some bank has no payment left; Flow 14 split it into one list per priority), next to `QueuedCount`, which the cap still reads. Step 2 is the kernel's `balances_after`, which sums each account's net change in 64-bit halves, as k* does. Step 4 is not a loop. The model's closure repeats gross settlement and the offset until an offset settles nothing, but since k* decides F1 exactly, R5 makes every round after the first offset empty, and no test can tell the loop from a single offset. So the closure is one gross pass, then one offset. That saves a second read of every queue on the cap path Flow 14 measures. SC-P-12 to SC-P-15 check k* = 0 after every call, so a closure that stopped short of rest would fail them. R5 rests on strict FIFO in both priorities (ADR-0008, ADR-0009), one floor for `covers` and F1 alike (today 0, ADR-0011) and no limits or reservations, so that K6 holds (ADR-0018, provisional). If limits or a class that bypasses FIFO come in, the model's loop must come back (C-DF-026).
 
-The cap decision above was not taken in Flow 13: `submit` still checks the cap before the closure, so it refuses a payment that an offset would settle, and SC-P-11 still accepts either answer. It remains open in the README, and blocks Flow 15.
+The cap decision above was not taken in Flow 13: `submit` still checked the cap before the closure, so it refused a payment that an offset would settle, and SC-P-11 accepts either answer. Flow 15 took it (SC-A01-23).
 
 - [x] `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible` (SC-A03-01)
 - [x] `unit::lsm::two_opposite_payments_offset_with_no_liquidity` (SC-A03-02)
@@ -307,13 +307,23 @@ The backstop, decided in Flow 14: the cap is sized so that the eager closure ove
 - [x] `unit::lsm::a_bank_is_in_the_index_once_per_priority_however_many_payments_it_queues` (SC-A03-22). Added in Flow 14; it fails if a payment queued behind another, or moved into a queue that already holds one, adds its bank to the index again.
 - [x] `unit::lsm::gross_settlement_keeps_a_bank_in_the_index_once_until_its_queue_empties` (SC-A03-23). Added in Flow 14's third review; it fails if gross settlement adds a bank to the index again when it shortens the bank's queue.
 
-## Flow 15: the model-based replay (1)
+## Flow 15: the model-based replay (5)
 
 The 50 committed Quint traces call deposit, withdraw, submit, revoke, reprioritise, expire and tick. The replay needs Flows 1 to 13.
 
-After Flow 13, the replay gets through the first traces and stops at `trace2.itf.json` state 27: the model accepts a submission that the contract refuses with `QueueFull`. The model refuses only a payment still queued after the closure, offset included, while the contract refuses before it. That is the README's open decision on the cap and the offset.
+After Flow 13, the replay gets through the first traces and stops at `trace2.itf.json` state 27: the model accepts a submission that the contract refuses with `QueueFull`. The model refuses only a payment still queued after the closure, offset included, while the contract refuses before it. That was the README's open decision on the cap and the offset, and it was the only thing in the way: with the model's rule, every trace replays.
 
-- [ ] `itf_replay::quint_traces_replay_against_the_contract` (SC-MB-01)
+Decided with the user on 2026-10-25: follow the model. `submit` queues the payment, runs the eager closure, and refuses with `QueueFull` only if the payment is still queued and more than `queue_cap` payments are queued (`over_the_cap`). The refusal rolls the whole call back. The decision is recorded in the README and in `submit`'s doc comment, like the other decisions taken with the user, not as an ADR. `qnt::queueCapOffsetTest` pins it in the model.
+
+A submission that completes an offset at a full queue is now accepted, so it settles one payment more than the cap by offset. Flow 14's review already priced a covered submission at the cap (SC-ST-08, SC-ST-09), so Flow 15 priced this one (SC-ST-10), and a refused submission, which now runs the closure before it fails (SC-ST-11). At 63, SC-ST-10 used 397 test-host footprint entries and 16,000 of the 16,384 event bytes, the most events of any call at the cap.
+
+Flow 14's third and fourth reviews then made the cost tests' banks Stellar accounts, counted the return value with the events and lowered the cap to 62 (see Flow 14). At 63 SC-ST-10 needs 16,532 bytes of events and return value. At 62 it uses 392 test-host entries and 194 writes, which ties SC-ST-08 for the least room in the footprint, and 16,280 bytes, 104 short of the limit and less than one `Settled` event, the least room in events of any call at the cap. Flow 15's review found that SC-ST-11's ring was not the worst refusal: the offset reads both accounts of every queued payment, so SC-ST-11 now has a distinct sender and receiver for each, and measures 267 entries, 6 writes and about 38M instructions. It also found that nothing failed if the events were priced too low, with contract banks or no return value: each cost test now holds its event bytes exactly (`Budget`), and SC-ST-10's ring alternates priorities, which writes both indexes. The table is in `unit::storage`.
+
+- [x] `itf_replay::quint_traces_replay_against_the_contract` (SC-MB-01)
+- [x] `unit::payments::at_the_queue_cap_a_payment_that_completes_an_offset_settles` (SC-A01-23). Added in Flow 15; it fails if the cap is checked before the closure.
+- [x] `unit::payments::a_payment_refused_at_the_queue_cap_leaves_no_trace` (SC-A01-24). Added in Flow 15, since `submit` now refuses after writing. It passed before the change, when the refusal came first, and guards the rollback: it fails if a refused payment keeps its id, its record or its place in a queue.
+- [x] `unit::storage::a_submission_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-10). Added in Flow 15; red first, since the closing payment was refused with `QueueFull`.
+- [x] `unit::storage::a_submission_refused_at_the_cap_fits_in_one_transaction` (SC-ST-11). Added in Flow 15, since a refused submission now pays for the closure; it passed before the change, when the refusal came first, and fails if a refusal at the cap goes over Mainnet's limits instead of returning `QueueFull`.
 
 ## Flow 16: collateral, A14 (4)
 
@@ -339,7 +349,7 @@ Implement the `credit()` view, and `set_collateral` with:
 
 `set_collateral` also gains its `CollateralBelowCredit` check.
 
-`open_repo` runs the closure, so a repo can make a full queue's offset feasible. Flow 14's full queues use up to 16,268 of the 16,384 bytes of events and return value (SC-ST-09) and 194 of the 200 writes (SC-ST-08) for a covered `submit`, and `open_repo` writes more entries, and publishes more events, of its own. Price it at the cap, and lower the cap if it doesn't fit.
+`open_repo` runs the closure, so a repo can make a full queue's offset feasible. At the cap of 62, full queues use up to 194 of the 200 writes, and 392 of the test host's 400 footprint entries, for a covered `submit` (SC-ST-08), and up to 16,280 of the 16,384 bytes of events and return value for a `submit` that completes an offset (SC-ST-10), with Stellar accounts as banks; `open_repo` writes more entries and publishes more events of its own (its own event and the SAC's mint), so price both. Price it at the cap, and lower the cap if it doesn't fit.
 
 - [ ] `unit::credit::a_repo_mints_cash_into_the_contract_and_credits_the_bank` (SC-A12-01)
 - [ ] `unit::credit::credit_may_reach_but_not_exceed_the_collateral` (SC-A12-02)
@@ -410,8 +420,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 14) | 150 |
-| Still to fix (Flows 15 to 21) | 38 |
-| All | 188 |
+| Already green (Flows 0 to 15) | 155 |
+| Still to fix (Flows 16 to 21) | 37 |
+| All | 192 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, and Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, and Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11.

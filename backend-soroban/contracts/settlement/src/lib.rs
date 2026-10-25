@@ -2,12 +2,13 @@
 //! bank's settlement balance (ADR-0004).
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
-//! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other up to the queue cap), `revoke`, `reprioritise`, `expire`, the eager closure
-//! (gross settlement, then the LSM offset) after every deposit, submission, revocation,
-//! reprioritisation or expiry, and the `balance`, `payment`, `queue`, `queued_count`,
-//! `config` and `central_bank` views. The other entry points are stubs whose unit tests
-//! (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
+//! covered payment at once unless the sender has one queued ahead of it, queues any
+//! other, and refuses one still queued after the eager closure when the queue was already
+//! full), `revoke`, `reprioritise`, `expire`, the eager closure (gross settlement, then the
+//! LSM offset) after every deposit, submission, revocation, reprioritisation or expiry,
+//! and the `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank`
+//! views. The other entry points are stubs whose unit tests (`src/tests/`) are written and
+//! red; they are implemented test first (TESTING.md).
 #![no_std]
 
 extern crate alloc;
@@ -56,7 +57,8 @@ pub enum Error {
     InsufficientFunds = 3,
     /// A payment's sender and receiver are the same bank (§4.6 A1).
     SameAccount = 4,
-    /// Queuing the payment would exceed `Config::queue_cap` (ADR-0010).
+    /// The payment would still be queued after the eager closure, with more than
+    /// `Config::queue_cap` queued (ADR-0010).
     QueueFull = 5,
     /// No payment has this id (A5, A6, A8).
     UnknownPayment = 6,
@@ -407,7 +409,7 @@ fn eager_closure(env: &Env, banks: Vec<Address>) {
 /// settlement raises its receiver's balance, so the receiver joins `banks` unless it is
 /// already waiting there. Under FIFO the order the banks are visited in does not change
 /// what settles (R2). A bank joins only at the start or after a settlement, and each
-/// settlement takes one of the queued payments the cap bounds, so the visits are at most
+/// settlement takes one of the queued payments, which the cap bounds, so the visits are at most
 /// `banks.len()` plus the settlements: gross settlement ends, and it ends with no head
 /// covered.
 ///
@@ -644,6 +646,19 @@ fn queued_ahead(env: &Env, bank: &Address, priority: Priority) -> bool {
     queued(Priority::Urgent) || (priority == Priority::Normal && queued(Priority::Normal))
 }
 
+/// ADR-0010's queue cap, after the eager closure: whether the payment `id` just submitted
+/// is still queued and more than `Config::queue_cap` payments are queued. Only a payment
+/// that stays queued can be refused, so one that settles at once, gross or in an offset,
+/// never is (the model's rule, decided with the user on 2026-10-25). The closure settles
+/// nothing without the new payment, since the queues were at rest before it: so a payment
+/// still queued settled nothing, and the cap is exceeded exactly when it was already full.
+/// The status check is then implied by the count, and is kept to mirror the model's guard
+/// (`quint/settlement.qnt`, `submit`).
+fn over_the_cap(env: &Env, id: u64) -> bool {
+    Settlement::payment(env.clone(), id).unwrap().status == Status::Queued
+        && Settlement::queued_count(env.clone()) > Settlement::config(env.clone()).queue_cap
+}
+
 #[contract]
 pub struct Settlement;
 
@@ -709,13 +724,13 @@ impl Settlement {
     /// `InvalidAmount`, and a payment to oneself with `SameAccount`, before an id is used.
     /// The id is the next sequence number (S11). A covered payment settles at once (A2) if
     /// nothing of the sender's is queued ahead of it (S7, ADR-0008, ADR-0009); any other
-    /// waits at the tail of the sender's queue for its priority, unless `Config::queue_cap`
-    /// payments are queued already: then it is refused with `QueueFull`, before an id is
-    /// used (ADR-0010). The cap never refuses a payment that settles at once. It is checked
-    /// before the offset, so today it refuses one that an offset would settle, where
-    /// `quint/settlement.qnt` settles it; that decision is still open (README). A payment
-    /// that settles at once credits its receiver, so the eager closure follows it (S9). One
-    /// that queues may complete an offset, so the closure follows it too (A3, S23).
+    /// waits at the tail of the sender's queue for its priority. A payment that settles at
+    /// once credits its receiver, so the eager closure follows it (S9). One that queues may
+    /// complete an offset, so the closure follows it too (A3, S23). If the payment is still
+    /// queued after the closure and more than `Config::queue_cap` payments are queued, it
+    /// is refused with `QueueFull`, and the refusal rolls back the whole call, its id
+    /// included (ADR-0010). So the cap never refuses a payment that settles at once, gross
+    /// or in an offset, as in the model (decided with the user on 2026-10-25).
     pub fn submit(
         env: Env,
         from: Address,
@@ -732,9 +747,6 @@ impl Settlement {
         }
         let balance = Self::balance(env.clone(), from.clone());
         let settles = !queued_ahead(&env, &from, priority) && rtgs_core::covers(balance, amount);
-        if !settles && Self::queued_count(env.clone()) >= Self::config(env.clone()).queue_cap {
-            return Err(Error::QueueFull);
-        }
         env.storage()
             .instance()
             .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
@@ -769,6 +781,9 @@ impl Settlement {
             enqueue(&env, &payment);
             // No head is newly covered, but the payment may complete an offset (SC-A03-01).
             eager_closure(&env, Vec::new(&env));
+            if over_the_cap(&env, id) {
+                return Err(Error::QueueFull);
+            }
         }
         Ok(id)
     }

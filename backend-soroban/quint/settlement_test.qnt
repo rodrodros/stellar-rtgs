@@ -29,7 +29,7 @@ module settlement_test {
       .then(submit("A", "B", 10, "Urgent"))
       .expect(settledNow == [1] and queueOf(payments, nextId, "A", "Normal") == [0])
 
-  // SC-A01-09. The cap refuses only a payment that would queue (ADR-0010).
+  // SC-A01-09. The cap refuses only a payment that would stay queued (ADR-0010).
   run queueCapTest =
     init.then(deposit("A", 5))
       .then(submit("A", "B", 60, "Normal"))
@@ -42,6 +42,21 @@ module settlement_test {
       .expect(lastError == "QueueFull" and nextId == 6)
       .then(submit("A", "B", 5, "Urgent"))
       .expect(lastError == "" and settledNow == [6])
+
+  // SC-A01-23. At the cap, a payment that completes an offset is accepted: the cap
+  // refuses only a payment still queued after the closure (A3, S23, ADR-0010; decided
+  // with the user on 2026-10-25).
+  run queueCapOffsetTest =
+    init.then(submit("A", "B", 10, "Normal"))
+      .then(submit("A", "B", 10, "Normal"))
+      .then(submit("A", "B", 10, "Normal"))
+      .then(submit("A", "B", 10, "Normal"))
+      .then(submit("A", "B", 10, "Normal"))
+      .then(submit("A", "B", 10, "Normal"))
+      .expect(queuedCount(payments, nextId) == QUEUE_CAP)
+      .then(submit("B", "A", 60, "Normal"))
+      .expect(lastError == "" and lastValue == 6 and offsetsNow == [[0, 1, 2, 3, 4, 5, 6]] and
+              queuedCount(payments, nextId) == 0)
 
   // SC-A03-01. R7's gridlock: gross settles nothing (k_seq = 0), and the third
   // submission applies k* = (1, 1, 1) as one offset (A3, S23, R7, ADR-0010).
