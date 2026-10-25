@@ -1,5 +1,5 @@
-import type { BankView, Config, Payment } from "@rtgs/core";
-import { expiryOf, formatSpan } from "../model/due.ts";
+import { expiresAt, type BankView, type Config, type Payment } from "@rtgs/core";
+import { formatSpan } from "../model/due.ts";
 import { Amount } from "./Amount.tsx";
 
 const BLOCKED = {
@@ -39,7 +39,7 @@ export function QueueView(props: { bank: BankView; config?: Config | undefined; 
 
 function QueueItem(props: { payment: Payment; head: boolean; config?: Config | undefined; now?: number | undefined; nameOf(a: string): string; code?: string }) {
   const { payment: p, config, now } = props;
-  const left = config && now !== undefined ? expiryOf(p, config) - now : undefined;
+  const left = config && now !== undefined ? expiresAt(p, config) - now : undefined;
   return (
     <li className={props.head ? "head" : undefined}>
       <span className="mono">#{String(p.id)}</span> <Amount value={p.amount} {...(props.code ? { code: props.code } : {})} /> →{" "}

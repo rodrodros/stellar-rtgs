@@ -1,6 +1,7 @@
 // Keeper actions (ADR-0014, ADR-0015): anyone may reject an expired payment order or convert an
 // overdue repo; nothing on the ledger runs by itself. "Due" follows the contract's guards on
 // the latest ledger's close time.
+import { expirablePayments, expiresAt } from "@rtgs/core";
 import { useCapabilities, useSession, useSnapshot } from "@rtgs/core/react";
 import { useMemo } from "react";
 import { ActionButton } from "../components/ActionButton.tsx";
@@ -9,7 +10,7 @@ import { Amount } from "../components/Amount.tsx";
 import { capabilityReason, firstReason } from "../components/capability.ts";
 import { useAction } from "../hooks/useAction.ts";
 import { AUTO_KEEPER_INTERVAL_MS, useAutoKeeper } from "../keeper/AutoKeeperProvider.tsx";
-import { expirablePayments, expiryOf, overdueRepos, termEndOf } from "../model/due.ts";
+import { overdueRepos, termEndOf } from "../model/due.ts";
 import { useRole } from "../session/role.ts";
 
 export function Keeper() {
@@ -73,7 +74,7 @@ export function Keeper() {
               <li key={String(p.id)}>
                 <span className="mono">#{String(p.id)}</span> {session.registry.nameOf(p.from)} → {session.registry.nameOf(p.to)}{" "}
                 <Amount value={p.amount} code={code} /> · {p.priority} · past expiry since{" "}
-                {new Date(expiryOf(p, config!) * 1000).toISOString().replace(".000Z", "Z")}{" "}
+                {new Date(expiresAt(p, config!) * 1000).toISOString().replace(".000Z", "Z")}{" "}
                 <ActionButton disabledReason={expireReason} onClick={() => void action.run(`Expire #${p.id}`, () => actor!.expire(p.id))}>
                   Expire
                 </ActionButton>

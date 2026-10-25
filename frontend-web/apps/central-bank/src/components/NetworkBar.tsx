@@ -1,6 +1,6 @@
 // The top bar: the network switch (mainnet only behind a typed confirmation), the contract,
 // the signer and its role, and the ledger clock.
-import { connectWallet, devnetIdentities, toRtgsError, type NetworkId, type RtgsError } from "@rtgs/core";
+import { connectWallet, devnetIdentities, disconnectWallet, toRtgsError, type NetworkId, type RtgsError } from "@rtgs/core";
 import { useState } from "react";
 import { useAppSession } from "../session/AppSession.tsx";
 import { Address } from "./Address.tsx";
@@ -81,7 +81,13 @@ function SignerPanel() {
         <>
           Signer <Address address={signer.address} name={signer.label} />{" "}
           {role ? <span className={role === "central bank" ? "badge ok" : "badge warn"}>{role}</span> : null}
-          <button type="button" onClick={() => app.setSigner(undefined)}>
+          <button
+            type="button"
+            onClick={() => {
+              if (signer.kind === "wallet") void disconnectWallet().catch(() => {});
+              app.setSigner(undefined);
+            }}
+          >
             Disconnect
           </button>
         </>

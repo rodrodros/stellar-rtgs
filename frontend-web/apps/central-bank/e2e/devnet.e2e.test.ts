@@ -7,6 +7,7 @@
 import {
   bootstrapDevnet,
   connect,
+  expirablePayments,
   devnetIdentities,
   loadNetworks,
   parseAmount,
@@ -20,7 +21,6 @@ import { readSettlementWasm } from "@rtgs/core/node";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AutoKeeper } from "../src/keeper/autoKeeper.ts";
 import { conservation } from "../src/model/conservation.ts";
-import { expirablePayments } from "../src/model/due.ts";
 import { roleOf } from "../src/session/role.ts";
 
 const RPC = process.env.RTGS_DEVNET_RPC ?? "http://localhost:8300/rpc";
@@ -98,9 +98,9 @@ describe.skipIf(!up)("the central bank on the devnet", () => {
     const before = await session.token.balance(bank);
     await admin.issue(bank, parseAmount("5"));
     expect(await session.token.balance(bank)).toBe(before + parseAmount("5"));
-    await admin.clawback(bank, parseAmount("2"), session.contractId);
+    await admin.clawback(bank, parseAmount("2"));
     expect(await session.token.balance(bank)).toBe(before + parseAmount("3"));
-    await expect(admin.clawback(session.contractId, 1n, session.contractId)).rejects.toMatchObject({ title: "Clawback refused" });
+    await expect(admin.clawback(session.contractId, 1n)).rejects.toMatchObject({ title: "Clawback refused" });
   });
 
   it("sees a bank's deposit and queued payment, and conservation holds", async () => {

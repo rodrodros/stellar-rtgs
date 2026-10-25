@@ -204,7 +204,7 @@ function BankRow(props: { bank: Bank; holding: Holding | undefined; role: Role; 
             onConfirm={(value) => {
               setClawback(false);
               void action
-                .run(`Claw back from ${bank.name ?? "the bank"}`, () => admin!.clawback(bank.address, value, session.contractId))
+                .run(`Claw back from ${bank.name ?? "the bank"}`, () => admin!.clawback(bank.address, value))
                 .then(done);
             }}
           />

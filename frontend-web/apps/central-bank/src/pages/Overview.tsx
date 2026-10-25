@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { Address } from "../components/Address.tsx";
 import { Amount } from "../components/Amount.tsx";
 import { QueueView } from "../components/QueueView.tsx";
+import { LedgerLink, TxLink } from "../components/TxLink.tsx";
 import { useConservation } from "../hooks/useConservation.ts";
 import { formatSpan } from "../model/due.ts";
 
@@ -126,12 +127,14 @@ export function Overview() {
           {recent.map((e) =>
             e.type === "Offset" ? (
               <li key={e.eventId}>
-                <span className="badge">offset</span> settled {e.ids.map((id) => `#${id}`).join(", ")} together · ledger {e.ledger}
+                <span className="badge">offset</span> settled {e.ids.map((id) => `#${id}`).join(", ")} together · <LedgerLink ledger={e.ledger} /> · <TxLink hash={e.txHash} />
               </li>
             ) : (
               <li key={e.eventId}>
                 <span className="mono">#{String(e.id)}</span> {nameOf(e.from)} → {nameOf(e.to)} <Amount value={e.amount} code={code} />{" "}
-                <span className="muted">{viaOf(snapshot.payments.get(e.id), e.eventId)} · ledger {e.ledger}</span>
+                <span className="muted">
+                  {viaOf(snapshot.payments.get(e.id), e.eventId)} · <LedgerLink ledger={e.ledger} /> · <TxLink hash={e.txHash} />
+                </span>
               </li>
             ),
           )}

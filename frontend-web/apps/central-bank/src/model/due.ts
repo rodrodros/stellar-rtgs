@@ -1,22 +1,11 @@
-// What a keeper may act on now (ADR-0014, ADR-0015). Both checks follow the contract's own
-// guards: `expire` refuses until `now > submitted_at + expiry_secs`, and `convert_overdue`
-// until `now > opened_at + repo_term_secs`, so a payment or repo exactly at its boundary is
-// not due. `now` is ledger close time, the RTGS's clock, never the local clock.
-import type { Config, Payment, Repo } from "@rtgs/core";
-
-export function expiryOf(payment: Pick<Payment, "submittedAt">, config: Pick<Config, "expirySecs">): number {
-  return payment.submittedAt + config.expirySecs;
-}
+// Repos a keeper may act on now (ADR-0014): `convert_overdue` refuses until
+// `now > opened_at + repo_term_secs`, so a repo exactly at its term is not overdue. `now` is
+// ledger close time, the RTGS's clock, never the local clock. Expired payment orders come from
+// core (`expirablePayments`), which applies the contract's matching rule for `expire`.
+import type { Config, Repo } from "@rtgs/core";
 
 export function termEndOf(repo: Pick<Repo, "openedAt">, config: Pick<Config, "repoTermSecs">): number {
   return repo.openedAt + config.repoTermSecs;
-}
-
-/** Queued payment orders whose expiry has passed, oldest first. */
-export function expirablePayments(payments: Iterable<Payment>, config: Config, now: number): Payment[] {
-  return [...payments]
-    .filter((p) => p.status === "queued" && now > expiryOf(p, config))
-    .sort((a, b) => (a.id < b.id ? -1 : 1));
 }
 
 /** Intraday repos past their term, which a keeper may turn into penalty repos. */

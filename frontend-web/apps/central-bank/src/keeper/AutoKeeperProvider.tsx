@@ -2,10 +2,10 @@
 // whichever page is showing. It is mounted per network, contract and signer (see App), so a
 // switch of any of them resets it to off.
 import { useCapabilities, useStore } from "@rtgs/core/react";
-import { toRtgsError } from "@rtgs/core";
+import { expirablePayments, toRtgsError } from "@rtgs/core";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { firstReason } from "../components/capability.ts";
-import { expirablePayments, overdueRepos } from "../model/due.ts";
+import { overdueRepos } from "../model/due.ts";
 import { useRole } from "../session/role.ts";
 import { useWriteQueue } from "../session/writeQueue.ts";
 import { AutoKeeper, type KeeperResult } from "./autoKeeper.ts";

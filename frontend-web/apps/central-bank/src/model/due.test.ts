@@ -1,17 +1,8 @@
-import type { Config, Payment, Repo } from "@rtgs/core";
+import type { Config, Repo } from "@rtgs/core";
 import { describe, expect, it } from "vitest";
-import { expirablePayments, formatSpan, overdueRepos } from "./due.ts";
+import { formatSpan, overdueRepos } from "./due.ts";
 
 const config: Config = { queueCap: 16, expirySecs: 100, repoTermSecs: 1000, penaltyRateBps: 500 };
-const payment = (id: bigint, submittedAt: number, status: Payment["status"] = "queued"): Payment => ({
-  id,
-  from: "GA",
-  to: "GB",
-  amount: 1n,
-  priority: "normal",
-  submittedAt,
-  status,
-});
 const repo = (id: bigint, openedAt: number, status: Repo["status"] = "intraday"): Repo => ({
   id,
   bank: "GA",
@@ -20,19 +11,6 @@ const repo = (id: bigint, openedAt: number, status: Repo["status"] = "intraday")
   openedAt,
   status,
   rateBps: 0,
-});
-
-describe("expirablePayments", () => {
-  it("follows the contract: due only strictly after submitted_at + expiry_secs", () => {
-    const ps = [payment(2n, 0), payment(1n, 1), payment(3n, 5)];
-    // now = 101: #2 (expiry 100) is past; #1 (expiry 101) is exactly at it, so not due.
-    expect(expirablePayments(ps, config, 101).map((p) => p.id)).toEqual([2n]);
-    expect(expirablePayments(ps, config, 102).map((p) => p.id)).toEqual([1n, 2n]);
-  });
-
-  it("ignores payment orders that are already final", () => {
-    expect(expirablePayments([payment(1n, 0, "settled"), payment(2n, 0, "revoked"), payment(3n, 0, "expired")], config, 10_000)).toEqual([]);
-  });
 });
 
 describe("overdueRepos", () => {

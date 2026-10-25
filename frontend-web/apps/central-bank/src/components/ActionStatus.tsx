@@ -1,4 +1,5 @@
 import type { ActionState } from "../hooks/useAction.ts";
+import { LedgerLink, TxLink } from "./TxLink.tsx";
 
 export function ActionStatus(props: { state: ActionState }) {
   const { pending, error, done } = props.state;
@@ -19,10 +20,14 @@ export function ActionStatus(props: { state: ActionState }) {
         {done.txHash ? (
           <>
             {" "}
-            in transaction <span className="mono" title={done.txHash}>{done.txHash.slice(0, 10)}…</span>
+            in transaction <TxLink hash={done.txHash} />
           </>
         ) : null}
-        {done.ledger !== undefined ? `, ledger ${done.ledger}` : null}
+        {done.ledger !== undefined ? (
+          <>
+            , <LedgerLink ledger={done.ledger} />
+          </>
+        ) : null}
       </p>
     );
   return null;

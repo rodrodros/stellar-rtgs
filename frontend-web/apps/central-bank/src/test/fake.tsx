@@ -47,7 +47,7 @@ export function payment(id: bigint, from: string, to: string, amount: bigint, ex
 
 export function bankView(address: string, name: string, balance: bigint, queues: { urgent?: Payment[]; normal?: Payment[] } = {}): BankView {
   const q = { urgent: queues.urgent ?? [], normal: queues.normal ?? [] };
-  return { address, name, balance, queues: q, analysis: analyseQueues(balance, q, CONFIG, NOW) };
+  return { address, name, balance, queues: q, analysis: analyseQueues(balance, q, CONFIG) };
 }
 
 export interface FakeOptions {

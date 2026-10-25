@@ -39,8 +39,7 @@ describe("Banks", () => {
     expect((within(dialog).getByRole("button", { name: "Claw back" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(within(dialog).getByLabelText("Clawback amount"), { target: { value: "2.5" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Claw back" }));
-    // The contract id goes along so core refuses it too.
-    await waitFor(() => expect(tokenAdmin.clawback).toHaveBeenCalledWith(BANK_A, 25_000_000n, CONTRACT));
+    await waitFor(() => expect(tokenAdmin.clawback).toHaveBeenCalledWith(BANK_A, 25_000_000n));
   });
 
   it("issues cash to an authorized bank", async () => {
