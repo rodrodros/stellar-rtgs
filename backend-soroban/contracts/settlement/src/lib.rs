@@ -3,10 +3,10 @@
 //!
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
-//! other up to the queue cap), the eager closure after every balance increase, and the
-//! `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank` views. The
-//! other entry points are stubs whose unit tests (`src/tests/`) are written and red; they
-//! are implemented test first (TESTING.md).
+//! other up to the queue cap), `revoke`, the eager closure after every balance increase or
+//! revocation, and the `balance`, `payment`, `queue`, `queued_count`, `config` and
+//! `central_bank` views. The other entry points are stubs whose unit tests (`src/tests/`)
+//! are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
 #[cfg(test)]
@@ -54,6 +54,7 @@ pub enum Error {
     SameAccount = 4,
     /// Queuing the payment would exceed `Config::queue_cap` (ADR-0010).
     QueueFull = 5,
+    /// No payment has this id (A5, A6, A8).
     UnknownPayment = 6,
     /// The payment is final: settled, revoked or expired (S3, S5).
     NotQueued = 7,
@@ -327,6 +328,17 @@ fn enqueue(env: &Env, payment: &Payment) {
     put(env, &DataKey::QueuedCount, &count);
 }
 
+/// Takes the queued payment out of its sender's queue for its priority, wherever it
+/// stands, keeping the others in order. A queued payment is always in that queue.
+fn dequeue(env: &Env, payment: &Payment) {
+    let mut queue = Settlement::queue(env.clone(), payment.from.clone(), payment.priority);
+    let i = queue.first_index_of(payment.id).unwrap();
+    queue.remove(i);
+    put_queue(env, &payment.from, payment.priority, &queue);
+    let count = Settlement::queued_count(env.clone()) - 1;
+    put(env, &DataKey::QueuedCount, &count);
+}
+
 /// The eager closure (§4.6, S9; ADR-0010): settles every covered head of `banks`, urgent
 /// first (S7, ADR-0009), and follows the cascade through the queues of each bank a
 /// settlement credits, all in the calling transaction.
@@ -520,9 +532,29 @@ impl Settlement {
         Ok(id)
     }
 
-    /// A6: the sender revokes a queued payment (ADR-0016).
-    pub fn revoke(_env: Env, _id: u64) -> Result<(), Error> {
-        todo!()
+    /// A6: the sender revokes a queued payment (ADR-0016), then settles eagerly.
+    ///
+    /// An id never issued is refused with `UnknownPayment`. The sender authorizes it alone
+    /// (S6); the receiver's consent is neither needed nor enough. Revocation has no
+    /// cut-off: a payment is revocable until it is final (ADR-0016), and a settled, revoked
+    /// or expired one is refused with `NotQueued` (S3, S5). The payment leaves its queue
+    /// for good with status `Revoked` (S13). Its sender's queue head may change, so the
+    /// eager closure follows (S9, ADR-0010).
+    pub fn revoke(env: Env, id: u64) -> Result<(), Error> {
+        let mut payment = Self::payment(env.clone(), id).ok_or(Error::UnknownPayment)?;
+        payment.from.require_auth();
+        if payment.status != Status::Queued {
+            return Err(Error::NotQueued);
+        }
+        env.storage()
+            .instance()
+            .extend_ttl(BUMP_THRESHOLD, BUMP_AMOUNT);
+        dequeue(&env, &payment);
+        payment.status = Status::Revoked;
+        put(&env, &DataKey::Payment(id), &payment);
+        Revoked { id }.publish(&env);
+        eager_closure(&env, Vec::from_array(&env, [payment.from]));
+        Ok(())
     }
 
     /// A8: the sender moves a queued payment to the other priority, keeping its place.

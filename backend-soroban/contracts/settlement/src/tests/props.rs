@@ -234,6 +234,71 @@ fn submission_op() -> impl Strategy<Value = Op> {
     ]
 }
 
+/// A call of the revocation property: a deposit, withdrawal, submission, time step or
+/// revocation by id, or one resolved against the state when it runs:
+/// - `Block(from, to, over, under, priority)` submits from `from` a payment `over` more
+///   than its balance, then one `under` less, which S7 queues behind the first: the queue
+///   a revocation of its head releases;
+/// - `RevokeHead` revokes a bank's head in `≺`, picked by `Index` among the heads with a
+///   covered payment behind them if there are any, else among every head;
+/// - `RevokeQueued` revokes any queued payment, picked by `Index`.
+#[derive(Clone, Debug)]
+enum RevocationOp {
+    Call(Op),
+    Block(usize, usize, i128, i128, Priority),
+    RevokeHead(prop::sample::Index),
+    RevokeQueued(prop::sample::Index),
+}
+
+/// Calls aimed at the queues. Left to random amounts, a bank rarely has a covered payment
+/// queued behind an uncovered head, and an id drawn blindly rarely hits that head, so a
+/// revocation that skips the closure goes unseen. Blind ids, a few of the calls, still
+/// reach `UnknownPayment` and `NotQueued`. Time steps reach past the
+/// default expiry, so that a payment is revoked after it (ADR-0016: no cut-off).
+fn revocation_op() -> impl Strategy<Value = RevocationOp> {
+    use RevocationOp::*;
+    let expiry = default_config().expiry_secs;
+    prop_oneof![
+        2 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Deposit(bank, amount))),
+        1 => (0..BANKS, amount()).prop_map(|(bank, amount)| Call(Op::Withdraw(bank, amount))),
+        3 => (0..BANKS, 0..BANKS, amount(), priority())
+            .prop_map(|(from, to, amount, priority)| Call(Op::Submit(from, to, amount, priority))),
+        2 => (0..BANKS, 0..BANKS, 1i128..=100, 0i128..=100, priority())
+            .prop_map(|(from, to, over, under, priority)| Block(from, to, over, under, priority)),
+        1 => prop_oneof![Just(1u64), Just(expiry + 1), 0u64..=2 * expiry].prop_map(|step| Call(Op::Tick(step))),
+        1 => id().prop_map(|id| Call(Op::Revoke(id))),
+        2 => any::<prop::sample::Index>().prop_map(RevokeHead),
+        1 => any::<prop::sample::Index>().prop_map(RevokeQueued),
+    ]
+}
+
+/// A6, S3: a call changes a payment queued before it only by settling it, apart from the
+/// one it revokes. A settled payment keeps every other field.
+fn queued_kept_or_settled(
+    before: &BTreeMap<u64, Payment>,
+    after: &BTreeMap<u64, Payment>,
+    revoked: Option<u64>,
+) -> Result<(), TestCaseError> {
+    let untouched = before
+        .values()
+        .filter(|payment| payment.status == Status::Queued && Some(payment.id) != revoked);
+    for payment in untouched {
+        let now = &after[&payment.id];
+        let settled = Payment {
+            status: Status::Settled,
+            settled_at: now.settled_at,
+            ..payment.clone()
+        };
+        prop_assert!(
+            now == payment || (now == &settled && now.settled_at.is_some()),
+            "A6: queued payment {} changed to {:?}",
+            payment.id,
+            now
+        );
+    }
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(config(64))]
 
@@ -626,6 +691,152 @@ proptest! {
                 }
             }
             before = after;
+        }
+    }
+
+    /// Revocation takes out the revoked payment alone, then lets the closure settle what
+    /// that releases, over any sequence of deposits, withdrawals, submissions, time steps
+    /// and revocations, valid or not (A6; ADR-0016):
+    /// - A6: an id never issued is refused with `UnknownPayment`, and a payment already
+    ///   final, settled or revoked, with `NotQueued` (S3, S5). A refusal moves and records
+    ///   nothing;
+    /// - A6, S13 without the model's τ_rc cut-off (ADR-0016): any queued payment can be
+    ///   revoked, even once A19's time steps take it past its ADR-0015 expiry. It becomes
+    ///   `Revoked`, otherwise unchanged, and leaves its queue for good;
+    /// - A6: a revocation moves no money of its own: each balance changes only by the
+    ///   payments that settle in the call, and no payment is recorded;
+    /// - A6, S3: every other payment queued before a call is unchanged, or settled with
+    ///   every other field kept;
+    /// - A2, S9, gross: between calls no bank's head in `≺` is covered, so the closure
+    ///   settles whatever a revocation releases in the same call (ADR-0010);
+    /// - S7 under F2: the queue views list each bank's queued payments in `≺` order, so the
+    ///   others keep their order, and what settles in a call is, per bank, a `≺`-prefix of
+    ///   its queue (ADR-0008, ADR-0009);
+    /// - S3, S5: a final payment never changes, and `queued_count` counts the payments
+    ///   queued, from their records;
+    /// - A11, S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    ///
+    /// Each bank starts with half its holding deposited, and `revocation_op` aims the calls
+    /// at queues whose head a revocation releases. A refused deposit, withdrawal or
+    /// submission is skipped. The calls need no later entry point, so this checks
+    /// revocation before SC-P-01 can. Nothing is expired here, so `NotQueued` for an
+    /// expired payment is left to SC-A06-05.
+    #[test]
+    fn revocation_takes_out_only_the_revoked_payment(ops in prop::collection::vec(revocation_op(), 1..30)) {
+        let setup = Setup::new(BANKS, FUNDING);
+        let client = setup.client();
+        // Half of each holding, so that `Block` has a balance to queue a covered payment under.
+        for bank in 0..BANKS {
+            client.deposit(setup.bank(bank), &(FUNDING / 2));
+        }
+        let index = |address: &Address| setup.banks.iter().position(|bank| bank == address).unwrap();
+        let mut before = payments(&setup);
+        let mut now = 0u64;
+
+        for op in ops {
+            let queues: Vec<Vec<u64>> = (0..BANKS).map(|bank| queued_in_order(&setup, &before, bank)).collect();
+            let blocked: Vec<u64> = (0..BANKS)
+                .filter(|&bank| {
+                    let queue = &queues[bank];
+                    queue.len() > 1 && before[&queue[1]].amount <= client.balance(setup.bank(bank))
+                })
+                .map(|bank| queues[bank][0])
+                .collect();
+            let heads: Vec<u64> = if blocked.is_empty() {
+                queues.iter().filter_map(|queue| queue.first().copied()).collect()
+            } else {
+                blocked
+            };
+            let queued: Vec<u64> = queues.concat();
+            let calls = match op {
+                RevocationOp::Call(op) => vec![op],
+                RevocationOp::Block(from, to, over, under, priority) => {
+                    let balance = client.balance(setup.bank(from));
+                    vec![
+                        Op::Submit(from, to, balance + over, priority),
+                        Op::Submit(from, to, balance - under, priority),
+                    ]
+                }
+                RevocationOp::RevokeHead(pick) if !heads.is_empty() => vec![Op::Revoke(*pick.get(&heads))],
+                RevocationOp::RevokeQueued(pick) if !queued.is_empty() => vec![Op::Revoke(*pick.get(&queued))],
+                // Nothing is queued: an id one past the last is unknown.
+                _ => vec![Op::Revoke(before.len() as u64)],
+            };
+            for op in calls {
+                let balances = setup.balances();
+                let mut revoked = None;
+                match op {
+                    Op::Deposit(bank, amount) => {
+                        let _ = typed(client.try_deposit(setup.bank(bank), &amount));
+                    }
+                    Op::Withdraw(bank, amount) => {
+                        let _ = typed(client.try_withdraw(setup.bank(bank), &amount));
+                    }
+                    Op::Submit(from, to, amount, priority) => {
+                        let _ = typed(client.try_submit(setup.bank(from), setup.bank(to), &amount, &priority));
+                    }
+                    Op::Tick(step) => {
+                        now += step;
+                        setup.at(now);
+                    }
+                    Op::Revoke(id) => {
+                        let result = typed(client.try_revoke(&id));
+                        let after = payments(&setup);
+                        match before.get(&id) {
+                            None => prop_assert_eq!(result, Err(Error::UnknownPayment), "A6: unknown {}", id),
+                            Some(payment) if is_final(payment.status) => {
+                                prop_assert_eq!(result, Err(Error::NotQueued), "A6: final {}", id);
+                            }
+                            Some(payment) => {
+                                prop_assert_eq!(result, Ok(()), "A6: queued {} refused", id);
+                                let expected = Payment { status: Status::Revoked, ..payment.clone() };
+                                prop_assert_eq!(after.get(&id), Some(&expected), "S13: {} revoked", id);
+                                revoked = Some(id);
+                            }
+                        }
+                        if result.is_err() {
+                            prop_assert_eq!(&after, &before, "a refusal records nothing");
+                        }
+                        prop_assert_eq!(after.len(), before.len(), "A6 records no payment");
+                        let mut expected = balances.clone();
+                        let newly = after.values().filter(|payment| {
+                            payment.status == Status::Settled && before[&payment.id].status == Status::Queued
+                        });
+                        for payment in newly {
+                            expected[index(&payment.from)] -= payment.amount;
+                            expected[index(&payment.to)] += payment.amount;
+                        }
+                        prop_assert_eq!(setup.balances(), expected, "A6 moved money of its own");
+                    }
+                    _ => unreachable!(),
+                }
+
+                setup.assert_conserved();
+                let after = payments(&setup);
+                for (id, payment) in &before {
+                    if is_final(payment.status) {
+                        prop_assert_eq!(Some(payment), after.get(id), "S3: final payment {} changed", id);
+                    }
+                }
+                queued_kept_or_settled(&before, &after, revoked)?;
+                settled_in_order(&before, &after)?;
+                let queued = after.values().filter(|payment| payment.status == Status::Queued).count();
+                prop_assert_eq!(client.queued_count() as usize, queued, "queued_count");
+                for bank in 0..BANKS {
+                    let in_order = queued_in_order(&setup, &after, bank);
+                    let mut views = setup.queue(bank, Priority::Urgent);
+                    views.extend(setup.queue(bank, Priority::Normal));
+                    prop_assert_eq!(&views, &in_order, "queue of bank {}", bank);
+                    if let Some(head) = in_order.first() {
+                        let (amount, balance) = (after[head].amount, client.balance(setup.bank(bank)));
+                        prop_assert!(
+                            amount > balance,
+                            "S9: bank {}'s head {} ({}) is covered by {}", bank, head, amount, balance
+                        );
+                    }
+                }
+                before = after;
+            }
         }
     }
 }

@@ -147,7 +147,7 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 - [x] `unit::payments::an_uncovered_urgent_head_blocks_the_normal_queue_in_the_closure` (SC-A02-09). Added in Flow 8, since SC-A02-03's urgent payment is covered and settles; it fails if the closure settles a bank's normal payments past an urgent one it does not cover.
 - [x] `props::the_closure_leaves_every_queue_at_rest` (SC-P-12). Added in Flow 8: SC-P-01 checks S9 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. It checks gross rest, no bank's head in `≺` covered, rather than k* = 0, so it stays valid once Flow 13's offset exists. It fails against each of these closures, and each shrunk case is one a unit test already pins: with no closure, a submission that settles and leaves its receiver's covered head queued (SC-A02-05); with no cascade, a deposit whose settlement leaves the receiver's covered head queued (SC-A02-04); with each bank visited once, a cascade that returns to a bank whose next head it now covers (SC-A02-08); and with no urgent block, a normal payment settled past its bank's uncovered urgent one (SC-A02-09). It reads only the views, which show an empty queue the same whether its entry is removed or kept, so a closure that keeps the entry of a queue it empties is left to SC-A02-08.
 
-## Flow 9: revoke, A6 (11)
+## Flow 9: revoke, A6 (12)
 
 `revoke` needs:
 - the sender's authorization;
@@ -156,17 +156,18 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 - the `Revoked` event;
 - then the closure.
 
-- [ ] `unit::queue_management::a_queued_payment_can_be_revoked` (SC-A06-01)
-- [ ] `unit::queue_management::revocation_has_no_cut_off` (SC-A06-02)
-- [ ] `unit::queue_management::a_settled_payment_cannot_be_revoked` (SC-A06-03)
-- [ ] `unit::queue_management::a_revoked_payment_cannot_be_revoked_again` (SC-A06-04)
-- [ ] `unit::queue_management::revoking_an_unknown_payment_is_refused` (SC-A06-06)
-- [ ] `unit::queue_management::revoking_the_head_releases_the_payment_behind_it` (SC-A06-07)
-- [ ] `unit::queue_management::revoking_the_urgent_head_releases_normal_payments` (SC-A06-08)
-- [ ] `unit::queue_management::revoking_from_the_middle_keeps_the_queue_order` (SC-A06-09)
-- [ ] `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` (SC-A11-11)
-- [ ] `auth::revoke_is_authorized_by_the_sender` (SC-A06-10)
-- [ ] `auth::only_the_sender_can_revoke` (SC-A06-10)
+- [x] `unit::queue_management::a_queued_payment_can_be_revoked` (SC-A06-01)
+- [x] `unit::queue_management::revocation_has_no_cut_off` (SC-A06-02)
+- [x] `unit::queue_management::a_settled_payment_cannot_be_revoked` (SC-A06-03)
+- [x] `unit::queue_management::a_revoked_payment_cannot_be_revoked_again` (SC-A06-04)
+- [x] `unit::queue_management::revoking_an_unknown_payment_is_refused` (SC-A06-06)
+- [x] `unit::queue_management::revoking_the_head_releases_the_payment_behind_it` (SC-A06-07)
+- [x] `unit::queue_management::revoking_the_urgent_head_releases_normal_payments` (SC-A06-08)
+- [x] `unit::queue_management::revoking_from_the_middle_keeps_the_queue_order` (SC-A06-09)
+- [x] `unit::funding::withdraw_may_spend_what_a_queued_payment_would_need` (SC-A11-11)
+- [x] `auth::revoke_is_authorized_by_the_sender` (SC-A06-10)
+- [x] `auth::only_the_sender_can_revoke` (SC-A06-10)
+- [x] `props::revocation_takes_out_only_the_revoked_payment` (SC-P-13). Added in Flow 9: SC-P-01 and SC-P-02 check revocation too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals, submissions, time steps and revocations alone. Each bank starts with half its holding deposited. Left to random amounts and ids, a bank rarely has a covered payment queued behind an uncovered head, and a revocation rarely hits that head, so a revocation that skips the closure goes unseen. So some calls are resolved against the state when they run: a pair of submissions from one bank, one over its balance and one at most its balance, which S7 queues behind the first; the revocation of a head, preferring one with a covered payment behind it; and the revocation of any queued payment. Blind ids still reach `UnknownPayment` and `NotQueued`, and time steps reach past the default expiry. The no-closure mutant below fails under each of seeds 1 to 20. It fails against each of these revocations, and each shrunk case is one a unit test already pins: with no closure, a revoked head whose covered successor stays queued (SC-A06-07); with no removal from the queue, or with `queued_count` left as it was, a revoked payment still counted (SC-A06-01); with no `NotQueued` check, a settled payment revoked, which traps in the host (SC-A06-03); removing the head instead of the revoked payment, so that the payment behind the head settles rather than being revoked (SC-A06-09); with a cut-off at the expiry, a payment refused once its expiry has passed (SC-A06-02); and revoking the last payment of the queue as well, a covered successor revoked instead of settled (SC-A06-07).
 
 ## Flow 10: reprioritise, A8 (9)
 
@@ -355,8 +356,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 8) | 62 |
-| Still to fix (Flows 9 to 21) | 98 |
-| All | 160 |
+| Already green (Flows 0 to 9) | 74 |
+| Still to fix (Flows 10 to 21) | 87 |
+| All | 161 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, and Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, and Flow 9 added SC-P-13.
