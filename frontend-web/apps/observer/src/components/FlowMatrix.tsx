@@ -62,7 +62,7 @@ export function FlowMatrix() {
                   </th>
                 ))}
                 <th scope="col" className="num">
-                  Paid
+                  {mode === "queued" ? "Owes" : "Paid"}
                 </th>
               </tr>
             </thead>
@@ -86,7 +86,7 @@ export function FlowMatrix() {
                 </tr>
               ))}
               <tr className="total">
-                <th scope="row">Received</th>
+                <th scope="row">{mode === "queued" ? "Owed" : "Received"}</th>
                 {parties.map((to) => (
                   <td key={to} className="num">
                     <Amount value={columnTotal(matrix, to)} />

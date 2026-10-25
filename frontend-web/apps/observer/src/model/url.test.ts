@@ -11,8 +11,15 @@ describe("url query", () => {
   });
 
   it("round-trips every field", () => {
-    const query = { network: "testnet", contract: CONTRACT, from: 1234, payment: 42n, tx: HASH, ledger: 678 };
-    expect(parseQuery(formatQuery(query))).toEqual(query);
+    for (const drawer of [{ payment: 42n }, { tx: HASH }, { ledger: 678 }]) {
+      const query = { network: "testnet", contract: CONTRACT, from: 1234, ...drawer };
+      expect(parseQuery(formatQuery(query))).toEqual(query);
+    }
+  });
+
+  it("opens one drawer from a link naming several: payment, then tx, then ledger", () => {
+    expect(parseQuery(`?payment=1&tx=${HASH}&ledger=2`)).toEqual({ from: "retention", payment: 1n });
+    expect(parseQuery(`?tx=${HASH}&ledger=2`)).toEqual({ from: "retention", tx: HASH });
   });
 
   it("drops values that can't be what they claim", () => {

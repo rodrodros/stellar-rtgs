@@ -23,7 +23,7 @@ export const creditImplemented = (caps: Capabilities) => caps.credit === "availa
 function HeadStatus(props: { view: BankView }) {
   const { urgent, normal } = props.view.analysis;
   const blocked = [urgent, normal].find((q) => q.blockedBy);
-  if (!blocked) return <span className="status status-rest">at rest</span>;
+  if (!blocked) return <span className="status status-rest">{props.view.queues.urgent.length + props.view.queues.normal.length ? "heads covered" : "nothing queued"}</span>;
   if (blocked.blockedBy === "urgent-queued") return <span className="status status-blocked">normal queue held back by urgent</span>;
   const short = (blocked.head?.amount ?? 0n) - props.view.balance;
   return (
@@ -35,6 +35,7 @@ function HeadStatus(props: { view: BankView }) {
 
 export function BanksTable() {
   const banks = useBanks();
+  const ready = useSnapshot((s) => s.status === "ready");
   const caps = useSnapshot((s) => s.capabilities);
   const credit = creditImplemented(caps);
   return (
@@ -44,7 +45,9 @@ export function BanksTable() {
         <span className="muted">{banks.length} banks</span>
       </header>
       {banks.length === 0 ? (
-        <p className="empty">No banks known yet: none in config, none registered by the central bank, and none seen in events.</p>
+        <p className="empty">
+          {ready ? "No banks known yet: none in config, none registered by the central bank, and none seen in events." : "Reading the banks…"}
+        </p>
       ) : (
         <table>
           <thead>
@@ -187,10 +190,12 @@ function Lane(props: { view: BankView; priority: Priority; now: number | undefin
 
 export function QueueLanes() {
   const all = useBanks();
-  const loading = all.some(({ view }) => !view);
+  const ready = useSnapshot((s) => s.status === "ready");
+  const loading = !ready || all.some(({ view }) => !view);
   const banks = all.filter(({ view }) => view && view.queues.urgent.length + view.queues.normal.length > 0);
-  // One clock for every countdown on the panel.
-  const { now } = useLedgerClock();
+  // One clock for every countdown on the panel: the latest ledger's close time, which is what
+  // `expire` compares against (the local clock runs ahead between ledgers).
+  const { closeTime: now } = useLedgerClock();
   return (
     <section className="panel queues" aria-labelledby="queues-title">
       <header className="panel-header">

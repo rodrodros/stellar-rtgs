@@ -34,10 +34,11 @@ export function parseQuery(search: string): ObserverQuery {
   else if (contract) query.invalidContract = contract;
   const payment = p.get("payment");
   if (payment && /^\d+$/.test(payment)) query.payment = BigInt(payment);
+  // One drawer at a time, even from a hand-written link: payment, then tx, then ledger.
   const tx = p.get("tx");
-  if (tx && TX_HASH.test(tx)) query.tx = tx.toLowerCase();
+  if (query.payment === undefined && tx && TX_HASH.test(tx)) query.tx = tx.toLowerCase();
   const ledger = p.get("ledger");
-  if (ledger && /^\d+$/.test(ledger)) query.ledger = Number(ledger);
+  if (query.payment === undefined && !query.tx && ledger && /^\d+$/.test(ledger)) query.ledger = Number(ledger);
   return query;
 }
 

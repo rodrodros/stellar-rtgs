@@ -87,6 +87,11 @@ function Observer(props: { env: Env }) {
   const { env } = props;
   const networks = useMemo(() => loadNetworks(env), [env]);
   const network = query.network ? networks.find((n) => n.id === query.network) : defaultNetwork(networks, env);
+  // The default network goes into the URL too, so a shared link opens on the same network
+  // whatever the recipient's build defaults to.
+  useEffect(() => {
+    if (!query.network && network) update({ network: network.id });
+  }, [query.network, network, update]);
   // A link with a malformed contract id is refused, never answered with another contract.
   const blocked = query.invalidContract !== undefined;
 

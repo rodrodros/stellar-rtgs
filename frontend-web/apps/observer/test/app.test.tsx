@@ -66,6 +66,7 @@ describe("system picture", () => {
     open("");
     const banks = screen.getByRole("region", { name: "Participants" });
     expect(within(banks).getByText("Bank C").closest("tr")!.textContent).toMatch(/200 USD.*1.*1.*urgent head uncovered: needs 800 USD more/);
+    expect(within(banks).getByText("Bank A").closest("tr")!.textContent).toMatch(/nothing queued/);
     expect(screen.getByRole("meter").getAttribute("aria-valuenow")).toBe("2");
     expect(screen.getByRole("region", { name: "Central queue" }).textContent).toMatch(/2 \/ 16 queued/);
 
@@ -89,6 +90,13 @@ describe("system picture", () => {
     open("");
     expect(screen.getByText("Couldn't tell whether this contract implements credit (intraday repos).")).toBeTruthy();
     expect(screen.getAllByText(/past expiry \(couldn't tell whether this contract implements expiry\)/).length).toBeGreaterThan(0);
+  });
+
+  it("doesn't claim there are no banks while the first load hasn't finished", () => {
+    connection.result = { session: fakeSession(snapshotOf(undefined, { status: "error", registry: [], banks: new Map() })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByRole("region", { name: "Participants" }).textContent).toMatch(/Reading the banks…/);
+    expect(screen.getByRole("region", { name: "Queues" }).textContent).toMatch(/Reading the queues…/);
   });
 
   it("says the queues are still being read rather than empty", () => {
@@ -124,7 +132,7 @@ describe("payment lifecycle", () => {
     expect(drawer.textContent).toMatch(/Settled \(final\) — settled by the eager closure after #0 credited Bank B/);
     fireEvent.click(within(drawer).getByLabelText("Close"));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?network=devnet");
   });
 
   it("says where a queued payment order waits", () => {
@@ -233,7 +241,7 @@ describe("retention window", () => {
 
     fireEvent.change(input, { target: { value: "95" } });
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
-    expect(window.location.search).toBe("?from=95");
+    expect(window.location.search).toBe("?network=devnet&from=95");
     expect(connection.calls.at(-1)!.key).toBe("95");
   });
 
@@ -323,7 +331,7 @@ describe("links and the URL", () => {
     const drawer = screen.getByRole("dialog", { name: "Ledger 103" });
     expect(drawer.textContent).toMatch(/1 transaction touched the settlement contract/);
     expect(drawer.textContent).toMatch(/Bank A deposited 300 USD/);
-    expect(window.location.search).toBe("?ledger=103");
+    expect(window.location.search).toBe("?network=devnet&ledger=103");
   });
 
   it("adds one history entry per drawer opened, under StrictMode too", () => {
@@ -358,12 +366,34 @@ describe("links and the URL", () => {
 
   it("closes a drawer opened over the dashboard by going back, so Back doesn't reopen it", async () => {
     open("");
-    const start = window.history.length;
+    const go = vi.spyOn(window.history, "go");
     fireEvent.click(within(screen.getByRole("region", { name: "Queues" })).getAllByRole("button", { name: "#2" })[0]!);
     fireEvent.click(within(screen.getByRole("dialog", { name: "Payment order 2" })).getByRole("button", { name: /close/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(window.location.search).toBe("");
-    expect(window.history.length).toBe(start + 1);
+    expect(window.location.search).toBe("?network=devnet");
+    expect(go.mock.calls).toEqual([[-1]]);
+    go.mockRestore();
+  });
+
+  it("closes drawers opened one from another by going back to the dashboard", async () => {
+    open("");
+    const go = vi.spyOn(window.history, "go");
+    fireEvent.click(within(screen.getByRole("region", { name: "Queues" })).getAllByRole("button", { name: "#2" })[0]!);
+    const payment = screen.getByRole("dialog", { name: "Payment order 2" });
+    fireEvent.click(within(payment).getAllByRole("button", { name: /^tx / })[0]!);
+    const drawer = screen.getByRole("dialog", { name: "Transaction" });
+    fireEvent.click(within(drawer).getByRole("button", { name: /close/i }));
+    fireEvent.click(within(drawer).getByRole("button", { name: /close/i }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(window.location.search).toBe("?network=devnet");
+    // Both drawers' entries are left behind in one step, and the second click didn't go further back.
+    expect(go.mock.calls).toEqual([[-2]]);
+    go.mockRestore();
+  });
+
+  it("shares the default network in links", () => {
+    open("?payment=2");
+    expect(window.location.search).toBe("?network=devnet&payment=2");
   });
 
   it("closes a drawer opened from a link in place", () => {
@@ -371,7 +401,7 @@ describe("links and the URL", () => {
     const start = window.history.length;
     fireEvent.click(within(screen.getByRole("dialog", { name: "Payment order 2" })).getByRole("button", { name: /close/i }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?network=devnet");
     expect(window.history.length).toBe(start);
   });
 
@@ -387,7 +417,7 @@ describe("limits and failures after connecting", () => {
     open("");
     fireEvent.change(screen.getByLabelText("Load events from"), { target: { value: "hour" } });
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
-    expect(window.location.search).toBe("?from=90");
+    expect(window.location.search).toBe("?network=devnet&from=90");
   });
 
   it("warns once the store has dropped older events, and drops the possibly cut transaction", () => {

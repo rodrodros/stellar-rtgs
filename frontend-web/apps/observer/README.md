@@ -1,6 +1,6 @@
 # @rtgs/observer
 
-A read-only watcher of the RTGS: pick a network and a settlement contract, then watch how the participants and the central bank interact. It holds no keys and signs nothing, on any network.
+A read-only watcher of the RTGS: pick a network and a settlement contract, then watch how the participants and the central bank interact. It signs nothing and keeps no keys, on any network. (On devnet, core derives the public demo identities to find the central bank's address; see below.)
 
 ## What it shows
 
@@ -58,6 +58,7 @@ The e2e test bootstraps a fresh deployment, drives two scenarios through core's 
 
 The observer works around these today; each would be a small addition to core.
 - **`MAX_EVENTS`.** The store keeps only the newest 2,000 events. Once it reaches that, the observer warns, and it leaves the oldest kept transaction out of the cause analysis, since it may have lost its first events. The constant isn't exported from the package root, so `src/core.ts` repeats it. Ask: export it.
+- **Address-only devnet identities.** On devnet, `connect()` and the bank registry derive keypairs from the public demo seed only to learn addresses, so key material exists in the observer's runtime although nothing signs. Ask: derive the addresses alone for read-only callers.
 - **A read-only entry.** `@rtgs/core`'s root entry also brings in the devnet bootstrap, so the observer's bundle carries the settlement Wasm and the SAC spec, which it never uses. Ask: a read-only entry (or side-effect-free modules) that leaves them out.
 
 ## Shared UI

@@ -70,7 +70,7 @@ function QueuePlace(props: { payment: Payment }) {
   const view = useSnapshot((s) => s.banks.get(payment.from));
   const config = useSnapshot((s) => s.config);
   const caps = useSnapshot((s) => s.capabilities);
-  const { now } = useLedgerClock();
+  const { closeTime: now } = useLedgerClock();
   if (!view) return null;
   const queue = view.queues[payment.priority];
   const index = queue.findIndex((p) => p.id === payment.id);
