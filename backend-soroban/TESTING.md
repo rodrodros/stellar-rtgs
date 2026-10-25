@@ -68,7 +68,22 @@ All commands come from the research handbook, which ran each of them on this mac
 **Traps:**
 - **Shrinking is degraded through `SorobanArbitrary`.** Generate plain Rust values, such as indexes into a bank list, and build the soroban values from them.
 - **Keep the cases small.** Each one builds a whole `Env`.
+- **No test snapshots.** soroban-sdk writes a JSON snapshot when an `Env` drops, one per proptest case, and that took nearly all of a property test's time (30 s against 0.65 s). `Setup::build` turns it off; any other `Env` a test builds needs `Env::new_with_config(EnvTestConfig { capture_snapshot_at_drop: false })`.
 - **Pin a seed for CI.** `make test` runs every property with the fixed seed and case count in its `config()`. To explore further, set `PROPTEST_RNG_SEED` and `PROPTEST_CASES`, which override both: `PROPTEST_RNG_SEED=12345 PROPTEST_CASES=1000 cargo test -p settlement state_machine`. No scheduled job does this yet.
+
+**Hand mutants.** To show that a property test catches a bug, run it against hand-written mutants, under the pinned seed and other seeds:
+
+```sh
+lib=contracts/settlement/src/lib.rs
+cp $lib $SCRATCH/lib.rs   # edit the copy into the mutant, then:
+diff -u --label a/$lib --label b/$lib $lib $SCRATCH/lib.rs > $SCRATCH/no_closure.patch
+make mutate TEST=reprioritisation_moves_only_the_priority MUTANTS="$SCRATCH/*.patch"   # SEEDS=4 by default
+```
+
+- `scripts/mutate.sh` applies each patch to a copy in `target/mutate/`, builds it into its own target directory, and runs the test binary under every seed in parallel, with shrinking off. It prints one line per mutant: `no_closure  pinned: killed  seeds 1-4 killed: 4/4`, and exits 1 if any survives.
+- The worktree is never edited, so other cargo commands and agents keep working while it runs.
+- A sweep of six mutants takes about 15 s once `target/mutate/` is built; the first run builds the dependencies, about 75 s. `SEEDS=20` takes about 25 s.
+- `make mutate-selftest` checks the script itself: a mutant the test catches is killed, a no-op mutant survives, and a stale patch is an error.
 
 ## 3. Model-based tests: Quint traces replayed against the contract
 
@@ -151,7 +166,7 @@ Add each of these when there is code worth it. Commands are in handbook 04.
 | Layer | When | Where and how | Trap |
 |---|---|---|---|
 | Coverage | now, informational; gate at 95% once payments exist | `make cov`; add `--fail-under-lines 95` | Code run as Wasm shows 0%; exclude the Kani crate (C-ST-107) |
-| Mutation | once the settlement logic exists | `cargo mutants --no-shuffle -p settlement -j 4`; require 0 missed | 97% coverage still missed 3 mutants in the lab (C-ST-033) |
+| Mutation | once the settlement logic exists and no test is red | `cargo mutants --no-shuffle -p settlement -j 4`; require 0 missed. Until then, hand mutants (§2) | 97% coverage still missed 3 mutants in the lab (C-ST-033). Its baseline must pass, so the red tests of later flows block it |
 | Kani | for rules in `crates/rtgs-core` | a `kani/` crate with small bounds; `cargo kani` | Can't compile the test host (C-ST-059); keep proofs one step |
 | Fuzzing | once there are entry points with arithmetic | `cargo +nightly fuzz` in `contracts/settlement/fuzz` | On macOS, use `--sanitizer=none` (C-HB-051) |
 | Scout | before any review | `SCOUT_OFFLINE=1 cargo scout-audit ...` | Exits 0 with findings; fail on the `FAIL` file (C-HB-050) |

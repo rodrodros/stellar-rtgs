@@ -25,7 +25,8 @@ This repo implements an RTGS on Stellar as Soroban contracts, test first. Read `
 - **Toolchain.**
   - Don't change the pins in `rust-toolchain.toml`, `Cargo.toml` or `devnet/common.sh` without updating `scripts/check-env.sh` to match.
   - Don't install with `brew` or `sudo`.
-- **Generated test snapshots** (`test_snapshots/`) are gitignored. Don't commit them.
+- **Test snapshots stay off.** `Setup` builds its `Env` with `capture_snapshot_at_drop: false`: writing a snapshot per proptest case took nearly all of a property test's time. Build any new `Env` the same way.
+- **Mutate a copy, never the worktree.** Run hand mutants with `make mutate` (TESTING.md, "Hand mutants"), which leaves the worktree and its `target/` free for other work. A sweep is the pinned seed plus seeds 1–4; run more only when a reviewer asks.
 - **Never save task-specific guidance to Claude's memory.** It is shared by every agent in this repo.
 - **Issues and specs** live in `../.scratch/<feature>/`. The vocabulary is in `../GLOSSARY.md`, and the decisions are in `../docs/adr/`.
 

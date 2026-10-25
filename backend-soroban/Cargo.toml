@@ -27,3 +27,8 @@ lto = true
 [profile.release-with-logs]
 inherits = "release"
 debug-assertions = true
+
+# The test host is slow unoptimised. Optimise dependencies only, so a change to a contract
+# still recompiles in seconds.
+[profile.dev.package."*"]
+opt-level = 3

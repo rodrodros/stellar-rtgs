@@ -2,7 +2,7 @@
 use std::vec::Vec as StdVec;
 
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, IssuerFlags, Ledger as _},
+    testutils::{Address as _, EnvTestConfig, Events as _, IssuerFlags, Ledger as _},
     token::{StellarAssetClient, TokenClient},
     xdr, Address, Env, Event,
 };
@@ -76,7 +76,11 @@ impl Setup {
     }
 
     fn build(n: usize, funding: i128, config: Config, code: Code) -> Self {
-        let env = Env::default();
+        // No snapshot at drop: the files are gitignored and never read, and writing one per
+        // proptest case took nearly all of a property test's time.
+        let env = Env::new_with_config(EnvTestConfig {
+            capture_snapshot_at_drop: false,
+        });
         let cb = Address::generate(&env);
         let sac = env.register_stellar_asset_contract_v2(cb.clone());
         for flag in [

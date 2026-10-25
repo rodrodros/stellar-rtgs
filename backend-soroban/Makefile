@@ -1,5 +1,5 @@
 # Every target runs from the repository root. See README.md for the order to run them in.
-.PHONY: check-env fmt lint build test cov quint quint-traces devnet-up devnet-smoke devnet-down integration integration-strict clean
+.PHONY: check-env fmt lint build test cov mutate mutate-selftest quint quint-traces devnet-up devnet-smoke devnet-down integration integration-strict clean
 
 check-env:
 	scripts/check-env.sh
@@ -23,6 +23,15 @@ test: build
 # Informational for now; TESTING.md says when to turn on --fail-under-lines 95.
 cov:
 	cargo llvm-cov --workspace --locked --summary-only
+
+# Hand mutants (TESTING.md, "Mutation"), in a copy of the worktree:
+# make mutate TEST=<test filter> MUTANTS="<a.patch> <b.patch>" [SEEDS=4]
+SEEDS ?= 4
+mutate:
+	scripts/mutate.sh --seeds $(SEEDS) $(TEST) $(MUTANTS)
+
+mutate-selftest:
+	scripts/mutate-selftest.sh
 
 # Model-based tests (TESTING.md §3): check the Quint model, then fail if the committed traces
 # are stale or any witness is unreached. `cargo test -p settlement itf_replay` replays the
