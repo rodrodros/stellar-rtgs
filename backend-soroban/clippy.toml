@@ -1,0 +1,5 @@
+# min_ident_chars (Cargo.toml): the single-letter names allowed besides generics, lifetimes
+# and `_`, which the lint never flags. Both values are clippy's defaults, written out so the
+# policy is visible and a toolchain bump can't change it.
+allowed-idents-below-min-chars = ["i", "j", "x", "y", "z", "w", "n"]
+min-ident-chars-threshold = 1
