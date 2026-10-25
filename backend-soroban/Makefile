@@ -24,7 +24,7 @@ test: build
 cov:
 	cargo llvm-cov --workspace --locked --summary-only
 
-# Hand mutants (TESTING.md, "Mutation"), in a copy of the worktree:
+# Hand mutants (TESTING.md, "Hand mutants"), in a copy of the worktree:
 # make mutate TEST=<test filter> MUTANTS="<a.patch> <b.patch>" [SEEDS=4]
 SEEDS ?= 4
 mutate:
