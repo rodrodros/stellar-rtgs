@@ -435,14 +435,32 @@ fn assert_cleared_the_queue(
     budget: &Budget,
     expected: &[i128],
 ) {
+    assert_settled_all_but(setup, returned, offsets, budget, 0, expected);
+}
+
+/// [`assert_cleared_the_queue`], for a call that leaves `left` payments queued.
+fn assert_settled_all_but(
+    setup: &Setup,
+    returned: &xdr::ScVal,
+    offsets: usize,
+    budget: &Budget,
+    left: u32,
+    expected: &[i128],
+) {
+    assert_within_budget(setup, returned, budget);
+    assert_eq!(offsets_published(setup), offsets);
+    assert_eq!(setup.client().queued_count(), left);
+    assert_eq!(setup.balances(), expected);
+    setup.assert_conserved();
+}
+
+/// The last call, which returned `returned`, kept within Mainnet's limits and within its
+/// `budget`.
+fn assert_within_budget(setup: &Setup, returned: &xdr::ScVal, budget: &Budget) {
     assert_within_mainnet_limits(setup, returned);
     let used = setup.env.cost_estimate().resources();
     assert!(test_host_footprint(setup) <= budget.footprint, "{used:?}");
     assert_eq!(used.contract_events_size_bytes, budget.events, "{used:?}");
-    assert_eq!(offsets_published(setup), offsets);
-    assert_eq!(setup.client().queued_count(), 0);
-    assert_eq!(setup.balances(), expected);
-    setup.assert_conserved();
 }
 
 /// Funds bank 0 with `amount` and deposits it, then checks that the deposit cleared the
@@ -501,8 +519,9 @@ fn covered_submit_clears_the_queue(
 // refuses does the work of one that queues, the payment queued and an offset that settles
 // nothing, before the refusal rolls it back. That offset reads every queued payment, its
 // queue and both its accounts, so its worst case has a distinct sender and receiver for
-// each payment (SC-ST-11). `revoke` and `expire` free a slot, and `reprioritise` settles at
-// most the queued payments.
+// each payment (SC-ST-11). `revoke`, `expire` and `reprioritise` settle at most n - 1
+// (SC-ST-17 to SC-ST-22), and the entry points that run no closure read no queue
+// (SC-ST-23).
 //
 // Events cost too: each payment the call settles publishes a `Settled` event naming two
 // banks, about 250 bytes with account banks, and an offset adds one `Offset` event with
@@ -541,6 +560,15 @@ fn covered_submit_clears_the_queue(
 // SC-ST-04's ring, 391, 193 and 16,108, or 16,120 with its return value, below SC-ST-10.
 // So the cap stays at 62.
 //
+// `revoke`, `expire` and `reprioritise` (Flow 22) settle at most n - 1, behind a blocker
+// (SC-ST-17 to SC-ST-22, below). Measured at 62, down SC-ST-07's tree and around
+// SC-ST-04's ring: `revoke` 383, 190 and 14,732, and 381, 189 and 15,568; `expire`, which
+// needs no authorization and so writes no nonce, 380, 189 and 14,732, and 378, 188 and
+// 15,568; `reprioritise` 383, 189 and 14,784, and 382, 189 and 15,620. The entry points
+// that run no closure (SC-ST-23), at a full queue: `withdraw` 12, 4 and 404,
+// `set_collateral` 7, 2 and 168, `convert_overdue` 6, 2 and 124, and `repay` 14, 5 and
+// 364. All are below `open_repo` and `submit`, so the cap stays at 62.
+//
 // Each test also holds its call to what it measured, its budget, so that one needless
 // entry, or a larger event, fails the test it adds to instead of waiting for the limit.
 // The event bytes are held exactly, so that events priced too low fail too. Change a
@@ -571,7 +599,12 @@ fn submit_ring(setup: &Setup, n: usize) {
 /// balance is 0, so everything queues. Returns what bank 0 must receive to settle it all,
 /// 1 more than it pays.
 fn submit_tree(setup: &Setup, n: usize) -> i128 {
-    // need[parent]: what bank `parent` receives, 1 more than it pays its children.
+    submit_tree_from(setup, 0, n)
+}
+
+/// [`submit_tree`], with the tree's banks numbered from `root`, so bank `root` heads it.
+fn submit_tree_from(setup: &Setup, root: usize, n: usize) -> i128 {
+    // need[parent]: what bank `root + parent` receives, 1 more than it pays its children.
     let mut need = std::vec![1_i128; n + 1];
     for parent in (0..=n).rev() {
         for child in [2 * parent + 1, 2 * parent + 2] {
@@ -585,8 +618,8 @@ fn submit_tree(setup: &Setup, n: usize) -> i128 {
         for (child, priority) in [(2 * parent + 1, URGENT), (2 * parent + 2, NORMAL)] {
             if child <= n {
                 client.submit(
-                    setup.bank(parent),
-                    setup.bank(child),
+                    setup.bank(root + parent),
+                    setup.bank(root + child),
                     &need[child],
                     &priority,
                 );
@@ -959,4 +992,296 @@ fn a_repo_that_completes_an_offset_over_a_full_queue_fits_in_one_transaction() {
         },
         &expected,
     );
+}
+
+// The calls that take a payment out of the queue or move it, `revoke`, `expire` and
+// `reprioritise`, run the eager closure from the payment's sender (S9, ADR-0010), so they
+// are priced in the same two shapes: SC-ST-07's tree for the footprint, headed by bank 1
+// and paid for by bank 0's normal payment to it, and SC-ST-04's ring for the event bytes.
+// In each, bank 0's urgent `BLOCKER`, which bank 0 never
+// covers, holds up every payment of bank 0's behind it (S7, ADR-0009), and so the whole
+// shape: the queue is full and at rest, with bank 0 already holding what the shape needs.
+// The call then gets the blocker out of the way, and the closure settles the other `n - 1`
+// payments.
+//
+// That is the most these calls can settle. `revoke` and `expire` take the blocker out.
+// `reprioritise` could settle all `n` only by settling the whole queue, and F1 decides
+// that set by its members alone, whatever their order, so it was already feasible before
+// the move and the closure had settled it (R4, S23). So the blocker stays queued, and
+// the offset reads its receiver's balance: the blocker pays a bank outside the shape,
+// which costs 1 test-host entry more than one in it. Each direction of the move was
+// measured in both shapes, and each test takes the costlier (Flow 22's review). Down the
+// tree, bank 0 moves its older normal payment to urgent, ahead of the younger blocker:
+// 1 entry more than moving the blocker to normal. Around the ring, bank 0 moves the
+// blocker to normal, behind its ring payment: 2 more than the other way.
+
+/// More than bank 0 ever holds in these shapes.
+const BLOCKER: i128 = 1_000_000;
+
+/// Whether bank 0's blocker is older or younger than the shape it blocks.
+#[derive(Clone, Copy)]
+enum Blocker {
+    /// Submitted first, and the shape a full expiry later: only the blocker can expire
+    /// (ADR-0015).
+    Older,
+    /// Submitted after the shape, so that a move by age puts bank 0's normal payment ahead
+    /// of it, moved to urgent (SC-ST-21), or it behind bank 0's normal payment, moved to
+    /// normal (SC-ST-22; A8 with `toEnd = false`).
+    Younger,
+}
+
+/// Submits the blocker, to the last bank, which is outside the shape, and `shape`, in the
+/// order `blocker` says. Returns the blocker's id and what `shape` returned.
+fn block<T>(setup: &Setup, blocker: Blocker, shape: impl FnOnce() -> T) -> (u64, T) {
+    let outside = setup.bank(setup.banks.len() - 1);
+    let submit_blocker = || {
+        setup
+            .client()
+            .submit(setup.bank(0), outside, &BLOCKER, &URGENT)
+    };
+    match blocker {
+        Blocker::Older => {
+            let id = submit_blocker();
+            setup.at(default_config().expiry_secs);
+            (id, shape())
+        }
+        Blocker::Younger => {
+            let submitted = shape();
+            (submit_blocker(), submitted)
+        }
+    }
+}
+
+/// Funds bank 0 with `amount`, which settles nothing while the blocker holds the shape
+/// up, and checks that the queue is full.
+fn fund_bank_0(setup: &Setup, amount: i128) {
+    let client = setup.client();
+    setup.mint(setup.bank(0), amount);
+    client.deposit(setup.bank(0), &amount);
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+}
+
+/// `n + 1` banks: bank 0 pays bank 1 normal what bank 1 needs to settle SC-ST-07's tree of
+/// `n - 2` payments, headed by bank 1, and bank 0's blocker to bank `n` holds it up. So
+/// the blocker is alone in its queue, and settling the shape changes `n` queues, 1 more
+/// than SC-ST-07's tree of `n - 1` behind a blocker that shares bank 0's urgent queue
+/// (Flow 22's second review). Bank 0 holds what bank 1 needs. Returns the blocker's id and
+/// that of bank 0's normal payment.
+fn blocked_branch(setup: &Setup, n: usize, blocker: Blocker) -> (u64, u64) {
+    let (id, (normal, need)) = block(setup, blocker, || {
+        let need = submit_tree_from(setup, 1, n - 2);
+        let normal = setup
+            .client()
+            .submit(setup.bank(0), setup.bank(1), &need, &NORMAL);
+        (normal, need)
+    });
+    fund_bank_0(setup, need);
+    (id, normal)
+}
+
+/// `n` banks: SC-ST-04's ring of `n - 1` payments, behind bank 0's blocker to bank `n - 1`,
+/// with bank 0 holding the `n - 2` it is short. Returns the blocker's id.
+fn blocked_ring(setup: &Setup, n: usize, blocker: Blocker) -> u64 {
+    let (id, ()) = block(setup, blocker, || submit_ring(setup, n - 1));
+    fund_bank_0(setup, n as i128 - 2);
+    id
+}
+
+/// The balances once a blocked shape of `banks` banks has settled: bank 0's 0, every other
+/// bank's in the shape 1, and the blocker's receiver's, after them, 0.
+fn settled_behind_the_blocker(banks: usize) -> std::vec::Vec<i128> {
+    let mut expected = std::vec![1_i128; banks + 1];
+    expected[0] = 0;
+    expected[banks] = 0;
+    expected
+}
+
+/// SC-ST-17. A6 (ADR-0016) at ADR-0010's cap, for the footprint: with the queue full,
+/// revoking bank 0's older blocker releases its normal payment to bank 1 and SC-ST-07's
+/// tree under bank 1, and the eager closure settles all `n - 1` of them as one gross
+/// cascade (A2, S7, S9), in one transaction within Mainnet's limits.
+#[test]
+fn a_revocation_that_releases_a_full_tree_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n + 1);
+    let (blocker, _) = blocked_branch(&setup, n, Blocker::Older);
+
+    setup.client().revoke(&blocker);
+
+    let budget = Budget {
+        footprint: 383,
+        events: 14_732,
+    };
+    let expected = settled_behind_the_blocker(n);
+    assert_cleared_the_queue(&setup, &xdr::ScVal::Void, 0, &budget, &expected);
+}
+
+/// SC-ST-18. A6 (ADR-0016) at ADR-0010's cap, for the event bytes: with the queue full,
+/// revoking bank 0's blocker makes SC-ST-04's ring feasible, and one offset settles all
+/// `n - 1` of its payments (A3, S23), in one transaction within Mainnet's limits.
+#[test]
+fn a_revocation_that_makes_a_full_ring_feasible_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n);
+    let blocker = blocked_ring(&setup, n, Blocker::Older);
+
+    setup.client().revoke(&blocker);
+
+    let budget = Budget {
+        footprint: 381,
+        events: 15_568,
+    };
+    let expected = settled_behind_the_blocker(n - 1);
+    assert_cleared_the_queue(&setup, &xdr::ScVal::Void, 1, &budget, &expected);
+}
+
+/// SC-ST-19. A5 (ADR-0015) at ADR-0010's cap, for the footprint: SC-ST-17's shape, with the
+/// blocker expired instead, by anyone and with no authorization (S6). The closure settles
+/// all `n - 1` payments behind it as one gross cascade (A2, S7, S9), in one transaction
+/// within Mainnet's limits. None of them is past its expiry.
+#[test]
+fn an_expiry_that_releases_a_full_tree_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n + 1);
+    let (blocker, _) = blocked_branch(&setup, n, Blocker::Older);
+    setup.at(default_config().expiry_secs + 1);
+
+    setup.client().expire(&blocker);
+
+    let budget = Budget {
+        footprint: 380,
+        events: 14_732,
+    };
+    let expected = settled_behind_the_blocker(n);
+    assert_cleared_the_queue(&setup, &xdr::ScVal::Void, 0, &budget, &expected);
+}
+
+/// SC-ST-20. A5 (ADR-0015) at ADR-0010's cap, for the event bytes: SC-ST-18's ring, with
+/// the blocker expired instead. One offset settles all `n - 1` payments of the ring (A3,
+/// S23), in one transaction within Mainnet's limits.
+#[test]
+fn an_expiry_that_makes_a_full_ring_feasible_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n);
+    let blocker = blocked_ring(&setup, n, Blocker::Older);
+    setup.at(default_config().expiry_secs + 1);
+
+    setup.client().expire(&blocker);
+
+    let budget = Budget {
+        footprint: 378,
+        events: 15_568,
+    };
+    let expected = settled_behind_the_blocker(n - 1);
+    assert_cleared_the_queue(&setup, &xdr::ScVal::Void, 1, &budget, &expected);
+}
+
+/// SC-ST-21. A8 (ADR-0009) at ADR-0010's cap, for the footprint: with the queue full, bank
+/// 0 moves its normal payment to bank 1 to urgent, where it sorts ahead of its younger
+/// blocker (A8 with `toEnd = false`). It settles, and the closure settles SC-ST-07's tree
+/// under bank 1 as one gross cascade (A2, S7, S9): `n - 1` payments in one transaction
+/// within Mainnet's limits. The blocker stays queued.
+#[test]
+fn a_reprioritisation_that_releases_a_full_tree_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n + 1);
+    let (blocker, moved) = blocked_branch(&setup, n, Blocker::Younger);
+
+    setup.client().reprioritise(&moved, &URGENT);
+
+    let budget = Budget {
+        footprint: 383,
+        events: 14_784,
+    };
+    let expected = settled_behind_the_blocker(n);
+    assert_settled_all_but(&setup, &xdr::ScVal::Void, 0, &budget, 1, &expected);
+    assert_eq!(setup.queue(0, URGENT), [blocker]);
+}
+
+/// SC-ST-22. A8 (ADR-0009) at ADR-0010's cap, for the event bytes: SC-ST-18's ring behind
+/// bank 0's younger blocker, which bank 0 moves to normal, where it sorts behind its ring
+/// payment (A8 with `toEnd = false`). One offset settles all `n - 1` payments of the ring
+/// (A3, S23), in one transaction within Mainnet's limits, and the blocker stays queued.
+#[test]
+fn a_reprioritisation_that_makes_a_full_ring_feasible_fits_in_one_transaction() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(n);
+    let blocker = blocked_ring(&setup, n, Blocker::Younger);
+
+    setup.client().reprioritise(&blocker, &NORMAL);
+
+    let budget = Budget {
+        footprint: 382,
+        events: 15_620,
+    };
+    let expected = settled_behind_the_blocker(n - 1);
+    assert_settled_all_but(&setup, &xdr::ScVal::Void, 1, &budget, 1, &expected);
+    assert_eq!(setup.queue(0, NORMAL), [blocker]);
+}
+
+/// SC-ST-23. The entry points that run no eager closure, at ADR-0010's cap: with the queue
+/// full, `withdraw` (A11), `set_collateral` (A14, ADR-0011), `convert_overdue` (ADR-0014)
+/// and `repay` of that penalty repo by the central bank (A13, A20), each on a ledger of its
+/// own so that it extends every entry it writes, keep within Mainnet's limits and within a
+/// small budget: none reads the queue, so its cost doesn't grow with it.
+///
+/// The queue is SC-ST-11's: bank `i`, for 1 to `n`, pays 1 to its own bank `n + i`,
+/// urgent and normal alternately, so it reads the most. Bank 0 holds 1,000 and a repo of
+/// 500.
+#[test]
+fn the_entry_points_without_the_closure_fit_in_one_transaction_at_the_cap() {
+    let n = QUEUE_CAP_UNDER_TEST as usize;
+    let setup = at_the_cap(2 * n + 1);
+    let client = setup.client();
+    for i in 1..=n {
+        let priority = if i % 2 == 1 { URGENT } else { NORMAL };
+        client.submit(setup.bank(i), setup.bank(n + i), &1, &priority);
+    }
+    setup.mint(setup.bank(0), 1_000);
+    client.deposit(setup.bank(0), &1_000);
+    client.set_collateral(setup.bank(0), &1_000);
+    let repo = client.open_repo(setup.bank(0), &500);
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+    let mut ledger = setup.env.ledger().sequence();
+    let next_ledger = |ledger: &mut u32| {
+        *ledger += BUMP_AMOUNT - BUMP_THRESHOLD + 1;
+        setup.env.ledger().set_sequence_number(*ledger);
+    };
+
+    next_ledger(&mut ledger);
+    client.withdraw(setup.bank(0), &100);
+    let withdrawn = Budget {
+        footprint: 12,
+        events: 404,
+    };
+    assert_within_budget(&setup, &xdr::ScVal::Void, &withdrawn);
+
+    next_ledger(&mut ledger);
+    client.set_collateral(setup.bank(0), &2_000);
+    let collateral_set = Budget {
+        footprint: 7,
+        events: 168,
+    };
+    assert_within_budget(&setup, &xdr::ScVal::Void, &collateral_set);
+
+    next_ledger(&mut ledger);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&repo);
+    let converted = Budget {
+        footprint: 6,
+        events: 124,
+    };
+    assert_within_budget(&setup, &xdr::ScVal::Void, &converted);
+
+    next_ledger(&mut ledger);
+    client.repay(&setup.cb, &repo, &500);
+    let repaid = Budget {
+        footprint: 14,
+        events: 364,
+    };
+    assert_within_budget(&setup, &xdr::ScVal::Void, &repaid);
+
+    assert_eq!(client.repo(&repo).unwrap().status, RepoStatus::Repaid);
+    assert_eq!(client.queued_count(), QUEUE_CAP_UNDER_TEST);
+    setup.assert_conserved();
 }

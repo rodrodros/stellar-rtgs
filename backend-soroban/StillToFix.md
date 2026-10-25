@@ -464,12 +464,26 @@ The sweep has 28 hand mutants of `open_repo`, `repay`, `convert_overdue`, `set_c
 - SC-P-01 does not check the other outcomes and error codes. At seeds 1 to 4, the 15 mutants that change only those survive it, and SC-P-02 or a unit test kills each one.
 - At seeds 1 to 4, only the negative-amount guards of `repay` and `set_collateral` survive both property tests. SC-A13-07 and SC-A14-02 kill them.
 
+## Flow 22: every entry point's worst case at the queue cap (7)
+
+SC-ST-04 to SC-ST-14 priced `deposit`, `submit` and `open_repo` at the cap. These price the other state-changing entry points, so that each one's worst case is held to Mainnet's per-transaction limits and to the footprint and events it measured. Each went red first, at a budget of 0, with what it measured, and passed at that measurement. No production code changed.
+
+- [x] `unit::storage::a_revocation_that_releases_a_full_tree_fits_in_one_transaction` (SC-ST-17)
+- [x] `unit::storage::a_revocation_that_makes_a_full_ring_feasible_fits_in_one_transaction` (SC-ST-18)
+- [x] `unit::storage::an_expiry_that_releases_a_full_tree_fits_in_one_transaction` (SC-ST-19)
+- [x] `unit::storage::an_expiry_that_makes_a_full_ring_feasible_fits_in_one_transaction` (SC-ST-20)
+- [x] `unit::storage::a_reprioritisation_that_releases_a_full_tree_fits_in_one_transaction` (SC-ST-21)
+- [x] `unit::storage::a_reprioritisation_that_makes_a_full_ring_feasible_fits_in_one_transaction` (SC-ST-22)
+- [x] `unit::storage::the_entry_points_without_the_closure_fit_in_one_transaction_at_the_cap` (SC-ST-23)
+
+In SC-ST-17 to SC-ST-22, an urgent payment of bank 0's that bank 0 never covers, to a bank outside the shape, holds up SC-ST-07's tree or SC-ST-04's ring (S7), and the call gets it out of the way. They settle at most `n - 1`: `reprioritise` could settle all `n` only by settling the whole queue, a set F1 decides whatever its order, so it was already feasible before the move. The review found `reprioritise`'s first shapes 1 and 2 entries short of its worst case: the blocker stays queued, so its receiver's balance is read, and the direction of the move matters. Each test now takes the costlier direction, measured both ways: down the tree, the normal payment moved to urgent (383 entries), and around the ring, the blocker moved to normal (382). The second review found `revoke`'s and `expire`'s tree 2 entries short: SC-ST-07's tree behind a blocker that shares bank 0's urgent queue changes `n - 1` queues, and bank 0's normal payment to a tree under bank 1, behind a blocker alone in its queue, changes `n`. SC-ST-17 and SC-ST-19 now use that shape, SC-ST-21's, and measure 383 and 380. With every entry below its TTL threshold before the call, the shapes measured the same footprint (the first revocation shape, and SC-ST-21 in the second review): extending entries adds rent, not entries.
+
 ## Totals
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 21) | 202 |
+| Already green (Flows 0 to 22) | 209 |
 | Still to fix | 0 |
-| All | 202 |
+| All | 209 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, Flow 18 added SC-A13-10, and Flow 19 added SC-A20-10 to SC-A20-12 and SC-ST-16.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, Flow 18 added SC-A13-10, Flow 19 added SC-A20-10 to SC-A20-12 and SC-ST-16, and Flow 22 added SC-ST-17 to SC-ST-23.
