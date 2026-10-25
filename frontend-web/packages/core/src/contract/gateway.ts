@@ -202,7 +202,7 @@ export class SettlementWriter {
     return {
       txHash,
       ledger: response.ledger,
-      closedAt: response.createdAt,
+      closedAt: Number(response.createdAt),
       value: unwrap<T>(sent.result),
       events: outcomeEvents(response, txHash, this.ctx.contractId),
     };

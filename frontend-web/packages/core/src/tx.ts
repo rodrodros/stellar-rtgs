@@ -1,6 +1,6 @@
 // Building, signing, sending and confirming transactions. A transaction is final once the
 // ledger that applies it closes (ADR-0005), so every send polls until RPC reports it.
-import { BASE_FEE, rpc, TransactionBuilder, xdr, type Transaction } from "@stellar/stellar-sdk";
+import { Account, BASE_FEE, contract, rpc, TransactionBuilder, xdr, type Transaction } from "@stellar/stellar-sdk";
 import { RtgsError, toRtgsError } from "./errors.ts";
 import { contractIdOf, decodeEvent, eventId } from "./events/decode.ts";
 import type { NetworkConfig } from "./network/networks.ts";
@@ -62,7 +62,7 @@ export function outcomeEvents(
           {
             eventId: eventId(response.ledger, response.applicationOrder, opIndex, index),
             ledger: response.ledger,
-            closedAt: response.createdAt,
+            closedAt: Number(response.createdAt),
             txHash,
             contractId: emitter,
           },
@@ -87,7 +87,7 @@ export async function confirm(ctx: TxContext, txHash: string): Promise<TxOutcome
     return {
       txHash,
       ledger: response.ledger,
-      closedAt: response.createdAt,
+      closedAt: Number(response.createdAt),
       value: response.returnValue,
       events: outcomeEvents(response, txHash, ctx.contractId),
     };
@@ -157,4 +157,21 @@ export async function sendInvoke(
     throw toRtgsError(e, source);
   }
   return signAndSend(ctx, signer, prepared);
+}
+
+/** Simulates one read-only Soroban operation and returns its value. */
+export async function simulateRead(ctx: TxContext, op: xdr.Operation, source: "settlement" | "sac" = "settlement"): Promise<xdr.ScVal> {
+  const tx = new TransactionBuilder(new Account(contract.NULL_ACCOUNT, "0"), { fee: BASE_FEE, networkPassphrase: ctx.net.passphrase })
+    .addOperation(op)
+    .setTimeout(TIMEOUT_SECS)
+    .build();
+  let sim: rpc.Api.SimulateTransactionResponse;
+  try {
+    sim = await ctx.server.simulateTransaction(tx);
+  } catch (e) {
+    throw toRtgsError(e, source);
+  }
+  if (rpc.Api.isSimulationError(sim)) throw toRtgsError(sim.error, source);
+  if (rpc.Api.isSimulationRestore(sim)) throw toRtgsError("archived", source);
+  return sim.result?.retval ?? xdr.ScVal.scvVoid();
 }

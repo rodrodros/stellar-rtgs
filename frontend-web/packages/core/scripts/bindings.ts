@@ -65,7 +65,26 @@ function check(): void {
   console.log(`ok: bindings match ${source}`);
 }
 
-function generate(build: boolean): void {
+/**
+ * The generator imports types (ClientOptions, Result, ...) as values, which
+ * `verbatimModuleSyntax` keeps, so mark every name the SDK doesn't export at runtime as `type`.
+ */
+async function markTypeImports(source: string): Promise<string> {
+  const pattern = /import \{([^}]*)\} from "(@stellar\/stellar-sdk(?:\/[a-z]+)?)";/g;
+  let out = source;
+  for (const [statement, names, module] of source.matchAll(pattern)) {
+    const runtime = new Set(Object.keys(await import(module!)));
+    const marked = names!
+      .split(",")
+      .map((n) => n.trim())
+      .filter(Boolean)
+      .map((n) => (runtime.has(n.split(/\s+as\s+/)[0]!) ? n : `type ${n}`));
+    out = out.replace(statement!, `import { ${marked.join(", ")} } from "${module}";`);
+  }
+  return out;
+}
+
+async function generate(build: boolean): Promise<void> {
   const dir = implDir();
   if (build) execFileSync("make", ["-C", dir, "build"], { stdio: "inherit" });
   const source = implWasm(dir);
@@ -79,7 +98,7 @@ function generate(build: boolean): void {
       ["contract", "bindings", "typescript", "--wasm", source, "--output-dir", join(tmp, "settlement"), "--overwrite"],
       { stdio: ["ignore", "ignore", "inherit"] },
     );
-    const generated = readFileSync(join(tmp, "settlement/src/index.ts"), "utf8");
+    const generated = await markTypeImports(readFileSync(join(tmp, "settlement/src/index.ts"), "utf8"));
     // The contract's spec can reference types it doesn't define yet (a stub's return type), so
     // the generated file isn't type-checked; src/contract/ owns the domain types.
     const header =
@@ -106,7 +125,7 @@ function generate(build: boolean): void {
 const args = process.argv.slice(2);
 try {
   if (args.includes("--check")) check();
-  else generate(args.includes("--build"));
+  else await generate(args.includes("--build"));
 } catch (e) {
   console.error(`bindings: ${(e as Error).message}`);
   process.exit(1);
