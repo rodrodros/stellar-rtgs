@@ -70,7 +70,7 @@ describe("deposit", () => {
     const world = fakeWorld({ banks: [bank(BANK_1, { balance: 600n * USD, queues: heads, holding: 4_600n * USD }), bank(BANK_2)] });
     expect(deposit.plan(ctx(world))).toEqual({ amount: 4_400n * USD, releases: true });
     world.state.banks[0]!.holding = 1_000n * USD;
-    expect(deposit.plan(ctx(world))).toEqual({ amount: 1_000n * USD, releases: true });
+    expect(deposit.plan(ctx(world))).toEqual({ amount: 1_000n * USD, releases: false });
   });
 
   it("runs the bank's deposit and touches its trustline", async () => {
@@ -193,6 +193,19 @@ describe("submit", () => {
     }
   });
 
+  it("doesn't gridlock at the headroom, even with a crossing order", () => {
+    const back = payment({ from: BANK_2, to: BANK_1, amount: 1_500n * USD });
+    const world = fakeWorld({
+      banks: [bank(BANK_1, { balance: 400n * USD }), bank(BANK_2, { balance: 200n * USD, queues: { urgent: [], normal: [back] } })],
+    });
+    expect(submit.plan(ctx(world, { tuning: only("gridlock") }))).toMatchObject({ shape: "gridlock" });
+    world.state.queuedCount = CONFIG.queueCap - TUNING.queueHeadroom;
+    for (const p of plans(submit.plan, world, { tuning: only("gridlock") }, 20)) {
+      expect(p).toMatchObject({ shape: "covered" });
+      expect(p!.amount).toBeLessThanOrEqual(400n * USD);
+    }
+  });
+
   it("only crosses an order that is first in its sender's queue", () => {
     const urgent = payment({ from: BANK_2, to: BANK_3, priority: "urgent", amount: 2_000n * USD });
     const back = payment({ from: BANK_2, to: BANK_1, amount: 1_500n * USD });
@@ -253,8 +266,11 @@ describe("revoke", () => {
 });
 
 describe("reprioritise", () => {
-  it("doesn't apply without a queued payment order", () => {
+  it("doesn't apply without a queued payment order of its own", () => {
     expect(reprioritise.plan(ctx(fakeWorld()))).toBeUndefined();
+    const theirs = payment({ from: BANK_2, to: BANK_1 });
+    const world = fakeWorld({ banks: [bank(BANK_1), bank(BANK_2, { queues: { urgent: [], normal: [theirs] } })] });
+    expect(reprioritise.plan(ctx(world))).toBeUndefined();
   });
 
   it("moves an own queued payment order to the other class", async () => {

@@ -63,10 +63,11 @@ export const deposit: ActionDef<DepositParams> = {
     const keep = tuning.holdingFloor / 2n;
     const cap = me.holding > keep ? me.holding - keep : me.holding;
     const shortfall = headsSum(me) - me.balance;
-    const releases = shortfall > 0n;
     // Releasing the queue may dip into the reserve: that is what the deposit is for.
-    const lo = releases ? min(shortfall, me.holding) : max(1n, min(tuning.paymentSize.min, cap));
-    return { amount: rng.bigint(lo, max(lo, cap)), releases };
+    const lo = shortfall > 0n ? min(shortfall, me.holding) : max(1n, min(tuning.paymentSize.min, cap));
+    const amount = rng.bigint(lo, max(lo, cap));
+    // A holding short of the shortfall still helps, but releases nothing yet.
+    return { amount, releases: shortfall > 0n && amount >= shortfall };
   },
   run: (actors, actor, p) => actors.bank(actor).deposit(p.amount),
   describe: (p) => `${usd(p.amount)}${p.releases ? ", to release its queue" : ""}`,
