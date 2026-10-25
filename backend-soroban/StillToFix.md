@@ -339,7 +339,7 @@ Each bank's credit position is its own persistent entry, `Credit(bank)`, as its 
 - [x] `unit::credit::collateral_can_be_zero_but_not_negative` (SC-A14-02)
 - [x] `auth::set_collateral_is_authorized_by_the_central_bank` (SC-A14-04)
 - [x] `auth::only_the_central_bank_can_set_collateral` (SC-A14-04). It also pins the order: authorization before the guard `x ≥ 0`.
-- [x] `unit::storage::setting_collateral_extends_the_instance_and_the_credit_to_thirty_days` (SC-ST-12). Added in Flow 16, red first: `set_collateral` did not extend the instance. Flow 20's test can't catch that, since its first call is a deposit, which extends the instance in the same ledger. It also checks that the contract owns exactly the instance and one persistent `Credit(bank)` entry, so credit kept in the instance or in temporary storage fails.
+- [x] `unit::storage::setting_collateral_extends_the_instance_and_the_credit_to_thirty_days` (SC-ST-12). Added in Flow 16, red first: `set_collateral` did not extend the instance. Until Flow 20, SC-ST-03 couldn't catch that, since its first call was a deposit, which extends the instance in the same ledger; since Flow 20 it checks `set_collateral` on a ledger of its own. It also checks that the contract owns exactly the instance and one persistent `Credit(bank)` entry, so credit kept in the instance or in temporary storage fails.
 
 ## Flow 17: open a repo, A12 with a mint (13)
 
@@ -423,15 +423,15 @@ Added in Flow 19, and green:
 - [x] `unit::credit::converting_one_of_two_repos_moves_only_its_own_amount` (SC-A20-10): every other test converts a bank's only repo, where `cr = 0` and `ovn = outstanding` pass for `cr -= outstanding` and `ovn += outstanding`. With two repos they don't. SC-P-01 and SC-P-02 rarely reach that case.
 - [x] `unit::credit::a_term_that_would_overflow_never_passes` (SC-A20-11): the term saturates, so a term near `u64::MAX` never passes, where a wrapping sum would make the repo overdue at once.
 - [x] `unit::credit::each_repo_is_repaid_from_its_own_side_of_the_credit` (SC-A20-12): every other test that repays meets one side only, a bank with only intraday repos or one repaying its only, penalty repo, so choosing the side by the bank's `ovn` rather than the repo's status passed them all. Added in review, so it was shown red against that hand mutant, `owed_by_ovn`, killed under the pinned seed and seeds 1–4.
-- [x] `unit::storage::converting_an_overdue_repo_extends_the_instance_the_repo_and_the_credit` (SC-ST-16): SC-ST-03 runs `convert_overdue` in the ledger where `open_repo` already extended the repo, the credit and the instance, so it cannot see a conversion that extends none of them. This test converts once they are below the threshold again. Added in review, so it was shown red against hand mutants rather than a stub.
+- [x] `unit::storage::converting_an_overdue_repo_extends_the_instance_the_repo_and_the_credit` (SC-ST-16): Until Flow 20, SC-ST-03 ran `convert_overdue` in the ledger where `open_repo` had already extended the repo, the credit and the instance, so it could not see a conversion that extended none of them; since Flow 20 it runs the conversion on a ledger of its own. This test converts once they are below the threshold again. Added in review, so it was shown red against hand mutants rather than a stub.
 
 ## Flow 20: every entry point extends every entry it writes (1)
 
 The last unit test, since it calls every entry point.
 
-- [ ] `unit::storage::every_entry_point_extends_every_entry_it_writes` (SC-ST-03)
+- [x] `unit::storage::every_entry_point_extends_every_entry_it_writes` (SC-ST-03)
 
-It passes since Flow 19, which gave `convert_overdue` its code. But it runs every entry point in one ledger, so an entry point that writes an entry an earlier call already extended in that ledger passes without extending it. Flow 19's review found this for `convert_overdue` (now SC-ST-16) and `repay`. What is left is to make SC-ST-03 see it.
+It passes since Flow 19, which gave `convert_overdue` its code. But it runs every entry point in one ledger, so an entry point that writes an entry an earlier call already extended in that ledger passes without extending it. Flow 19's review found this for `convert_overdue` (now SC-ST-16) and `repay`. Flow 20 made SC-ST-03 see it: each call now runs on a ledger of its own, once every entry is below the threshold again, and only what it wrote, with the instance, is checked. The calls include a penalty repo repaid by the central bank, a deposit that cascades and one that makes an offset feasible, each leaving a queue (and the offset its index) shorter but not empty. Hand mutants, pinned seed and seeds 1-4, all killed: 37 that each take the extension out of one write site in `lib.rs` (the `extend_ttl` in `put`, every other `put` and `set_balance` call routed to a set-only twin, and every instance `extend_ttl`), and 14 that do so on one path only, from the second and third reviews (among them the gross cascade's and the offset's partial queue rewrites, the offset's shrunk index, a payment queued behind another or joining a non-empty index, a reprioritisation into a non-empty queue, and a second repo). Before, SC-ST-03 killed 4 of the first review's 27. No production code changed.
 
 ## Flow 21: the property and state-machine tests over random call sequences (2)
 
@@ -446,8 +446,8 @@ Both pass since Flow 19. What is left is to check them against hand mutants (TES
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 19) | 199 |
-| Still to fix (Flows 20 to 21) | 3 |
+| Already green (Flows 0 to 20) | 200 |
+| Still to fix (Flow 21) | 2 |
 | All | 202 |
 
 The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21, Flow 14 added SC-ST-05 to SC-ST-09, SC-A03-22 and SC-A03-23, Flow 15 added SC-A01-23, SC-A01-24, SC-ST-10 and SC-ST-11, Flow 16 added SC-ST-12, Flow 17 added SC-A12-08 and SC-ST-13 to SC-ST-15, Flow 18 added SC-A13-10, and Flow 19 added SC-A20-10 to SC-A20-12 and SC-ST-16.

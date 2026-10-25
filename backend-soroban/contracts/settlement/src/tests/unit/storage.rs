@@ -25,22 +25,31 @@ use crate::*;
 const NORMAL: Priority = Priority::Normal;
 const URGENT: Priority = Priority::Urgent;
 
-/// Every ledger entry this contract owns (its instance and its own data), with the
-/// ledger it lives until.
-fn our_entries(setup: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
+/// Every ledger entry this contract owns (its instance and its own data), with what it
+/// holds and the ledger it lives until.
+fn our_entries_with_data(setup: &Setup) -> std::vec::Vec<(LedgerKey, xdr::LedgerEntryData, u32)> {
     let ours = ScAddress::from(&setup.contract);
     setup
         .env
         .to_ledger_snapshot()
         .ledger_entries
         .iter()
-        .filter_map(|(key, (_, live_until))| match key.as_ref() {
+        .filter_map(|(key, (entry, live_until))| match key.as_ref() {
             LedgerKey::ContractData(data) if data.contract == ours => Some((
                 (**key).clone(),
+                entry.data.clone(),
                 live_until.expect("contract data has a TTL"),
             )),
             _ => None,
         })
+        .collect()
+}
+
+/// Every ledger entry this contract owns, with the ledger it lives until.
+fn our_entries(setup: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
+    our_entries_with_data(setup)
+        .into_iter()
+        .map(|(key, _, live_until)| (key, live_until))
         .collect()
 }
 
@@ -195,37 +204,139 @@ fn an_entry_is_extended_again_only_below_the_threshold() {
     assert_every_entry_lives_until(&setup, later + BUMP_AMOUNT);
 }
 
-/// Every entry point extends every entry it writes: payments, queues, credit, repos and
-/// the instance alike. One ledger runs through every state-changing entry point, and
-/// afterwards every entry the contract owns lives `BUMP_AMOUNT` ledgers from it.
+/// Runs `call`, named `name`, on a ledger of its own, `BUMP_AMOUNT - BUMP_THRESHOLD + 1`
+/// after `ledger`, when every entry is below the threshold again. Then checks that the
+/// instance and every entry the call wrote live `BUMP_AMOUNT` ledgers from it. An entry
+/// counts as written when it is new or holds something new, so one rewritten with the same
+/// value is not checked. Returns what `call` returned.
+///
+/// The ledger moves on about a day and the close time stays put: the contract reads the
+/// close time only for expiry and the repo term, and the scenario sets it itself where
+/// those need it.
+fn on_a_ledger_of_its_own<R>(
+    setup: &Setup,
+    ledger: &mut u32,
+    name: &str,
+    call: impl FnOnce() -> R,
+) -> R {
+    *ledger += BUMP_AMOUNT - BUMP_THRESHOLD + 1;
+    setup.env.ledger().set_sequence_number(*ledger);
+    let before = our_entries_with_data(setup);
+
+    let returned = call();
+
+    for (key, data, live_until) in our_entries_with_data(setup) {
+        let instance = matches!(&key, LedgerKey::ContractData(entry)
+            if entry.key == xdr::ScVal::LedgerKeyContractInstance);
+        let written = !before
+            .iter()
+            .any(|(old_key, old_data, _)| *old_key == key && *old_data == data);
+        if instance || written {
+            assert_eq!(live_until, *ledger + BUMP_AMOUNT, "{name}: entry {key:?}");
+        }
+    }
+    returned
+}
+
+/// SC-ST-03. ADR-0004, ADR-0014, ADR-0015: every entry point extends, by itself, the instance and
+/// every entry it writes: payments, queues and their indexes, balances, credit, repos and
+/// their counters. Each call runs on a ledger of its own, once every entry is below the
+/// threshold again, so an entry the call forgot to extend still lives until an earlier
+/// call's extension. In one shared ledger, any later write of the same entry hid it
+/// (Flow 19's review, Flow 20). An entry rewritten with the value it already held is not
+/// checked: a ledger snapshot cannot tell that write from a read.
+///
+/// The calls cover each entry point and the paths that write on its behalf: a submission
+/// that settles at once or queues (A1, A2); revoke, reprioritise and expire (A6, A8, A5);
+/// collateral, repos, a repayment, a conversion and a penalty repo repaid by the central
+/// bank (A14, A12, A13, ADR-0014, A20); a deposit that covers a queued head and cascades
+/// (A11, A2, S9), and one that makes an offset feasible (A3, S23). The cascade and the
+/// offset each leave a queue shorter but not empty, and the offset leaves its index
+/// shorter but not empty, so those rewrites are checked too. Their payments are
+/// submitted after the clock moves, so none is past its expiry (ADR-0015).
 #[test]
 fn every_entry_point_extends_every_entry_it_writes() {
     let setup = Setup::new(3, 1_000);
     let client = setup.client();
-    setup.env.ledger().set_sequence_number(5_000);
+    let (bank_0, bank_1, bank_2) = (setup.bank(0), setup.bank(1), setup.bank(2));
+    let mut ledger = 5_000;
     setup.at(1_000);
+    let ledger = &mut ledger;
 
-    client.deposit(setup.bank(0), &500);
-    client.withdraw(setup.bank(0), &100);
-    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
-    let revoked = client.submit(setup.bank(1), setup.bank(2), &900, &NORMAL);
-    let moved = client.submit(setup.bank(1), setup.bank(2), &800, &NORMAL);
-    let expired = client.submit(setup.bank(2), setup.bank(0), &700, &NORMAL);
-    client.revoke(&revoked);
-    client.reprioritise(&moved, &Priority::Urgent);
-    client.set_collateral(setup.bank(2), &300);
-    let repo = client.open_repo(setup.bank(2), &200);
-    client.repay(setup.bank(2), &repo, &50);
-    let overdue = client.open_repo(setup.bank(2), &50);
+    on_a_ledger_of_its_own(&setup, ledger, "deposit", || client.deposit(bank_0, &500));
+    on_a_ledger_of_its_own(&setup, ledger, "withdraw", || client.withdraw(bank_0, &100));
+    on_a_ledger_of_its_own(&setup, ledger, "submit, settled at once", || {
+        client.submit(bank_0, bank_1, &50, &NORMAL)
+    });
+    let revoked = on_a_ledger_of_its_own(&setup, ledger, "submit, queued", || {
+        client.submit(bank_1, bank_2, &900, &NORMAL)
+    });
+    let moved = on_a_ledger_of_its_own(&setup, ledger, "submit, behind a queued one", || {
+        client.submit(bank_1, bank_2, &800, &NORMAL)
+    });
+    let expired = on_a_ledger_of_its_own(&setup, ledger, "submit, into the index", || {
+        client.submit(bank_2, bank_0, &700, &NORMAL)
+    });
+    on_a_ledger_of_its_own(&setup, ledger, "revoke", || client.revoke(&revoked));
+    on_a_ledger_of_its_own(&setup, ledger, "reprioritise", || {
+        client.reprioritise(&moved, &URGENT)
+    });
+    on_a_ledger_of_its_own(&setup, ledger, "set_collateral", || {
+        client.set_collateral(bank_2, &300)
+    });
+    let repo = on_a_ledger_of_its_own(&setup, ledger, "open_repo", || {
+        client.open_repo(bank_2, &200)
+    });
+    on_a_ledger_of_its_own(&setup, ledger, "repay", || client.repay(bank_2, &repo, &50));
+    let overdue = on_a_ledger_of_its_own(&setup, ledger, "open_repo, a second", || {
+        client.open_repo(bank_2, &50)
+    });
     setup.at(1_000
         + default_config()
             .expiry_secs
             .max(default_config().repo_term_secs)
         + 1);
-    client.expire(&expired);
-    client.convert_overdue(&overdue);
+    on_a_ledger_of_its_own(&setup, ledger, "expire", || client.expire(&expired));
+    on_a_ledger_of_its_own(&setup, ledger, "convert_overdue", || {
+        client.convert_overdue(&overdue)
+    });
+    on_a_ledger_of_its_own(&setup, ledger, "repay a penalty repo, by the CB", || {
+        client.repay(&setup.cb, &overdue, &50)
+    });
 
-    assert_every_entry_lives_until(&setup, 5_000 + BUMP_AMOUNT);
+    // Balances: bank 0 350, bank 1 50, bank 2 150. `moved` is past its expiry by now, so
+    // it is revoked out of the way (ADR-0015), and fresh payments queue: bank 1's urgent 800, and bank 2's 900 and
+    // 5,000. Bank 1's deposit covers its head, and what bank 2 receives covers its 900
+    // but not its 5,000, so bank 2's queue is rewritten shorter.
+    client.revoke(&moved);
+    client.submit(bank_1, bank_2, &800, &URGENT);
+    let cascaded = client.submit(bank_2, bank_0, &900, &NORMAL);
+    let left_by_the_cascade = client.submit(bank_2, bank_0, &5_000, &NORMAL);
+    on_a_ledger_of_its_own(&setup, ledger, "deposit, cascading", || {
+        client.deposit(bank_1, &750)
+    });
+    assert_eq!(client.payment(&cascaded).unwrap().status, Status::Settled);
+    assert_eq!(setup.queue(2, NORMAL), [left_by_the_cascade]);
+
+    // Balances: bank 0 1,250, bank 1 0, bank 2 50. Bank 1 owes bank 0 2,000, and bank 0
+    // owes bank 1 3,500, then bank 2 10,000, submitted urgent and moved behind the 3,500,
+    // into a queue that isn't empty. Bank 0's deposit of 250 makes the first two offset;
+    // bank 0's 10,000 and bank 2's 5,000 stay queued. So the offset rewrites bank 0's
+    // queue and the normal index shorter, and the queued count, which the deposit
+    // doesn't write.
+    let offset = client.submit(bank_1, bank_0, &2_000, &NORMAL);
+    client.submit(bank_0, bank_1, &3_500, &NORMAL);
+    let left_by_the_offset = client.submit(bank_0, bank_2, &10_000, &URGENT);
+    on_a_ledger_of_its_own(&setup, ledger, "reprioritise, into a queue", || {
+        client.reprioritise(&left_by_the_offset, &NORMAL)
+    });
+    assert_eq!(client.queued_count(), 4);
+    on_a_ledger_of_its_own(&setup, ledger, "deposit, making an offset feasible", || {
+        client.deposit(bank_0, &250)
+    });
+    assert_eq!(client.payment(&offset).unwrap().status, Status::Settled);
+    assert_eq!(setup.queue(0, NORMAL), [left_by_the_offset]);
+    assert_eq!(client.queued_count(), 2);
     setup.assert_conserved();
 }
 
