@@ -11,7 +11,7 @@
 //   7. publish the contract id and the bank registry on the central bank's account.
 //
 // Every step checks what is already there first, so a rerun resumes; a published contract
-// running another Wasm is replaced. The devnet is reset often, after which everything is
+// running another Wasm is replaced. Cash is issued only to a bank that holds none. The devnet is reset often, after which everything is
 // created afresh.
 import { Asset, AuthClawbackEnabledFlag, AuthRequiredFlag, AuthRevocableFlag, hash, Operation } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
@@ -127,8 +127,10 @@ export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deploy
         await admin.authorize(bank.address, true);
         changed = true;
       }
-      if (holding.balance < cash) {
-        await admin.issue(bank.address, cash - holding.balance);
+      // Issue only to a bank that holds nothing yet. Topping up a bank that has since
+      // deposited or paid its cash away would issue new money on every rerun.
+      if (holding.balance === 0n) {
+        await admin.issue(bank.address, cash);
         changed = true;
       }
     }
@@ -186,8 +188,11 @@ async function deployedWasmHash(ctx: TxContext, contractId: string): Promise<str
   try {
     const { executable } = await ctx.server.getContractInstance(contractId);
     return executable.type === "contractExecutableWasm" ? Buffer.from(executable.wasmHash.value).toString("hex") : "";
-  } catch {
-    return undefined;
+  } catch (e) {
+    // RPC answers a missing instance with { code: 404 }; any other failure must not look like
+    // "nothing deployed", or the bootstrap would replace a live deployment.
+    if ((e as { code?: unknown } | null)?.code === 404) return undefined;
+    throw toRtgsError(e);
   }
 }
 

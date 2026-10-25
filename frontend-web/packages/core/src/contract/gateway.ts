@@ -5,7 +5,7 @@ import { rpc, scValToNative, type contract } from "@stellar/stellar-sdk";
 import { Client as SettlementClient } from "../generated/settlement.ts";
 import { contractError, CONTRACT_ERRORS, RtgsError, toRtgsError } from "../errors.ts";
 import { sdkSigning, type Signer, assertSamePassphrase } from "../signer/signer.ts";
-import { signAndSend, type TxContext } from "../tx.ts";
+import { accountLoadError, signAndSend, type TxContext } from "../tx.ts";
 import type { Config, Credit, Payment, Priority, Repo, TxOutcome } from "../types.ts";
 import { fromPriority, toConfig, toCredit, toPayment, toRepo } from "./convert.ts";
 
@@ -115,7 +115,16 @@ export class SettlementReader {
    * numbers from 0 (S11), so a galloping then binary search over `payment(id)` finds it.
    */
   async latestPaymentId(): Promise<bigint | undefined> {
-    return latestId((id) => this.payment(id).then((p) => p !== undefined));
+    // An archived entry (its time to live ran out) still means the id was issued.
+    return latestId((id) =>
+      this.payment(id).then(
+        (p) => p !== undefined,
+        (e) => {
+          if (e instanceof RtgsError && e.kind === "archived") return true;
+          throw e;
+        },
+      ),
+    );
   }
 
   /**
@@ -182,10 +191,19 @@ export class SettlementWriter {
     this.client = settlementClient(ctx, signer);
   }
 
+  /** Builds (the client loads the signer's account) and simulates the call. */
+  private async build(make: (c: Client) => Promise<Assembled<unknown>>): Promise<Assembled<unknown>> {
+    try {
+      return await make(this.client);
+    } catch (e) {
+      throw await accountLoadError(this.ctx, this.signer.address, e);
+    }
+  }
+
   /** Simulates without sending. */
   async preview<T>(make: (c: Client) => Promise<Assembled<unknown>>): Promise<Preview<T>> {
     try {
-      const tx = await build(() => make(this.client));
+      const tx = await this.build(make);
       const value = simulated(tx) as T;
       const sim = tx.simulation as rpc.Api.SimulateTransactionSuccessResponse;
       return { ok: true, value, fee: BigInt(sim.minResourceFee ?? 0) };
@@ -200,7 +218,7 @@ export class SettlementWriter {
    * reported with its contract error or result codes.
    */
   async send<T>(make: (c: Client) => Promise<Assembled<unknown>>): Promise<TxOutcome<T>> {
-    const tx = await build(() => make(this.client));
+    const tx = await this.build(make);
     simulated(tx);
     const outcome = await signAndSend(this.ctx, this.signer, tx.built!);
     const value = outcome.value === undefined ? undefined : tx.options.parseResultXdr(outcome.value);

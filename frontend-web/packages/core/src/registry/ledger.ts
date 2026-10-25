@@ -118,14 +118,9 @@ export async function unregisterBank(ctx: TxContext, cb: Signer, centralBank: st
   return sendClassic(ctx, cb, ops);
 }
 
-/** The settlement contract the central bank published, if any. */
+/** The settlement contract the central bank published, if any. An RPC failure throws. */
 export async function discoverDeployment(ctx: TxContext, centralBank: string): Promise<{ contractId?: string }> {
-  let data: Map<string, string>;
-  try {
-    data = await readData(ctx, centralBank, [SETTLEMENT_KEY]);
-  } catch {
-    return {};
-  }
+  const data = await readData(ctx, centralBank, [SETTLEMENT_KEY]);
   const id = data.get(SETTLEMENT_KEY);
   return id && StrKey.isValidContract(id) ? { contractId: id } : {};
 }

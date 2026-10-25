@@ -170,4 +170,17 @@ describe("store", () => {
     await vi.waitFor(() => expect(fake.registry.load.mock.calls.length).toBeGreaterThanOrEqual(3));
     store.stop();
   });
+
+  it("drops the view of a bank that left the registry and follows renames", async () => {
+    const fake = fakeSession();
+    const store = new RtgsStore(fake.session, { refreshDebounceMs: 1 });
+    store.start();
+    await ready(store);
+    expect(store.getSnapshot().banks.has(B)).toBe(true);
+    fake.registry.banks = [{ address: A, name: "Renamed", sources: ["ledger"] } as never];
+    for (const l of fake.registry.listeners) l(fake.registry.banks);
+    expect(store.getSnapshot().banks.has(B)).toBe(false);
+    expect(store.getSnapshot().banks.get(A)!.name).toBe("Renamed");
+    store.stop();
+  });
 });

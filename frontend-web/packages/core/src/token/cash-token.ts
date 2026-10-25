@@ -1,5 +1,10 @@
 // The cash token: a classic asset used through its Stellar Asset Contract (ADR-0003).
-import { Asset, Contract, scValToNative, StrKey, type xdr } from "@stellar/stellar-sdk";
+import { Asset, Contract, Keypair, scValToNative, StrKey, xdr } from "@stellar/stellar-sdk";
+
+// TrustLineFlags (Stellar XDR).
+const AuthorizedFlag = 1;
+const AuthorizedToMaintainLiabilitiesFlag = 2;
+const TrustlineClawbackEnabledFlag = 4;
 import { RtgsError, toRtgsError } from "../errors.ts";
 import { simulateRead, type TxContext } from "../tx.ts";
 
@@ -70,23 +75,39 @@ export class CashTokenReader {
 
   async holding(holder: string): Promise<Holding> {
     const none: Holding = { balance: 0n, exists: false, authorized: false, authorizedToMaintainLiabilities: false, clawbackEnabled: false };
-    let response;
     try {
-      response = await this.ctx.server.getAssetBalance(holder, this.token.asset, this.ctx.net.passphrase);
+      if (StrKey.isValidContract(holder)) {
+        const entry = (await this.ctx.server.getSACBalance(holder, this.token.asset, this.ctx.net.passphrase)).balanceEntry;
+        if (!entry) return none;
+        return {
+          balance: BigInt(entry.amount),
+          exists: true,
+          authorized: entry.authorized,
+          authorizedToMaintainLiabilities: entry.authorizedToMaintainLiabilities ?? false,
+          clawbackEnabled: entry.clawback,
+        };
+      }
+      // Read the trustline itself: the SDK's getTrustline reports any failure, a network
+      // error included, as "not found".
+      const key = xdr.LedgerKey.trustline(
+        new xdr.LedgerKeyTrustLine({
+          accountId: Keypair.fromPublicKey(holder).xdrAccountId(),
+          asset: this.token.asset.toTrustLineXdrObject(),
+        }),
+      );
+      const [entry] = (await this.ctx.server.getLedgerEntries(key)).entries;
+      if (!entry || entry.val.type !== "trustline") return none;
+      const { balance, flags } = entry.val.trustLine;
+      return {
+        balance: BigInt(balance),
+        exists: true,
+        authorized: (flags & AuthorizedFlag) !== 0,
+        authorizedToMaintainLiabilities: (flags & AuthorizedToMaintainLiabilitiesFlag) !== 0,
+        clawbackEnabled: (flags & TrustlineClawbackEnabledFlag) !== 0,
+      };
     } catch (e) {
-      // RPC reports a missing trustline (or account) as an error.
-      if (/not found/i.test(String(e))) return none;
       throw toRtgsError(e, "sac");
     }
-    const entry = response.balanceEntry;
-    if (!entry) return none;
-    return {
-      balance: BigInt(entry.amount),
-      exists: true,
-      authorized: entry.authorized,
-      authorizedToMaintainLiabilities: entry.authorizedToMaintainLiabilities ?? false,
-      clawbackEnabled: entry.clawback,
-    };
   }
 
   async balance(holder: string): Promise<bigint> {

@@ -1,9 +1,9 @@
 // The bank registry the apps see (spec fact 2): the union of the banks listed in config, those
 // the central bank registered on its account (registry/ledger.ts), the devnet identities, and
 // any address the event feed mentions. The central bank and the contract are not banks.
-import type { BankEntry, NetworkConfig } from "../network/networks.ts";
+import { notifyAll } from "../errors.ts";
+import { DEFAULT_DEVNET_SEED, type NetworkConfig } from "../network/networks.ts";
 import { deriveDevnetKeypair, bankLabel } from "../signer/keypair.ts";
-import { DEFAULT_DEVNET_SEED } from "../network/networks.ts";
 import type { Signer } from "../signer/signer.ts";
 import type { TxContext } from "../tx.ts";
 import type { TxOutcome } from "../types.ts";
@@ -21,6 +21,10 @@ export interface Bank {
 const DEVNET_LABELS = 20;
 
 export class BankRegistry {
+  /** Each source's contribution, kept apart so a reload can take banks and names away again. */
+  private readonly fromConfig = new Map<string, string | undefined>();
+  private fromLedger = new Map<string, string | undefined>();
+  private readonly fromEvents = new Set<string>();
   private banks = new Map<string, Bank>();
   private readonly listeners = new Set<(banks: Bank[]) => void>();
   private devnetNames: Map<string, string> | undefined;
@@ -31,7 +35,8 @@ export class BankRegistry {
     readonly centralBank: string,
     private readonly contractId: string,
   ) {
-    for (const b of net.banks) this.add(b, "config");
+    for (const b of net.banks) this.fromConfig.set(b.address, b.name);
+    this.recompute();
   }
 
   list(): Bank[] {
@@ -53,11 +58,6 @@ export class BankRegistry {
     return () => this.listeners.delete(listener);
   }
 
-  private emit(): void {
-    const banks = this.list();
-    for (const l of this.listeners) l(banks);
-  }
-
   /** Names devnet identities ("Bank 2") by address, so even unregistered ones read well. */
   private devnetName(address: string): string | undefined {
     if (this.net.id !== "devnet") return undefined;
@@ -70,26 +70,39 @@ export class BankRegistry {
     return this.devnetNames.get(address);
   }
 
-  private add(entry: BankEntry, source: BankSource): boolean {
-    if (entry.address === this.centralBank || entry.address === this.contractId) return false;
-    const known = this.banks.get(entry.address);
-    const devnetName = this.devnetName(entry.address);
-    const name = entry.name ?? known?.name ?? devnetName;
-    const set = new Set<BankSource>(known?.sources ?? []).add(source);
-    if (devnetName) set.add("devnet");
-    const sources = [...set];
-    const next: Bank = name ? { address: entry.address, name, sources } : { address: entry.address, sources };
-    const changed = !known || known.name !== next.name || known.sources.length !== next.sources.length;
-    if (changed) this.banks.set(entry.address, next);
-    return changed;
+  /**
+   * Merges the sources: the ledger registry's name first, then config's, then the devnet
+   * label. Notifies listeners if anything changed.
+   */
+  private recompute(): void {
+    const next = new Map<string, Bank>();
+    const addresses = new Set([...this.fromConfig.keys(), ...this.fromLedger.keys(), ...this.fromEvents]);
+    for (const address of addresses) {
+      if (address === this.centralBank || address === this.contractId) continue;
+      const sources: BankSource[] = [];
+      if (this.fromConfig.has(address)) sources.push("config");
+      if (this.fromLedger.has(address)) sources.push("ledger");
+      if (this.fromEvents.has(address)) sources.push("events");
+      const devnetName = this.devnetName(address);
+      if (devnetName) sources.push("devnet");
+      const name = this.fromLedger.get(address) ?? this.fromConfig.get(address) ?? devnetName;
+      next.set(address, name ? { address, name, sources } : { address, sources });
+    }
+    const changed = JSON.stringify([...next.values()]) !== JSON.stringify([...this.banks.values()]);
+    this.banks = next;
+    if (changed) {
+      notifyAll(this.listeners, this.list());
+    }
   }
 
-  /** Reads the registry on the central bank's account and merges it in. */
+  /**
+   * Reads the registry on the central bank's account. It replaces the ledger's previous
+   * contribution, so a bank another app unregistered or renamed is updated here too.
+   */
   async load(): Promise<Bank[]> {
     const ledger = await readLedgerBanks(this.ctx, this.centralBank);
-    let changed = false;
-    for (const b of ledger) changed = this.add(b, "ledger") || changed;
-    if (changed) this.emit();
+    this.fromLedger = new Map(ledger.map((b) => [b.address, b.name]));
+    this.recompute();
     return this.list();
   }
 
@@ -98,37 +111,27 @@ export class BankRegistry {
     const added: string[] = [];
     let changed = false;
     for (const address of addresses) {
-      const isNew = !this.banks.has(address);
-      if (this.add({ address }, "events")) {
-        changed = true;
-        if (isNew) added.push(address);
-      }
+      if (this.fromEvents.has(address)) continue;
+      this.fromEvents.add(address);
+      changed = true;
+      if (!this.banks.has(address) && address !== this.centralBank && address !== this.contractId) added.push(address);
     }
-    if (changed) this.emit();
+    if (changed) this.recompute();
     return added;
   }
 
   /** The central bank registers (or renames) a bank on its account. */
   async register(cb: Signer, entry: { address: string; name?: string }): Promise<TxOutcome> {
     const outcome = await registerBank(this.ctx, cb, this.centralBank, entry);
-    // Mirror what the ledger now holds: the trimmed name, or none (the devnet label, if any).
-    this.add({ address: entry.address }, "ledger");
-    const known = this.banks.get(entry.address)!;
-    const name = entry.name?.trim() || this.devnetName(entry.address);
-    this.banks.set(entry.address, name ? { ...known, name } : { address: known.address, sources: known.sources });
-    this.emit();
+    this.fromLedger.set(entry.address, entry.name?.trim() || undefined);
+    this.recompute();
     return outcome;
   }
 
   async unregister(cb: Signer, address: string): Promise<TxOutcome> {
     const outcome = await unregisterBank(this.ctx, cb, this.centralBank, address);
-    const known = this.banks.get(address);
-    if (known) {
-      const sources = known.sources.filter((s) => s !== "ledger");
-      if (sources.length) this.banks.set(address, { ...known, sources });
-      else this.banks.delete(address);
-    }
-    this.emit();
+    this.fromLedger.delete(address);
+    this.recompute();
     return outcome;
   }
 }

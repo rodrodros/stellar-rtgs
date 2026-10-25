@@ -6,7 +6,7 @@
 // Framework-agnostic: `subscribe` / `getSnapshot` fit React's `useSyncExternalStore`.
 import type { Capabilities } from "../capabilities.ts";
 import { latestId, mapLimit } from "../contract/gateway.ts";
-import { RtgsError, toRtgsError } from "../errors.ts";
+import { notifyAll, RtgsError, toRtgsError } from "../errors.ts";
 import type { EventFeed, FeedOptions, FeedStatus } from "../events/feed.ts";
 import type { Bank } from "../registry/banks.ts";
 import type { LedgerClock } from "../rpc.ts";
@@ -68,8 +68,6 @@ function touchedBy(event: FeedEvent, model: ModelState): string[] {
       const from = model.payments.get(event.id)?.from;
       return from ? [from] : [];
     }
-    case "Token":
-      return [event.from, event.to].filter((a): a is string => !!a);
     default:
       return [];
   }
@@ -132,7 +130,7 @@ export class RtgsStore {
       registry: this.session.registry.list(),
       ...patch,
     };
-    for (const l of this.listeners) l();
+    notifyAll(this.listeners);
   }
 
   private get running(): boolean {
@@ -249,17 +247,30 @@ export class RtgsStore {
         }
         this.update(patch);
       }),
-      this.session.registry.subscribe((banks) => {
-        // A bank new to the registry (registered here, read from the ledger, or seen in an
-        // event) gets its views.
-        for (const b of banks) if (!this.banks.has(b.address)) this.pending.add(b.address);
-        this.update({});
-        this.scheduleRefresh();
-      }),
+      this.session.registry.subscribe((banks) => this.onRegistry(banks)),
     );
     const every = this.options.registryPollMs ?? 30_000;
     if (every > 0) this.registryTimer = setInterval(() => void this.reloadRegistry(), every);
     feed.start();
+  }
+
+  /**
+   * Follows the registry: a bank new to it gets its views, a bank that left it loses them, and
+   * a renamed bank's view takes the new name.
+   */
+  private onRegistry(registry: Bank[]): void {
+    const byAddress = new Map(registry.map((b) => [b.address, b]));
+    const banks = new Map<string, BankView>();
+    for (const [address, view] of this.banks) {
+      const bank = byAddress.get(address);
+      if (!bank) continue;
+      const { name: _name, ...rest } = view;
+      banks.set(address, bank.name ? { ...rest, name: bank.name } : rest);
+    }
+    for (const b of registry) if (!banks.has(b.address)) this.pending.add(b.address);
+    this.banks = banks;
+    this.update({});
+    this.scheduleRefresh();
   }
 
   private onEvents(batch: FeedEvent[]): void {

@@ -1,6 +1,6 @@
 // Building, signing, sending and confirming transactions. A transaction is final once the
 // ledger that applies it closes (ADR-0005), so every send polls until RPC reports it.
-import { Account, BASE_FEE, contract, rpc, TransactionBuilder, xdr, type Transaction } from "@stellar/stellar-sdk";
+import { Account, BASE_FEE, contract, Keypair, rpc, TransactionBuilder, xdr, type Transaction } from "@stellar/stellar-sdk";
 import { RtgsError, toRtgsError } from "./errors.ts";
 import { contractIdOf, decodeEvent, eventId } from "./events/decode.ts";
 import type { NetworkConfig } from "./network/networks.ts";
@@ -157,16 +157,32 @@ export async function signAndSend(
   return confirm(ctx, sent.hash, source);
 }
 
+/**
+ * Whether an account exists, read from the ledger. The SDK's `getAccount` reports any failure,
+ * a network error included, as "Account not found", so this tells the two apart.
+ */
+export async function accountExists(ctx: TxContext, address: string): Promise<boolean> {
+  const key = xdr.LedgerKey.account(new xdr.LedgerKeyAccount({ accountId: Keypair.fromPublicKey(address).xdrAccountId() }));
+  try {
+    return (await ctx.server.getLedgerEntries(key)).entries.length > 0;
+  } catch (e) {
+    throw toRtgsError(e);
+  }
+}
+
+/** Maps a failure to load `source`'s account: missing (fund it), or the RPC failure it was. */
+export async function accountLoadError(ctx: TxContext, source: string, e: unknown): Promise<RtgsError> {
+  if (!/Account not found/i.test(String(e instanceof Error ? e.message : e))) return toRtgsError(e);
+  if (await accountExists(ctx, source)) return toRtgsError(e);
+  return new RtgsError("transaction", "No such account", `${source} does not exist on ${ctx.net.label}; fund it first.`, { cause: e });
+}
+
 async function builder(ctx: TxContext, source: string): Promise<TransactionBuilder> {
   let account;
   try {
     account = await ctx.server.getAccount(source);
   } catch (e) {
-    const err = toRtgsError(e);
-    if (/not found/i.test(String(e))) {
-      throw new RtgsError("transaction", "No such account", `${source} does not exist on ${ctx.net.label}; fund it first.`, { cause: e });
-    }
-    throw err;
+    throw await accountLoadError(ctx, source, e);
   }
   return new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase: ctx.net.passphrase }).setTimeout(TIMEOUT_SECS);
 }

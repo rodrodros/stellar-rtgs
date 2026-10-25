@@ -6,7 +6,7 @@
 // says so; older history needs an indexer, which this project does not have. Payment orders
 // themselves stay readable through the contract's views.
 import { rpc } from "@stellar/stellar-sdk";
-import { RtgsError, toRtgsError } from "../errors.ts";
+import { notifyAll, RtgsError, toRtgsError } from "../errors.ts";
 import type { RpcServer } from "../rpc.ts";
 import type { FeedEvent } from "../types.ts";
 import { decodeFeedEvent } from "./decode.ts";
@@ -52,12 +52,6 @@ export interface FeedSource {
 }
 
 const MAX_BACKOFF_MS = 30_000;
-
-function reportListenerError(e: unknown): void {
-  const report = (globalThis as { reportError?: (e: unknown) => void }).reportError;
-  if (report) report(e);
-  else console.error("@rtgs/core: an event feed listener threw", e);
-}
 
 /** The ledger a `getEvents` cursor points into: the high 32 bits of its TOID. */
 export function cursorLedger(cursor: string): number | undefined {
@@ -131,7 +125,7 @@ export class EventFeed {
   private setStatus(patch: Partial<FeedStatus>): void {
     this.current = { ...this.current, ...patch };
     if (patch.state !== "error" && this.current.error) delete this.current.error;
-    for (const l of this.statusListeners) l(this.current);
+    notifyAll(this.statusListeners, this.current);
   }
 
   private schedule(generation: number, ms: number): void {
@@ -219,13 +213,7 @@ export class EventFeed {
    * feed; its error is reported on its own.
    */
   private deliver(batch: FeedEvent[]): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(batch);
-      } catch (e) {
-        reportListenerError(e);
-      }
-    }
+    notifyAll(this.listeners, batch);
   }
 
   private decode(e: rpc.Api.EventResponse): FeedEvent {

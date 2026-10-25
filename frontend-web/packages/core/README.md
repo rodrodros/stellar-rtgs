@@ -39,7 +39,7 @@ A session is immutable. To switch networks, call `session.dispose()` and connect
 | Registry | `session.registry`: `list`, `load`, `nameOf`, `register(cbSigner, {address, name})`, `unregister` | See "Bank registry". |
 | Cash token | `session.token.holding(addr)` / `balance`; `session.tokenAdmin(cbSigner)`: `authorize`, `issue`, `clawback`; `CLAWBACK_LIMITS` | `token-admin.ts` is the only code that assumes the central bank is the issuer and SAC admin (spec fact 3). Clawback from the settlement contract is refused (ADR-0006). |
 | Errors | `RtgsError { kind, code?, title, detail }`, `toRtgsError(e)` | Contract codes 1–16, SAC errors, classic result codes, RPC, wallet, stubs (`not-implemented`). |
-| Devnet | `bootstrapDevnet({ network, wasm, banks, cash, config, onStep })`, `loadSettlementWasm()` | Browser or Node (`pnpm devnet:bootstrap`). A rerun reuses the deployment, unless the published contract runs another Wasm: then it deploys a new one. |
+| Devnet | `bootstrapDevnet({ network, wasm, banks, cash, config, onStep })`, `loadSettlementWasm()` | Browser or Node (`pnpm devnet:bootstrap`). A rerun reuses the deployment, unless the published contract runs another Wasm: then it deploys a new one. Cash is issued only to a bank holding none, so a rerun doesn't add money. |
 | React | `useConnection`, `RtgsProvider`, `useSession`, `useStore`, `useSnapshot(selector)`, `useCapabilities`, `useEvents`, `useFeedStatus`, `useBankRegistry`, `useLedgerClock` | From `@rtgs/core/react`. No components. |
 
 ### Payment lifecycle
@@ -80,7 +80,7 @@ The contract keeps no list of banks (spec fact 2). The registry is the union of 
 - the devnet identities;
 - every address the event feed mentions.
 
-The registry excludes the central bank and the contract. RPC can't list data entries, so readers scan indices in batches of 50 and stop at the first batch with no bank. Registration fills the lowest free index, but if 50 consecutive indices are unregistered, the banks above them are no longer found. The same account also carries `rtgs.settlement`, the contract id, which is how every app finds the current devnet deployment after a reset, with no server and whatever its origin.
+Names come from the ledger registry first, then config, then the devnet label. Each `load()` replaces the ledger's contribution, so a bank another app unregisters or renames is updated too. A bank known only from events (`sources: ["events"]`) stays listed, unnamed, after it is unregistered; filter on `sources` for a list of registered banks. The registry excludes the central bank and the contract. RPC can't list data entries, so readers scan indices in batches of 50 and stop at the first batch with no bank. Registration fills the lowest free index, but if 50 consecutive indices are unregistered, the banks above them are no longer found. The same account also carries `rtgs.settlement`, the contract id, which is how every app finds the current devnet deployment after a reset, with no server and whatever its origin.
 
 ## Limits and flags
 

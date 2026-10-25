@@ -57,7 +57,7 @@ export class RtgsReader extends SettlementReader {
   }
 
   /** Balance, both queues as payment orders, what blocks their heads, and credit. */
-  async bank(address: string, opts: { config?: Config; known?: Map<bigint, Payment> } = {}): Promise<BankView> {
+  async bank(address: string, opts: { config?: Config } = {}): Promise<BankView> {
     const [balance, urgentIds, normalIds, credit] = await Promise.all([
       this.balance(address),
       this.queue(address, "urgent"),
@@ -65,7 +65,7 @@ export class RtgsReader extends SettlementReader {
       this.creditIfAvailable(address),
     ]);
     const load = async (ids: bigint[]) =>
-      (await mapLimit(ids, 8, async (id) => opts.known?.get(id) ?? this.payment(id))).filter((p): p is Payment => !!p);
+      (await mapLimit(ids, 8, (id) => this.payment(id))).filter((p): p is Payment => !!p);
     const queues = { urgent: await load(urgentIds), normal: await load(normalIds) };
     const view: BankView = { address, balance, queues, analysis: analyseQueues(balance, queues, opts.config) };
     if (credit) view.credit = credit;

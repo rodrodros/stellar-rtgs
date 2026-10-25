@@ -269,4 +269,27 @@ describe("event feed robustness", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("delivers the batch and stays live when a status listener throws", async () => {
+    vi.useFakeTimers();
+    const report = vi.fn();
+    vi.stubGlobal("reportError", report);
+    try {
+      const { server } = fakeServer([[event(60, 1)]]);
+      const feed = new EventFeed({ server, contractId: CONTRACT });
+      const got: FeedEvent[] = [];
+      feed.onStatus(() => {
+        throw new Error("status bug");
+      });
+      feed.subscribe((b) => got.push(...b));
+      feed.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(got).toHaveLength(1);
+      expect(feed.status().state).toBe("live");
+      expect(report).toHaveBeenCalled();
+      feed.stop();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

@@ -157,6 +157,28 @@ describe.skipIf(!up)("@rtgs/core on the devnet", () => {
     expect(ledger.some((b) => b.address === extra)).toBe(false);
   });
 
+  it("spreads a registration, rename and removal to another session on its next load", async () => {
+    const other = await connect(net);
+    try {
+      const extra = Keypair.random().publicKey();
+      await session.registry.register(ids.centralBank, { address: extra, name: "Elsewhere" });
+      expect((await other.registry.load()).find((b) => b.address === extra)?.name).toBe("Elsewhere");
+      await session.registry.register(ids.centralBank, { address: extra });
+      expect((await other.registry.load()).find((b) => b.address === extra)?.name).toBeUndefined();
+      await session.registry.unregister(ids.centralBank, extra);
+      expect((await other.registry.load()).some((b) => b.address === extra)).toBe(false);
+    } finally {
+      other.dispose();
+    }
+  });
+
+  it("tells an unfunded account to fund itself, for contract and classic calls alike", async () => {
+    const ghost = session.as(keypairSigner(Keypair.random(), net));
+    await expect(ghost.deposit(1n)).rejects.toMatchObject({ title: "No such account" });
+    await expect(ghost.openTrustline()).rejects.toMatchObject({ title: "No such account" });
+    expect(await ghost.simulate.deposit(1n)).toMatchObject({ ok: false, error: { title: "No such account" } });
+  });
+
   it("refuses a signer bound to another network, and a token admin that isn't the issuer", () => {
     const foreign = { ...keypairSigner(Keypair.random(), net), networkPassphrase: PASSPHRASES.testnet };
     expect(() => session.as(foreign)).toThrow(/another network/);
