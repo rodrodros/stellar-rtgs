@@ -49,6 +49,7 @@ describe("parseCliArgs", () => {
 
   it("skips the separator pnpm passes through", () => {
     expect(run(["--", "--rate", "5"]).rate).toBe(5);
+    expect(run(["--", "--", "--rate", "5"]).rate).toBe(5);
   });
 
   it("asks for help", () => {
@@ -73,6 +74,8 @@ describe("parseCliArgs", () => {
     expect(error(["--duration=-5"])).toBe('--duration must be greater than 0, not "-5"');
     expect(error(["--summary-every=-1"])).toBe('--summary-every must be 0 or more, not "-1"');
     expect(error(["--banks", ""])).toBe('--banks must be a number, not ""');
+    expect(error(["--seed", ""])).toBe("--seed must not be empty");
+    expect(error(["--rpc", " "])).toBe("--rpc must not be empty");
   });
 
   it("needs a value for string flags", () => {

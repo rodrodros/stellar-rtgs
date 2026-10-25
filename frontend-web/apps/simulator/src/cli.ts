@@ -104,16 +104,23 @@ const engine = new Engine({
   ...(args.maxActions !== undefined ? { maxActions: args.maxActions } : {}),
 });
 
-// The first signal stops gracefully (drain, recover); a second one gives up on that.
-let stopping = false;
+// The first signal (or --duration) stops gracefully: drain, then recover. A second signal
+// gives up on that.
+let stopping: Promise<void> | undefined;
 const stop = () => {
-  if (stopping) process.exit(130);
-  stopping = true;
-  console.error("Stopping: draining in-flight transactions (Ctrl-C again to force)");
-  engine.stop().catch((e: unknown) => console.error(`stop failed: ${(e as Error).message}`));
+  if (!stopping) {
+    console.error("Stopping: draining in-flight transactions (Ctrl-C again to force)");
+    stopping = engine.stop().catch((e: unknown) => console.error(`stop failed: ${(e as Error).message}`));
+  }
+  return stopping;
 };
-process.on("SIGINT", stop);
-process.on("SIGTERM", stop);
+let signals = 0;
+const onSignal = () => {
+  if (++signals > 1) process.exit(130);
+  void stop();
+};
+process.on("SIGINT", onSignal);
+process.on("SIGTERM", onSignal);
 const timer = args.duration === undefined ? undefined : setTimeout(stop, args.duration * 1000);
 
 reporter.start({
@@ -131,12 +138,20 @@ reporter.start({
 let code = 0;
 try {
   await engine.run();
+  // `run` also resolves on --max-actions, without a stop; and `stop` is where recover runs,
+  // so wait for it (it is safe to call twice) before tearing down.
+  if (stopping) await stopping;
+  else await engine.stop();
 } catch (e) {
   console.error(`simulate failed: ${(e as Error).message}`);
   code = 1;
+} finally {
+  clearTimeout(timer);
+  try {
+    reporter.stop();
+  } finally {
+    world.stop();
+    session.dispose();
+  }
 }
-clearTimeout(timer);
-reporter.stop();
-world.stop();
-session.dispose();
 process.exit(code);

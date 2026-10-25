@@ -41,8 +41,11 @@ Keeps the bootstrapped devnet's banks transacting until Ctrl-C.
 
 /** Parses argv (without node and the script); `randomSeed` supplies `--rng-seed`'s default. */
 export function parseCliArgs(argv: readonly string[], randomSeed: () => number = defaultRandomSeed): ParsedArgs {
-  // `pnpm simulate -- --rate 5` passes the separator through.
-  const args = argv[0] === "--" ? argv.slice(1) : [...argv];
+  // The root script is `pnpm --filter … start --`, so tsx gets one separator before the flags,
+  // or two after `pnpm simulate -- --rate 5`.
+  let skip = 0;
+  while (argv[skip] === "--") skip++;
+  const args = argv.slice(skip);
   let values;
   try {
     ({ values } = parseArgs({
@@ -75,6 +78,9 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
       throw new ArgError(`--profile must be one of ${PROFILE_NAMES.join(", ")}, not "${profile}"`);
     }
     if (values.log !== "pretty" && values.log !== "json") throw new ArgError(`--log must be pretty or json, not "${values.log}"`);
+    for (const flag of ["rpc", "seed", "contract"] as const) {
+      if (values[flag]?.trim() === "") throw new ArgError(`--${flag} must not be empty`);
+    }
     const parsed: CliArgs = {
       banks: integer("--banks", values.banks, 2),
       profile: profile as ProfileName,

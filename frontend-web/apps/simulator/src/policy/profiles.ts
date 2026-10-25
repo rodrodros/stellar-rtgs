@@ -63,8 +63,9 @@ export const PROFILES: Readonly<Record<ProfileName, Profile>> = {
 /**
  * Amounts sized against the bootstrap's cash per bank (`DEFAULT_CASH`, 10,000 USD): payments
  * of 0.1–8% of it, a holding kept between 10% and 150%, collateral of 10–50%. The queue
- * headroom leaves a slot per other bank lane, since that many uncovered submissions can land
- * between two snapshots, and never asks for more than the queue holds.
+ * headroom grows with the bank lanes, whose uncovered submissions can land between two
+ * snapshots; it trades a rare `QueueFull` refusal (2 for 3 banks, as the ticket sizes it) for
+ * a fuller queue, and never asks for more than the queue holds.
  */
 export function defaultTuning(config: Config, banks: number): Tuning {
   const pct = (n: bigint) => (DEFAULT_CASH * n) / 1_000n;

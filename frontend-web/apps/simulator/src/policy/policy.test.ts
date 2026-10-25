@@ -67,6 +67,19 @@ describe("createPolicy", () => {
     expect(lines).toEqual(["Disabled by capabilities: openRepo (openRepo: stub), repay (repay: stub)"]);
   });
 
+  it("logs disabled actions even when the profile doesn't weigh them", () => {
+    const world = fakeWorld({ capabilities: { ...allAvailable(), openRepo: "stub" } });
+    const lines: string[] = [];
+    const policy = createPolicy({
+      profile: "calm",
+      modules: [module(action("openRepo", "central-bank", { capability: "openRepo" }), action("issue", "central-bank"))],
+      rng: createRng(1),
+      log: (m) => lines.push(m),
+    });
+    policy.choose(world, [CB]);
+    expect(lines).toEqual(["Disabled by capabilities: openRepo (openRepo: stub)"]);
+  });
+
   it("logs nothing when every action is available", () => {
     const lines: string[] = [];
     const policy = createPolicy({ profile: "balanced", modules: [module(action("submit", "bank"))], rng: createRng(1), log: (m) => lines.push(m) });

@@ -19,7 +19,8 @@ export function createPolicy(options: PolicyOptions): Policy {
   const { rng, log } = options;
   const profile = PROFILES[options.profile];
   const weight = (a: ActionDef<any>) => profile.weights[a.name] ?? 0;
-  const actions = options.modules.flatMap((m) => m.actions).filter((a) => weight(a) > 0);
+  const all = options.modules.flatMap((m) => m.actions);
+  const actions = all.filter((a) => weight(a) > 0);
   // Resolved on the first `choose`, once the world knows the contract's config.
   let tuning: Tuning | undefined;
   let loggedDisabled = false;
@@ -29,7 +30,8 @@ export function createPolicy(options: PolicyOptions): Policy {
     const isOn = (a: ActionDef<any>) => a.capability === undefined || caps[a.capability] === "available";
     if (!loggedDisabled) {
       loggedDisabled = true;
-      const off = actions.filter((a) => !isOn(a)).map((a) => `${a.name} (${a.capability}: ${caps[a.capability!]})`);
+      // Every module's, whatever the profile: the log is about what the contract lacks.
+      const off = all.filter((a) => !isOn(a)).map((a) => `${a.name} (${a.capability}: ${caps[a.capability!]})`);
       if (off.length > 0) log?.(`Disabled by capabilities: ${[...new Set(off)].join(", ")}`);
     }
     return actions.filter(isOn);
