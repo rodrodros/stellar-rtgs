@@ -138,6 +138,11 @@ const WASM: &str = concat!(
 /// everything queues. Bank 0's deposit of 1 makes the ring feasible, and the offset then
 /// touches every bank, every queue and every payment.
 ///
+/// Not the worst case since Flow 13: the offset rewrites only a balance that changes, and
+/// here 62 of the 64 net to zero. A ring whose balances all change needs more footprint
+/// entries than Mainnet allows. Flow 14 changes the fixture before this test counts
+/// (StillToFix.md, Flow 14).
+///
 /// The test host applies the Mainnet limits to every invocation (soroban-sdk's
 /// `InvocationResourceLimits::mainnet`, a snapshot of 2026-07-10), so a call over them
 /// fails. The explicit checks below name the limits that matter.

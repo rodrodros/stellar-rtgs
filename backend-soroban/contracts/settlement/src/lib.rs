@@ -4,18 +4,21 @@
 //! Implemented so far: the constructor, `deposit`, `withdraw`, `submit` (which settles a
 //! covered payment at once unless the sender has one queued ahead of it, and queues any
 //! other up to the queue cap), `revoke`, `reprioritise`, `expire`, the eager closure
-//! after every balance increase, revocation, reprioritisation or expiry, and the
-//! `balance`, `payment`, `queue`, `queued_count`, `config` and `central_bank` views. The
-//! other entry points are stubs whose unit tests (`src/tests/`) are written and red; they
-//! are implemented test first (TESTING.md).
+//! (gross settlement, then the LSM offset) after every deposit, submission, revocation,
+//! reprioritisation or expiry, and the `balance`, `payment`, `queue`, `queued_count`,
+//! `config` and `central_bank` views. The other entry points are stubs whose unit tests
+//! (`src/tests/`) are written and red; they are implemented test first (TESTING.md).
 #![no_std]
 
+extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
+use alloc::vec::Vec as AVec;
+use rtgs_core::Candidate;
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Env,
-    IntoVal, Val, Vec,
+    IntoVal, Map, Val, Vec,
 };
 
 const DAY_IN_LEDGERS: u32 = 17_280;
@@ -164,6 +167,9 @@ enum DataKey {
     /// The ids `bank` has queued at a priority, head first and so in id order (ADR-0008,
     /// ADR-0009); no entry while the queue is empty.
     Queue(Address, Priority),
+    /// The banks with a `Queue` entry, each once and in no set order, for the offset, which
+    /// ranges over every queue (Spec O); no entry while no payment is queued.
+    QueuedBanks,
 }
 
 #[contractevent]
@@ -305,6 +311,13 @@ fn settle(env: &Env, payment: &mut Payment, from_balance: i128) -> i128 {
     set_balance(env, &payment.from, remaining_from_balance);
     let to_balance = Settlement::balance(env.clone(), payment.to.clone());
     set_balance(env, &payment.to, to_balance + payment.amount);
+    record_settled(env, payment);
+    remaining_from_balance
+}
+
+/// Records the payment settled at the ledger's close time and publishes its `Settled`
+/// event. The balances are the caller's to move.
+fn record_settled(env: &Env, payment: &mut Payment) {
     payment.status = Status::Settled;
     payment.settled_at = Some(env.ledger().timestamp());
     put(env, &DataKey::Payment(payment.id), payment);
@@ -315,7 +328,6 @@ fn settle(env: &Env, payment: &mut Payment, from_balance: i128) -> i128 {
         amount: payment.amount,
     }
     .publish(env);
-    remaining_from_balance
 }
 
 /// Records the queued payment and puts it at the tail of its sender's queue for its
@@ -356,9 +368,31 @@ fn insert_by_age(env: &Env, payment: &Payment) {
     put_queue(env, &payment.from, payment.priority, &queue);
 }
 
-/// The eager closure (§4.6, S9; ADR-0010): settles every covered head of `banks`, urgent
-/// first (S7, ADR-0009), and follows the cascade through the queues of each bank a
-/// settlement credits, all in the calling transaction.
+/// The eager closure (§4.6, S9, S23; ADR-0010): gross settlement from `banks`, then, at
+/// rest, the offset of the greatest feasible prefix. All of it runs in the calling
+/// transaction.
+///
+/// The model's closure (quint/settlement.qnt) repeats both until an offset settles
+/// nothing. Since k* decides F1 exactly, R5 makes every round after the first offset
+/// empty, so the contract runs one. A head covered after k*, with every candidate ahead
+/// of it in k*, would extend k* to a greater feasible prefix, and so would any further
+/// feasible offset. So the closure ends at rest (S9, S23), as SC-P-12 to SC-P-15 check
+/// after every call, without reading every queue a second time.
+///
+/// R5 rests on three things this argument assumes: both priorities are strict FIFO
+/// (ADR-0008, ADR-0009), `covers` and F1 use one floor (today 0, since credit is minted
+/// into the balance, ADR-0011), and there are no limits or reservations, so K6 holds
+/// (ADR-0018, provisional). A credit line would not change this, so long as both used it.
+/// Limits, or a class that bypasses FIFO, would let a prefix that fails as a whole settle
+/// in parts (C-DF-026), and the model's loop would have to come back.
+fn eager_closure(env: &Env, banks: Vec<Address>) {
+    settle_gross(env, banks);
+    offset(env);
+}
+
+/// A2 in the eager closure (§4.6, S9; ADR-0010): settles every covered head of `banks`,
+/// urgent first (S7, ADR-0009), and follows the cascade through the queues of each bank a
+/// settlement credits.
 ///
 /// The queues were at rest before the call, so `banks` must hold every bank whose balance
 /// rose or whose queue head changed since: only those can have a covered head. A
@@ -366,8 +400,9 @@ fn insert_by_age(env: &Env, payment: &Payment) {
 /// already waiting there. Under FIFO the order the banks are visited in does not change
 /// what settles (R2). A bank joins only at the start or after a settlement, and each
 /// settlement takes one of the queued payments the cap bounds, so the visits are at most
-/// `banks.len()` plus the settlements: the closure ends, and it ends at rest.
-fn eager_closure(env: &Env, mut banks: Vec<Address>) {
+/// `banks.len()` plus the settlements: gross settlement ends, and it ends with no head
+/// covered.
+fn settle_gross(env: &Env, mut banks: Vec<Address>) {
     let mut settled = 0;
     while let Some(bank) = banks.pop_front() {
         let mut balance = Settlement::balance(env.clone(), bank.clone());
@@ -404,8 +439,172 @@ fn eager_closure(env: &Env, mut banks: Vec<Address>) {
     }
 }
 
-/// Records `bank`'s queue at `priority`, or removes its entry once the queue is empty.
+/// A3 `Offset` under Spec O with F2, one phase (ADR-0010): settles the greatest feasible
+/// prefix k* of every queued bank's candidates (R4), as one `Offset` event and then one
+/// `Settled` event per payment, all in id order. When k* is zero it settles nothing and
+/// publishes nothing.
+///
+/// A bank's candidates are its queued payments in `≺` order: urgent first, then by id
+/// (§4.5, ADR-0009). So the offset never takes a payment ahead of an older one of the
+/// same priority (F2, F6), nor a normal one without every urgent one of its bank (S7). The
+/// accounts are the queued banks and the banks they pay; one that only receives has no
+/// candidates and cannot break F1, but is credited (SC-A03-20).
+///
+/// Each bank's net change is booked exactly (`rtgs_core::balances_after`): queued sums
+/// can exceed `i128` (SC-A03-11, SC-A03-12), but F1 and S1 put every final balance
+/// between 0 and the tokens the contract holds. A bank whose balance nets to what it was
+/// is not rewritten, and `QueuedBanks` is rewritten at most once, when some bank has no
+/// payment left.
+fn offset(env: &Env) {
+    let banks = queued_banks(env);
+    let mut index: Map<Address, u32> = Map::new(env);
+    let mut accounts: AVec<Address> = AVec::new();
+    let mut account = |bank: &Address| match index.get(bank.clone()) {
+        Some(account) => account as usize,
+        None => {
+            index.set(bank.clone(), accounts.len() as u32);
+            accounts.push(bank.clone());
+            accounts.len() - 1
+        }
+    };
+    // `queues[account]` and `payments[account]` belong to a queued bank, the first accounts.
+    let mut queues = AVec::new();
+    let mut payments = AVec::new();
+    for bank in banks.iter() {
+        // `QueuedBanks` holds each bank once, so the nth bank is account n; SC-P-12 to
+        // SC-P-15 check that `put_queue` keeps it so. Were a bank there twice, the tests
+        // stop here, and a release build skips the second entry rather than misaligning
+        // every later bank.
+        let new_bank = account(&bank) == payments.len();
+        debug_assert!(new_bank, "QueuedBanks holds a bank twice");
+        if !new_bank {
+            continue;
+        }
+        let urgent = Settlement::queue(env.clone(), bank.clone(), Priority::Urgent);
+        let normal = Settlement::queue(env.clone(), bank.clone(), Priority::Normal);
+        let bank_payments: AVec<Payment> = urgent
+            .iter()
+            .chain(normal.iter())
+            .map(|id| Settlement::payment(env.clone(), id).unwrap())
+            .collect();
+        payments.push(bank_payments);
+        queues.push((
+            bank,
+            [(Priority::Urgent, urgent), (Priority::Normal, normal)],
+        ));
+    }
+    let mut candidates: AVec<AVec<Candidate>> = payments
+        .iter()
+        .map(|bank_payments| {
+            bank_payments
+                .iter()
+                .map(|payment| Candidate {
+                    to: account(&payment.to),
+                    amount: payment.amount,
+                })
+                .collect()
+        })
+        .collect();
+    candidates.resize(accounts.len(), AVec::new());
+    let before: AVec<i128> = accounts
+        .iter()
+        .map(|bank| Settlement::balance(env.clone(), bank.clone()))
+        .collect();
+
+    let prefix = rtgs_core::greatest_feasible_prefix(&before, &candidates);
+    let settled: u32 = prefix.iter().map(|&taken| taken as u32).sum();
+    if settled == 0 {
+        return;
+    }
+
+    let after = rtgs_core::balances_after(&before, &candidates, &prefix);
+    for (account, bank) in accounts.iter().enumerate() {
+        if after[account] != before[account] {
+            set_balance(env, bank, after[account]);
+        }
+    }
+    let mut still_queued = Vec::new(env);
+    for ((bank, by_priority), &taken_from_bank) in queues.into_iter().zip(&prefix) {
+        let mut left = taken_from_bank as u32;
+        let mut remaining = 0;
+        for (priority, queue) in &by_priority {
+            let taken = left.min(queue.len());
+            if taken > 0 {
+                write_queue(env, &bank, *priority, &queue.slice(taken..));
+                left -= taken;
+            }
+            remaining += queue.len() - taken;
+        }
+        if remaining > 0 {
+            still_queued.push_back(bank);
+        }
+    }
+    if still_queued.len() < banks.len() {
+        put_queued_banks(env, &still_queued);
+    }
+    let count = Settlement::queued_count(env.clone()) - settled;
+    put(env, &DataKey::QueuedCount, &count);
+
+    let mut offset: AVec<Payment> = payments
+        .into_iter()
+        .zip(&prefix)
+        .flat_map(|(bank_payments, &taken)| bank_payments.into_iter().take(taken))
+        .collect();
+    offset.sort_unstable_by_key(|payment| payment.id);
+    Offset {
+        ids: Vec::from_iter(env, offset.iter().map(|payment| payment.id)),
+    }
+    .publish(env);
+    for payment in &mut offset {
+        record_settled(env, payment);
+    }
+}
+
+/// The banks with a queued payment, in no set order.
+fn queued_banks(env: &Env) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::QueuedBanks)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Records the banks with a queued payment, or removes the entry once there are none.
+fn put_queued_banks(env: &Env, banks: &Vec<Address>) {
+    if banks.is_empty() {
+        env.storage().persistent().remove(&DataKey::QueuedBanks);
+    } else {
+        put(env, &DataKey::QueuedBanks, banks);
+    }
+}
+
+/// `write_queue`, keeping `QueuedBanks`: the bank joins it when its first queue gets an
+/// entry, and leaves it when its last one loses it.
 fn put_queue(env: &Env, bank: &Address, priority: Priority, queue: &Vec<u64>) {
+    let persistent = env.storage().persistent();
+    let key = DataKey::Queue(bank.clone(), priority);
+    let other = match priority {
+        Priority::Urgent => Priority::Normal,
+        Priority::Normal => Priority::Urgent,
+    };
+    let other_queued = persistent.has(&DataKey::Queue(bank.clone(), other));
+    let was_queued = other_queued || persistent.has(&key);
+    write_queue(env, bank, priority, queue);
+    let is_queued = other_queued || !queue.is_empty();
+    if was_queued == is_queued {
+        return;
+    }
+    let mut banks = queued_banks(env);
+    if is_queued {
+        banks.push_back(bank.clone());
+    } else {
+        banks.remove(banks.first_index_of(bank).unwrap());
+    }
+    put_queued_banks(env, &banks);
+}
+
+/// Records `bank`'s queue at `priority`, or removes its entry once the queue is empty. It
+/// leaves `QueuedBanks` to the caller.
+fn write_queue(env: &Env, bank: &Address, priority: Priority, queue: &Vec<u64>) {
     let key = DataKey::Queue(bank.clone(), priority);
     if queue.is_empty() {
         env.storage().persistent().remove(&key);
@@ -443,8 +642,8 @@ impl Settlement {
     /// bank's settlement balance. An amount of 0 or less is refused with `InvalidAmount`
     /// before the SAC is called. Whatever the SAC refuses (too low a holding, a holder not
     /// authorized, an overflow, a transfer the bank did not authorize) is reported as
-    /// `TokenTransferFailed`. Then the eager closure settles whatever the deposit covers,
-    /// after `Deposited` (S9).
+    /// `TokenTransferFailed`. Then the eager closure settles whatever the deposit covers
+    /// or makes feasible to offset, after `Deposited` (S9, S23).
     pub fn deposit(env: Env, bank: Address, amount: i128) -> Result<(), Error> {
         bank.require_auth();
         if amount <= 0 {
@@ -490,10 +689,11 @@ impl Settlement {
     /// nothing of the sender's is queued ahead of it (S7, ADR-0008, ADR-0009); any other
     /// waits at the tail of the sender's queue for its priority, unless `Config::queue_cap`
     /// payments are queued already: then it is refused with `QueueFull`, before an id is
-    /// used (ADR-0010). The cap never refuses a payment that settles at once. Whether it
-    /// refuses one that an offset would settle is still open (README): `quint/settlement.qnt`
-    /// settles it, which would move this check after the closure (Flow 13). A payment that
-    /// settles at once credits its receiver, so the eager closure follows it (S9).
+    /// used (ADR-0010). The cap never refuses a payment that settles at once. It is checked
+    /// before the offset, so today it refuses one that an offset would settle, where
+    /// `quint/settlement.qnt` settles it; that decision is still open (README). A payment
+    /// that settles at once credits its receiver, so the eager closure follows it (S9). One
+    /// that queues may complete an offset, so the closure follows it too (A3, S23).
     pub fn submit(
         env: Env,
         from: Address,
@@ -545,6 +745,8 @@ impl Settlement {
             eager_closure(&env, Vec::from_array(&env, [payment.to]));
         } else {
             enqueue(&env, &payment);
+            // No head is newly covered, but the payment may complete an offset (SC-A03-01).
+            eager_closure(&env, Vec::new(&env));
         }
         Ok(id)
     }

@@ -145,7 +145,7 @@ Build on Flows 3 and 6. After any balance increase, from a deposit or from a set
 - [x] `unit::payments::a_settled_payment_never_changes` (SC-A02-07). Passed since Flow 5, and still passes with the closure.
 - [x] `unit::payments::a_cascade_that_returns_to_a_bank_settles_its_next_payment` (SC-A02-08). Added in Flow 8, since SC-A02-04's cascade never comes back to a bank; it fails if the closure visits each bank only once, or keeps the entry of a queue it empties.
 - [x] `unit::payments::an_uncovered_urgent_head_blocks_the_normal_queue_in_the_closure` (SC-A02-09). Added in Flow 8, since SC-A02-03's urgent payment is covered and settles; it fails if the closure settles a bank's normal payments past an urgent one it does not cover.
-- [x] `props::the_closure_leaves_every_queue_at_rest` (SC-P-12). Added in Flow 8: SC-P-01 checks S9 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. It checks gross rest, no bank's head in `≺` covered, rather than k* = 0, so it stays valid once Flow 13's offset exists. It fails against each of these closures, and each shrunk case is one a unit test already pins: with no closure, a submission that settles and leaves its receiver's covered head queued (SC-A02-05); with no cascade, a deposit whose settlement leaves the receiver's covered head queued (SC-A02-04); with each bank visited once, a cascade that returns to a bank whose next head it now covers (SC-A02-08); and with no urgent block, a normal payment settled past its bank's uncovered urgent one (SC-A02-09). It reads only the views, which show an empty queue the same whether its entry is removed or kept, so a closure that keeps the entry of a queue it empties is left to SC-A02-08.
+- [x] `props::the_closure_leaves_every_queue_at_rest` (SC-P-12). Added in Flow 8: SC-P-01 checks S9 too, but only once every entry point exists (Flow 21), so this property runs deposits, withdrawals and submissions alone. Until Flow 13 it checked gross rest alone, no bank's head in `≺` covered, so that it stayed valid once the offset came. It fails against each of these closures, and each shrunk case is one a unit test already pins: with no closure, a submission that settles and leaves its receiver's covered head queued (SC-A02-05); with no cascade, a deposit whose settlement leaves the receiver's covered head queued (SC-A02-04); with each bank visited once, a cascade that returns to a bank whose next head it now covers (SC-A02-08); and with no urgent block, a normal payment settled past its bank's uncovered urgent one (SC-A02-09). It reads only the views, which show an empty queue the same whether its entry is removed or kept, so a closure that keeps the entry of a queue it empties is left to SC-A02-08. Since Flow 13's review it also checks, as SC-P-13 to SC-P-15 do, that k* = 0 after every call and that `QueuedBanks` holds exactly the banks with a queued payment, once each (`offset_at_rest`). Under the pinned seed and seeds 1–4 it kills four hand mutants: a deposit that runs gross settlement without the offset (SC-A03-06 also kills it); an offset that never rewrites the index (SC-A03-03 also kills it); and `put_queue` never taking a bank out of the index, and `put_queue` ignoring the bank's other priority, so that a bank joins twice. The `debug_assert!` in `offset` also catches a doubled entry once an offset runs, so SC-A03-05 kills the second one too, but without the assert only this check catches either.
 
 ## Flow 9: revoke, A6 (12)
 
@@ -235,7 +235,7 @@ A pure rule in `rtgs-core`: k* under Spec O, R4 and F1, with F1 decided over the
 - [x] `core::props::sums_beyond_i128_are_decided_exactly_not_a_panic` (SC-P-08)
 - [x] `core::props::at_the_i128_limit_sums_are_decided_exactly` (SC-A03-11)
 
-## Flow 13: the LSM offset in the contract, A3 eager (10)
+## Flow 13: the LSM offset in the contract, A3 eager (23)
 
 Build on Flows 8 and 12. Once gross settlement is at rest:
 1. Build each bank's candidates in `≺` order: urgent first, then by id.
@@ -247,26 +247,55 @@ Before this flow, ask the user to settle the README decision on the queue cap an
 
 Step 1 needs every bank with a queued payment. Since Flow 5, queues are stored one per `Queue(bank, priority)` and the contract keeps no list of banks, so the offset needs a persistent index of the banks with queued payments. That index could replace `QueuedCount`.
 
-- [ ] `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible` (SC-A03-01)
-- [ ] `unit::lsm::two_opposite_payments_offset_with_no_liquidity` (SC-A03-02)
-- [ ] `unit::lsm::the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest` (SC-A03-03)
-- [ ] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04). Passes since Flow 5, because there is no offset yet. Check that it still passes once the offset exists, then tick it.
-- [ ] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05). Passes since Flow 5, because there is no offset yet. Check that it still passes once the offset exists, then tick it.
-- [ ] `unit::lsm::a_deposit_can_make_an_offset_feasible` (SC-A03-06)
-- [ ] `unit::lsm::at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative` (SC-A03-07)
-- [ ] `unit::lsm::after_an_offset_the_queues_are_at_rest` (SC-A03-08)
-- [ ] `unit::lsm::an_offset_whose_sums_exceed_i128_still_settles` (SC-A03-11)
-- [ ] `unit::lsm::an_offset_books_each_banks_net_change_exactly` (SC-A03-12)
+Done in Flow 13 as `QueuedBanks`, a list kept by `put_queue` (the offset rewrites it at most once, when some bank has no payment left), next to `QueuedCount`, which the cap still reads. Step 2 is the kernel's `balances_after`, which sums each account's net change in 64-bit halves, as k* does. Step 4 is not a loop. The model's closure repeats gross settlement and the offset until an offset settles nothing, but since k* decides F1 exactly, R5 makes every round after the first offset empty, and no test can tell the loop from a single offset. So the closure is one gross pass, then one offset. That saves a second read of every queue on the cap path Flow 14 measures. SC-P-12 to SC-P-15 check k* = 0 after every call, so a closure that stopped short of rest would fail them. R5 rests on strict FIFO in both priorities (ADR-0008, ADR-0009), one floor for `covers` and F1 alike (today 0, ADR-0011) and no limits or reservations, so that K6 holds (ADR-0018, provisional). If limits or a class that bypasses FIFO come in, the model's loop must come back (C-DF-026).
+
+The cap decision above was not taken in Flow 13: `submit` still checks the cap before the closure, so it refuses a payment that an offset would settle, and SC-P-11 still accepts either answer. It remains open in the README, and blocks Flow 15.
+
+- [x] `unit::lsm::r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible` (SC-A03-01)
+- [x] `unit::lsm::two_opposite_payments_offset_with_no_liquidity` (SC-A03-02)
+- [x] `unit::lsm::the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest` (SC-A03-03)
+- [x] `unit::lsm::the_offset_never_overtakes_an_older_payment` (SC-A03-04). Passed since Flow 5, and still passes with the offset.
+- [x] `unit::lsm::the_offset_takes_a_banks_urgent_payments_before_its_normal_ones` (SC-A03-05). Passed since Flow 5, and still passes with the offset.
+- [x] `unit::lsm::a_deposit_can_make_an_offset_feasible` (SC-A03-06)
+- [x] `unit::lsm::at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative` (SC-A03-07)
+- [x] `unit::lsm::after_an_offset_the_queues_are_at_rest` (SC-A03-08)
+- [x] `unit::lsm::an_offset_whose_sums_exceed_i128_still_settles` (SC-A03-11)
+- [x] `unit::lsm::an_offset_books_each_banks_net_change_exactly` (SC-A03-12)
+- [x] `core::the_balances_after_an_offset_book_each_net_change_exactly` (SC-A03-12). Added in Flow 13, for the kernel's `balances_after`.
+- [x] `core::the_balances_after_an_offset_move_only_the_prefix` (SC-A03-12). Added in Flow 13: it fails if `balances_after` books candidates past the prefix.
+- [x] `core::the_balances_after_an_offset_reach_i128_max_without_overflow` (SC-A03-12). Added in Flow 13's review: it fails if `balances_after` scales the high half before carrying the low half's borrow, which overflows when a bank ends at `i128::MAX`.
+- [x] `unit::lsm::revoking_a_blocking_payment_makes_an_offset_feasible` (SC-A03-13). Added in Flow 13, since every other offset test is triggered by a submission or a deposit; it fails if revocation runs gross settlement without the offset.
+- [x] `unit::lsm::a_bank_whose_only_payment_changes_priority_still_offsets` (SC-A03-14). Added in Flow 13, for the index of banks with a queue; it fails if a bank drops out of the index when its only payment moves to the other priority.
+- [x] `unit::lsm::gross_settlement_comes_to_rest_before_the_offset` (SC-A03-15). Added in Flow 13, since no other offset test settles gross and by offset in the same call; it fails if the offset runs before gross settlement is at rest.
+- [x] `unit::lsm::an_offset_lists_its_payments_in_id_order` (SC-A03-16). Added in Flow 13, since in the other offset tests the candidate order is already the id order; it fails if the events follow the candidates.
+- [x] `unit::lsm::expiring_a_blocking_payment_makes_an_offset_feasible` (SC-A03-17). Added in Flow 13, the A5 counterpart of SC-A03-13; it fails if expiry runs gross settlement without the offset.
+- [x] `unit::lsm::demoting_an_urgent_payment_makes_an_offset_feasible` (SC-A03-18). Added in Flow 13, the A8 counterpart of SC-A03-13; it fails if reprioritisation runs gross settlement without the offset.
+- [x] `unit::lsm::an_offset_takes_every_payment_of_a_queue_up_to_the_cap` (SC-A03-19). Added in Flow 13's second review, since no other offset gives a bank more than two candidates: it fails if the offset looks at only a window of each queue, which SC-P-12 to SC-P-15 rarely catch under the pinned seed.
+- [x] `unit::lsm::an_offset_credits_a_bank_that_only_receives` (SC-A03-20). Added in Flow 13's second review, since in every other offset each account also sends: it fails if the offset books only the queued banks.
+- [x] `unit::lsm::an_offset_credits_a_queued_bank_whose_own_prefix_is_zero` (SC-A03-20). Added in Flow 13's third review, since SC-A03-20's first test credits only a bank with no queue: it fails if the offset books only the banks it takes payments from, and those with no queue.
+- [x] `unit::lsm::an_offset_that_ends_inside_a_mixed_queue_takes_the_urgent_payments_first` (SC-A03-21). Added in Flow 13's third review, since in every other offset a bank with both priorities queued has nothing or everything taken: it fails if the offset slices the normal queue first, which leaves the settled urgent payment queued, to settle a second time.
 
 ## Flow 14: the offset's cost at the queue cap (1)
 
 This test registers the contract from its Wasm, so run `make build` first. If an offset over 64 payments doesn't fit Mainnet's per-transaction limits, lower `QUEUE_CAP_UNDER_TEST` and record why.
+
+Passes since Flow 13, but only because its ring nets to zero for 62 of the 64 banks, and the offset doesn't rewrite a balance that nets to what it was. With Flow 13's offset, the ring measured about 63M instructions, 135 entries written, 400 entries read and written in all (limit 400), and 16,116 bytes of events (limit 16,384). So the fixture is no longer the worst case for writes.
+
+A ring of 64 whose balances all change, with bank `i` paying `100 − i` and bank 0 depositing 63, needs 462 footprint entries and is refused by the test host. Before ticking this test:
+- make the fixture's balances all change, so it is the worst case again;
+- then lower `QUEUE_CAP_UNDER_TEST` and re-measure, or shrink the footprint. One idea: the offset reads `Queue(bank, Urgent)` for every queued bank, even one with no urgent queue, which is 64 entries at the cap. Another: `put_queue` checks both of the bank's queue keys with `has` to keep `QueuedBanks`, where a caller that knows the old length could pass it in.
+
+Every submission that queues also runs the offset over every queue. At 63 queued payments across 63 banks, one queuing submission measured 263 entries read and about 33M instructions to find k* = 0. ADR-0010 requires the eager offset, but that cost bears on ADR-0007's fee target, so a cost check for it could sit next to SC-ST-04.
+
+An offset over the limits refuses the call that makes it feasible, and that call is an otherwise valid `deposit`, `submit`, `revoke`, `reprioritise` or `expire`. ADR-0010 names a keeper as the backstop, but the contract has no keeper entry point for the offset yet. Flow 14 should decide what the backstop is: a keeper entry point, or an eager offset bounded to what fits that leaves the rest to the keeper.
 
 - [ ] `unit::storage::an_offset_over_a_full_queue_fits_in_one_transaction` (SC-ST-04)
 
 ## Flow 15: the model-based replay (1)
 
 The 50 committed Quint traces call deposit, withdraw, submit, revoke, reprioritise, expire and tick. The replay needs Flows 1 to 13.
+
+After Flow 13, the replay gets through the first traces and stops at `trace2.itf.json` state 27: the model accepts a submission that the contract refuses with `QueueFull`. The model refuses only a payment still queued after the closure, offset included, while the contract refuses before it. That is the README's open decision on the cap and the offset.
 
 - [ ] `itf_replay::quint_traces_replay_against_the_contract` (SC-MB-01)
 
@@ -363,8 +392,8 @@ They call every entry point and every view, so they turn green last. A failure p
 
 | | Tests |
 |---|---|
-| Already green (Flows 0 to 12) | 119 |
-| Still to fix (Flows 13 to 21) | 49 |
-| All | 168 |
+| Already green (Flows 0 to 13) | 142 |
+| Still to fix (Flows 14 to 21) | 39 |
+| All | 181 |
 
-The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, and Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`.
+The baseline had 132 tests, and the property and state-machine tests added 17. Flow 6 added SC-A01-17 and SC-P-10, Flow 7 added SC-A01-18 to SC-A01-22 and SC-P-11, Flow 8 added SC-A02-08, SC-A02-09 and SC-P-12, Flow 9 added SC-P-13, Flow 10 added SC-A08-09 to SC-A08-11 and SC-P-14, Flow 11 added SC-A05-10 and SC-P-15, Flow 12 added SC-A03-11's `core::balances_beyond_two_to_the_sixty_four_are_decided_exactly`, and Flow 13 added three kernel tests of SC-A03-12 and SC-A03-13 to SC-A03-21.

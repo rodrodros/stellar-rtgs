@@ -2,10 +2,10 @@
 //!
 //! This crate has no soroban-sdk dependency and no `Env`, so its rules can be tested
 //! natively, property-tested and proved with Kani, which cannot compile the soroban-sdk
-//! test host (C-ST-059). The settlement contract calls `covers`; it will call
-//! `greatest_feasible_prefix` once it offsets (Flow 13). Both are implemented, with their
-//! unit tests (below) and property tests (`props.rs`); see TESTING.md, "Property and
-//! state-machine tests".
+//! test host (C-ST-059). The settlement contract calls `covers`, and
+//! `greatest_feasible_prefix` and `balances_after` for its offset. All three have unit
+//! tests (below), and the first two property tests (`props.rs`); see TESTING.md,
+//! "Property and state-machine tests".
 #![no_std]
 
 extern crate alloc;
@@ -62,18 +62,7 @@ pub fn greatest_feasible_prefix(balances: &[i128], queues: &[Vec<Candidate>]) ->
     let mut high = vec![0_i128; balances.len()];
     let mut low = vec![0_i128; balances.len()];
     loop {
-        for (account, &balance) in balances.iter().enumerate() {
-            (high[account], low[account]) = split(balance);
-        }
-        for (payer, queue) in queues.iter().enumerate() {
-            for candidate in &queue[..prefix[payer]] {
-                let (amount_high, amount_low) = split(candidate.amount);
-                high[payer] -= amount_high;
-                low[payer] -= amount_low;
-                high[candidate.to] += amount_high;
-                low[candidate.to] += amount_low;
-            }
-        }
+        net(balances, queues, &prefix, &mut high, &mut low);
         // The net is `high · 2^64 + low`; with `low` carried into [0, 2^64), its sign is
         // `high`'s. With balances non-negative and amounts positive, an account that sends
         // nothing is never infeasible, so a violator has a candidate to drop.
@@ -86,7 +75,48 @@ pub fn greatest_feasible_prefix(balances: &[i128], queues: &[Vec<Candidate>]) ->
     }
 }
 
-/// 2^64, where `greatest_feasible_prefix` splits an amount.
+/// A3's booking (ADR-0010): each account's balance once the offset settles `prefix`,
+/// every account's first `prefix[a]` candidates. The net change is summed exactly, as in
+/// `greatest_feasible_prefix`, so it holds where debiting first, or booking payment by
+/// payment, overflows `i128` (SC-A03-12).
+///
+/// Expects `prefix` feasible, so that every balance after is non-negative (F1), and at
+/// most the total of the balances (S1); both fit in `i128`.
+pub fn balances_after(balances: &[i128], queues: &[Vec<Candidate>], prefix: &[usize]) -> Vec<i128> {
+    let mut high = vec![0_i128; balances.len()];
+    let mut low = vec![0_i128; balances.len()];
+    net(balances, queues, prefix, &mut high, &mut low);
+    // `high · 2^64` fits: with `low` carried into [0, 2^64), the result is in [0, i128::MAX].
+    high.iter()
+        .zip(&low)
+        .map(|(&high, &low)| (high + low.div_euclid(HALF)) * HALF + low.rem_euclid(HALF))
+        .collect()
+}
+
+/// Each account's balance once `prefix` settles, as `high · 2^64 + low` in `high` and
+/// `low`, which stay in `i128` for fewer than 2^62 candidates in all.
+fn net(
+    balances: &[i128],
+    queues: &[Vec<Candidate>],
+    prefix: &[usize],
+    high: &mut [i128],
+    low: &mut [i128],
+) {
+    for (account, &balance) in balances.iter().enumerate() {
+        (high[account], low[account]) = split(balance);
+    }
+    for (payer, queue) in queues.iter().enumerate() {
+        for candidate in &queue[..prefix[payer]] {
+            let (amount_high, amount_low) = split(candidate.amount);
+            high[payer] -= amount_high;
+            low[payer] -= amount_low;
+            high[candidate.to] += amount_high;
+            low[candidate.to] += amount_low;
+        }
+    }
+}
+
+/// 2^64, where `greatest_feasible_prefix` and `balances_after` split an amount.
 const HALF: i128 = 1 << 64;
 
 /// `value` as `(high, low)`, with `value = high · 2^64 + low` and `low` in [0, 2^64).
@@ -234,5 +264,48 @@ mod tests {
             ],
         );
         assert_eq!(prefix, vec![1, 1]);
+    }
+
+    /// SC-A03-12. A3 books each account's net change exactly (S1, S2; ADR-0010): A sends
+    /// `i128::MAX` to B and to C, and receives it from each. Debiting first, or payment by
+    /// payment, would take A to −2 · `i128::MAX`; the balances after are all 0.
+    #[test]
+    fn the_balances_after_an_offset_book_each_net_change_exactly() {
+        let max = i128::MAX;
+        let queues = [
+            vec![to(1, max), to(2, max)],
+            vec![to(0, max)],
+            vec![to(0, max)],
+        ];
+        assert_eq!(
+            balances_after(&[0, 0, 0], &queues, &[2, 1, 1]),
+            vec![0, 0, 0]
+        );
+    }
+
+    /// A3 (ADR-0010): only the prefix moves balances. With k* = (1, 0), A's second
+    /// candidate and B's candidate stay queued, so A ends at 30 and B at 70.
+    #[test]
+    fn the_balances_after_an_offset_move_only_the_prefix() {
+        let queues = [vec![to(1, 70), to(1, 40)], vec![to(0, 5)]];
+        assert_eq!(balances_after(&[100, 0], &queues, &[1, 0]), vec![30, 70]);
+    }
+
+    /// SC-A03-12 at the top of `i128` (S1; ADR-0010): B receives 2^126 twice and pays 1
+    /// to C, so it ends at `i128::MAX`, every token there is. Its net is `2^63 · 2^64 − 1`,
+    /// whose high half alone overflows when scaled, so this fails unless the low half's
+    /// borrow is carried into the high half first.
+    #[test]
+    fn the_balances_after_an_offset_reach_i128_max_without_overflow() {
+        let amount = 1_i128 << 126;
+        let queues = [
+            vec![to(1, amount), to(1, amount)],
+            vec![to(2, 1)],
+            vec![to(0, amount)],
+        ];
+        assert_eq!(
+            balances_after(&[amount, 0, amount - 1], &queues, &[2, 1, 1]),
+            vec![0, i128::MAX, 0]
+        );
     }
 }

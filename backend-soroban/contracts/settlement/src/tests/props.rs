@@ -321,11 +321,50 @@ fn booked_only_settlements(
     Ok(())
 }
 
+/// Spec O at rest, after any call (A3; ADR-0010):
+/// - S23: the greatest feasible prefix of the queues, by the reference descent, is 0, so
+///   the closure offset everything the call made feasible (R4);
+/// - `QueuedBanks`, the index the offset reads, holds each bank with a queued payment once,
+///   and no other. A stale or doubled entry changes nothing a view shows. The
+///   `debug_assert!` in `offset` catches a doubled entry once an offset runs; this check
+///   catches a stale one, and either kind even without the assert.
+fn offset_at_rest(setup: &Setup, after: &BTreeMap<u64, Payment>) -> Result<(), TestCaseError> {
+    let bank = |address: &Address| setup.banks.iter().position(|x| x == address).unwrap();
+    let queues: Vec<Vec<u64>> = (0..BANKS)
+        .map(|i| queued_in_order(setup, after, i))
+        .collect();
+    let candidates: Vec<Vec<(usize, i128)>> = queues
+        .iter()
+        .map(|queue| {
+            queue
+                .iter()
+                .map(|id| (bank(&after[id].to), after[id].amount))
+                .collect()
+        })
+        .collect();
+    let prefix = greatest_feasible_prefix(&setup.balances(), &candidates);
+    prop_assert!(
+        prefix.iter().all(|taken| *taken == 0),
+        "S23: k* = {:?} between calls",
+        prefix
+    );
+    let mut index: Vec<usize> = setup
+        .env
+        .as_contract(&setup.contract, || crate::queued_banks(&setup.env))
+        .iter()
+        .map(|address| bank(&address))
+        .collect();
+    index.sort_unstable();
+    let queued: Vec<usize> = (0..BANKS).filter(|i| !queues[*i].is_empty()).collect();
+    prop_assert_eq!(index, queued, "QueuedBanks");
+    Ok(())
+}
+
 /// The checks every call of SC-P-13 to SC-P-15 must pass, `acted_on` being the payment it
 /// revoked, reprioritised or expired: final payments unchanged (S3, S5); every other queued payment
 /// unchanged or settled; S7's order of what settled; `queued_count` from the records; the
-/// queue views in `≺` order, so ids within each priority ascend (S7, ADR-0009); and no
-/// bank's head in `≺` covered (S9, gross).
+/// queue views in `≺` order, so ids within each priority ascend (S7, ADR-0009); no bank's
+/// head in `≺` covered (S9, gross); and the offset at rest (S23, `offset_at_rest`).
 fn queues_at_rest_in_order(
     setup: &Setup,
     before: &BTreeMap<u64, Payment>,
@@ -367,7 +406,7 @@ fn queues_at_rest_in_order(
             );
         }
     }
-    Ok(())
+    offset_at_rest(setup, after)
 }
 
 /// A call of the reprioritisation property: a deposit, withdrawal, submission, time step,
@@ -843,12 +882,17 @@ proptest! {
     ///   balance and the queues are at rest before it, so this check restates that test;
     /// - S3, S5: a settled payment never changes (ADR-0005, ADR-0006);
     /// - `queued_count` counts the payments queued, from their records;
-    /// - S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011).
+    /// - S1, S2: conservation, and no negative balance (ADR-0004, ADR-0011);
+    /// - A3, S23: the offset is at rest too, k* = 0 between calls, and `QueuedBanks` holds
+    ///   exactly the banks with a queued payment (`offset_at_rest`). Added in Flow 13, so
+    ///   that a green property drives random submissions through the offset before SC-P-01
+    ///   can; it fails if a call leaves an offset feasible, as a deposit that runs gross
+    ///   settlement without the offset does, or if gross settlement empties a bank's queues
+    ///   and leaves it in the index. Its banks rarely queue deep enough to tell k* from a
+    ///   prefix over a window of each queue, so SC-A03-19 pins the depth.
     ///
     /// A refused call, `QueueFull` included, is skipped. The calls need no later entry
-    /// point, so this checks the closure before SC-P-01 can. It checks gross rest alone,
-    /// not k* = 0, so it stays valid once Flow 13's offset exists: S9 still demands that
-    /// no head is covered between calls, as SC-P-01 does.
+    /// point, so this checks the closure before SC-P-01 can.
     #[test]
     fn the_closure_leaves_every_queue_at_rest(ops in prop::collection::vec(submission_op(), 1..30)) {
         let setup = Setup::new(BANKS, FUNDING);
@@ -892,6 +936,7 @@ proptest! {
                     );
                 }
             }
+            offset_at_rest(&setup, &after)?;
             before = after;
         }
     }
