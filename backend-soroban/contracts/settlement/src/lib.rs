@@ -331,7 +331,7 @@ fn enqueue(env: &Env, payment: &Payment) {
 /// behind every queued payment of the bank, since a queued urgent payment blocks its
 /// normal ones.
 fn queued_ahead(env: &Env, bank: &Address, priority: Priority) -> bool {
-    let queued = |p: Priority| !Settlement::queue(env.clone(), bank.clone(), p).is_empty();
+    let queued = |prio: Priority| !Settlement::queue(env.clone(), bank.clone(), prio).is_empty();
     queued(Priority::Urgent) || (priority == Priority::Normal && queued(Priority::Normal))
 }
 

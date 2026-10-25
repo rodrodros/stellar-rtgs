@@ -13,8 +13,8 @@ use soroban_sdk::vec;
 use crate::tests::support::Setup;
 use crate::*;
 
-const N: Priority = Priority::Normal;
-const U: Priority = Priority::Urgent;
+const NORMAL: Priority = Priority::Normal;
+const URGENT: Priority = Priority::Urgent;
 
 /// SC-A03-01. R7's gridlock (§4.10, §4.11): A→B 15, B→C 20, C→A 25 with every balance
 /// 10. Gross processing settles nothing (`k_seq` = 0), and the third submission applies
@@ -22,34 +22,34 @@ const U: Priority = Priority::Urgent;
 /// ADR-0010).
 #[test]
 fn r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible() {
-    let s = Setup::funded(&[10, 10, 10]);
-    let c = s.client();
-    let ab = c.submit(s.bank(0), s.bank(1), &15, &N);
-    let bc = c.submit(s.bank(1), s.bank(2), &20, &N);
-    assert_eq!(c.queued_count(), 2);
+    let setup = Setup::funded(&[10, 10, 10]);
+    let client = setup.client();
+    let ab = client.submit(setup.bank(0), setup.bank(1), &15, &NORMAL);
+    let bc = client.submit(setup.bank(1), setup.bank(2), &20, &NORMAL);
+    assert_eq!(client.queued_count(), 2);
 
-    let ca = c.submit(s.bank(2), s.bank(0), &25, &N);
+    let ca = client.submit(setup.bank(2), setup.bank(0), &25, &NORMAL);
 
     let settled = |id: u64, from: usize, to: usize, amount: i128| {
-        s.ev(Settled {
+        setup.ev(Settled {
             id,
-            from: s.bank(from).clone(),
-            to: s.bank(to).clone(),
+            from: setup.bank(from).clone(),
+            to: setup.bank(to).clone(),
             amount,
         })
     };
     assert_eq!(
-        s.our_events(),
+        setup.our_events(),
         std::vec![
-            s.ev(Submitted {
+            setup.ev(Submitted {
                 id: ca,
-                from: s.bank(2).clone(),
-                to: s.bank(0).clone(),
+                from: setup.bank(2).clone(),
+                to: setup.bank(0).clone(),
                 amount: 25,
-                priority: N,
+                priority: NORMAL,
             }),
-            s.ev(Offset {
-                ids: vec![&s.env, ab, bc, ca],
+            setup.ev(Offset {
+                ids: vec![&setup.env, ab, bc, ca],
             }),
             settled(ab, 0, 1, 15),
             settled(bc, 1, 2, 20),
@@ -57,45 +57,45 @@ fn r7_gridlock_is_resolved_in_the_submission_that_makes_it_feasible() {
         ]
     );
     // F1 with `lim` = 0: every post-offset balance is non-negative.
-    assert_eq!(s.balances(), std::vec![20, 5, 5]);
-    assert_eq!(c.queued_count(), 0);
-    s.assert_conserved();
+    assert_eq!(setup.balances(), std::vec![20, 5, 5]);
+    assert_eq!(client.queued_count(), 0);
+    setup.assert_conserved();
 }
 
 /// SC-A03-02. A bilateral offset: two banks with nothing each owe each other 50. Neither
 /// payment is covered alone, both settle together (A3, F1).
 #[test]
 fn two_opposite_payments_offset_with_no_liquidity() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let ab = c.submit(s.bank(0), s.bank(1), &50, &N);
-    let ba = c.submit(s.bank(1), s.bank(0), &50, &U);
-    assert_eq!(c.payment(&ab).unwrap().status, Status::Settled);
-    assert_eq!(c.payment(&ba).unwrap().status, Status::Settled);
-    assert_eq!(s.balances(), std::vec![0, 0]);
-    s.assert_conserved();
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let ab = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    let ba = client.submit(setup.bank(1), setup.bank(0), &50, &URGENT);
+    assert_eq!(client.payment(&ab).unwrap().status, Status::Settled);
+    assert_eq!(client.payment(&ba).unwrap().status, Status::Settled);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
+    setup.assert_conserved();
 }
 
 /// SC-A03-03. The prefix is the greatest feasible one, not all or nothing: A's second
 /// payment does not fit, so k* = (1, 1) and it stays queued (R4, Spec O).
 #[test]
 fn the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let a1 = c.submit(s.bank(0), s.bank(1), &50, &N);
-    let a2 = c.submit(s.bank(0), s.bank(1), &30, &N);
-    let b1 = c.submit(s.bank(1), s.bank(0), &50, &N);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let a1 = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    let a2 = client.submit(setup.bank(0), setup.bank(1), &30, &NORMAL);
+    let b1 = client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
 
     assert_eq!(
-        s.our_events()[1],
-        s.ev(Offset {
-            ids: vec![&s.env, a1, b1],
+        setup.our_events()[1],
+        setup.ev(Offset {
+            ids: vec![&setup.env, a1, b1],
         })
     );
-    assert_eq!(c.payment(&a2).unwrap().status, Status::Queued);
-    assert_eq!(s.queue(0, N), std::vec![a2]);
-    assert_eq!(s.balances(), std::vec![0, 0]);
-    s.assert_conserved();
+    assert_eq!(client.payment(&a2).unwrap().status, Status::Queued);
+    assert_eq!(setup.queue(0, NORMAL), std::vec![a2]);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
+    setup.assert_conserved();
 }
 
 /// SC-A03-04. F2 and F6, S7 for A3 (ADR-0008): the offset never takes a payment ahead of
@@ -103,28 +103,28 @@ fn the_offset_settles_the_greatest_feasible_prefix_and_leaves_the_rest() {
 /// 100, does not fit, so nothing settles.
 #[test]
 fn the_offset_never_overtakes_an_older_payment() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    c.submit(s.bank(0), s.bank(1), &100, &N);
-    let a2 = c.submit(s.bank(0), s.bank(1), &50, &N);
-    let b1 = c.submit(s.bank(1), s.bank(0), &50, &N);
-    assert_eq!(c.payment(&a2).unwrap().status, Status::Queued);
-    assert_eq!(c.payment(&b1).unwrap().status, Status::Queued);
-    assert_eq!(c.queued_count(), 3);
-    assert_eq!(s.balances(), std::vec![0, 0]);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    client.submit(setup.bank(0), setup.bank(1), &100, &NORMAL);
+    let a2 = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    let b1 = client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
+    assert_eq!(client.payment(&a2).unwrap().status, Status::Queued);
+    assert_eq!(client.payment(&b1).unwrap().status, Status::Queued);
+    assert_eq!(client.queued_count(), 3);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
 }
 
 /// SC-A03-05. The candidate order is `≺`, urgent first (§4.5, ADR-0009): A's urgent 100,
 /// though younger, comes before its normal 50, so the prefix cannot take the 50 alone.
 #[test]
 fn the_offset_takes_a_banks_urgent_payments_before_its_normal_ones() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let normal = c.submit(s.bank(0), s.bank(1), &50, &N);
-    let urgent = c.submit(s.bank(0), s.bank(1), &100, &U);
-    let b1 = c.submit(s.bank(1), s.bank(0), &50, &N);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let normal = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    let urgent = client.submit(setup.bank(0), setup.bank(1), &100, &URGENT);
+    let b1 = client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
     for id in [normal, urgent, b1] {
-        assert_eq!(c.payment(&id).unwrap().status, Status::Queued);
+        assert_eq!(client.payment(&id).unwrap().status, Status::Queued);
     }
 }
 
@@ -132,18 +132,18 @@ fn the_offset_takes_a_banks_urgent_payments_before_its_normal_ones() {
 /// it feasible"), and after gross settlement has come to rest.
 #[test]
 fn a_deposit_can_make_an_offset_feasible() {
-    let s = Setup::new(3, 10);
-    let c = s.client();
-    let ab = c.submit(s.bank(0), s.bank(1), &60, &N);
-    let ba = c.submit(s.bank(1), s.bank(0), &50, &N);
-    assert_eq!(c.queued_count(), 2);
+    let setup = Setup::new(3, 10);
+    let client = setup.client();
+    let ab = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    let ba = client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
+    assert_eq!(client.queued_count(), 2);
 
-    c.deposit(s.bank(0), &10);
+    client.deposit(setup.bank(0), &10);
 
-    assert_eq!(c.payment(&ab).unwrap().status, Status::Settled);
-    assert_eq!(c.payment(&ba).unwrap().status, Status::Settled);
-    assert_eq!(s.balances(), std::vec![0, 10, 0]);
-    s.assert_conserved();
+    assert_eq!(client.payment(&ab).unwrap().status, Status::Settled);
+    assert_eq!(client.payment(&ba).unwrap().status, Status::Settled);
+    assert_eq!(setup.balances(), std::vec![0, 10, 0]);
+    setup.assert_conserved();
 }
 
 /// SC-A03-07. Sums at the `i128` limit: B's two `i128::MAX` sum past `i128` without a
@@ -151,17 +151,17 @@ fn a_deposit_can_make_an_offset_feasible() {
 /// the feasible offset settles (R4, F1).
 #[test]
 fn at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_negative() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let b1 = c.submit(s.bank(1), s.bank(0), &i128::MAX, &N);
-    let b2 = c.submit(s.bank(1), s.bank(0), &i128::MAX, &N);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let b1 = client.submit(setup.bank(1), setup.bank(0), &i128::MAX, &NORMAL);
+    let b2 = client.submit(setup.bank(1), setup.bank(0), &i128::MAX, &NORMAL);
 
-    let a1 = c.submit(s.bank(0), s.bank(1), &i128::MAX, &N);
+    let a1 = client.submit(setup.bank(0), setup.bank(1), &i128::MAX, &NORMAL);
 
-    assert_eq!(c.payment(&a1).unwrap().status, Status::Settled);
-    assert_eq!(c.payment(&b1).unwrap().status, Status::Settled);
-    assert_eq!(c.payment(&b2).unwrap().status, Status::Queued);
-    assert_eq!(s.balances(), std::vec![0, 0]);
+    assert_eq!(client.payment(&a1).unwrap().status, Status::Settled);
+    assert_eq!(client.payment(&b1).unwrap().status, Status::Settled);
+    assert_eq!(client.payment(&b2).unwrap().status, Status::Queued);
+    assert_eq!(setup.balances(), std::vec![0, 0]);
 }
 
 /// SC-A03-08. S23 after the offset (R5, strict FIFO): no head left is covered and no
@@ -169,18 +169,18 @@ fn at_the_i128_limit_the_offset_cuts_back_the_prefix_that_would_leave_a_bank_neg
 /// nothing.
 #[test]
 fn after_an_offset_the_queues_are_at_rest() {
-    let s = Setup::new(3, 0);
-    let c = s.client();
-    c.submit(s.bank(0), s.bank(1), &50, &N);
-    c.submit(s.bank(0), s.bank(2), &70, &N);
-    c.submit(s.bank(1), s.bank(0), &50, &N);
-    assert_eq!(s.queue(0, N), std::vec![1]);
+    let setup = Setup::new(3, 0);
+    let client = setup.client();
+    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    client.submit(setup.bank(0), setup.bank(2), &70, &NORMAL);
+    client.submit(setup.bank(1), setup.bank(0), &50, &NORMAL);
+    assert_eq!(setup.queue(0, NORMAL), std::vec![1]);
 
-    c.submit(s.bank(2), s.bank(1), &5, &N);
+    client.submit(setup.bank(2), setup.bank(1), &5, &NORMAL);
 
-    assert_eq!(s.queue(0, N), std::vec![1]);
-    assert_eq!(s.queue(2, N), std::vec![3]);
-    s.assert_conserved();
+    assert_eq!(setup.queue(0, NORMAL), std::vec![1]);
+    assert_eq!(setup.queue(2, NORMAL), std::vec![3]);
+    setup.assert_conserved();
 }
 
 /// SC-A03-11. F1 is decided exactly, even where the sums exceed `i128` (ADR-0010). A
@@ -190,21 +190,21 @@ fn after_an_offset_the_queues_are_at_rest() {
 /// infeasible would find no feasible prefix and leave them gridlocked (S23).
 #[test]
 fn an_offset_whose_sums_exceed_i128_still_settles() {
-    let s = Setup::funded(&[1, 0]);
-    let c = s.client();
-    let h = i128::MAX / 2 + 1;
-    let a1 = c.submit(s.bank(0), s.bank(1), &h, &N);
-    let a2 = c.submit(s.bank(0), s.bank(1), &h, &N);
-    assert_eq!(c.queued_count(), 2);
+    let setup = Setup::funded(&[1, 0]);
+    let client = setup.client();
+    let over_half = i128::MAX / 2 + 1;
+    let a1 = client.submit(setup.bank(0), setup.bank(1), &over_half, &NORMAL);
+    let a2 = client.submit(setup.bank(0), setup.bank(1), &over_half, &NORMAL);
+    assert_eq!(client.queued_count(), 2);
 
-    let b1 = c.submit(s.bank(1), s.bank(0), &i128::MAX, &N);
+    let b1 = client.submit(setup.bank(1), setup.bank(0), &i128::MAX, &NORMAL);
 
     for id in [a1, a2, b1] {
-        assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
+        assert_eq!(client.payment(&id).unwrap().status, Status::Settled);
     }
-    assert_eq!(c.queued_count(), 0);
-    assert_eq!(s.balances(), std::vec![0, 1]);
-    s.assert_conserved();
+    assert_eq!(client.queued_count(), 0);
+    assert_eq!(setup.balances(), std::vec![0, 1]);
+    setup.assert_conserved();
 }
 
 /// SC-A03-12. The offset books each bank's net change exactly (A3, S1, S2; ADR-0010).
@@ -214,20 +214,20 @@ fn an_offset_whose_sums_exceed_i128_still_settles() {
 /// and every balance ends at 0.
 #[test]
 fn an_offset_books_each_banks_net_change_exactly() {
-    let s = Setup::new(3, 0);
-    let c = s.client();
+    let setup = Setup::new(3, 0);
+    let client = setup.client();
     let max = i128::MAX;
-    let ab = c.submit(s.bank(0), s.bank(1), &max, &N);
-    let ac = c.submit(s.bank(0), s.bank(2), &max, &N);
-    let ca = c.submit(s.bank(2), s.bank(0), &max, &N);
-    assert_eq!(c.queued_count(), 3);
+    let ab = client.submit(setup.bank(0), setup.bank(1), &max, &NORMAL);
+    let ac = client.submit(setup.bank(0), setup.bank(2), &max, &NORMAL);
+    let ca = client.submit(setup.bank(2), setup.bank(0), &max, &NORMAL);
+    assert_eq!(client.queued_count(), 3);
 
-    let ba = c.submit(s.bank(1), s.bank(0), &max, &N);
+    let ba = client.submit(setup.bank(1), setup.bank(0), &max, &NORMAL);
 
     for id in [ca, ab, ac, ba] {
-        assert_eq!(c.payment(&id).unwrap().status, Status::Settled);
+        assert_eq!(client.payment(&id).unwrap().status, Status::Settled);
     }
-    assert_eq!(c.queued_count(), 0);
-    assert_eq!(s.balances(), std::vec![0, 0, 0]);
-    s.assert_conserved();
+    assert_eq!(client.queued_count(), 0);
+    assert_eq!(setup.balances(), std::vec![0, 0, 0]);
+    setup.assert_conserved();
 }

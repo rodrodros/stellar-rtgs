@@ -7,42 +7,51 @@ use proptest::test_runner::{Config, RngSeed};
 /// The settings `make test` runs with: a pinned seed and `cases` cases. To explore
 /// further, set `PROPTEST_RNG_SEED` and `PROPTEST_CASES`, which win over these.
 pub fn config(cases: u32) -> Config {
-    let mut c = Config::default();
+    let mut settings = Config::default();
     if std::env::var_os("PROPTEST_CASES").is_none() {
-        c.cases = cases;
+        settings.cases = cases;
     }
     if std::env::var_os("PROPTEST_RNG_SEED").is_none() {
-        c.rng_seed = RngSeed::Fixed(0x5e771e);
+        settings.rng_seed = RngSeed::Fixed(0x5e771e);
     }
     // A pinned seed reproduces any failure, so there is nothing to persist.
-    c.failure_persistence = None;
-    c
+    settings.failure_persistence = None;
+    settings
 }
 
 /// Spec O's greatest feasible prefix k* by R4's descent (§4.5): start from every whole
 /// queue and, while some account would end negative, drop that account's last candidate.
 /// `queues[a]` holds `(to, amount)` in `≺` order, and balances are non-negative.
 pub fn greatest_feasible_prefix(balances: &[i128], queues: &[Vec<(usize, i128)>]) -> Vec<usize> {
-    let mut k: Vec<usize> = queues.iter().map(Vec::len).collect();
-    // An account that sends nothing is never in violation, so a violator has k[a] > 0.
-    while let Some(a) = (0..balances.len()).find(|a| !covered(balances, queues, &k, *a)) {
-        k[a] -= 1;
+    let mut prefix: Vec<usize> = queues.iter().map(Vec::len).collect();
+    // An account that sends nothing is never in violation, so a violator has prefix[account] > 0.
+    while let Some(account) =
+        (0..balances.len()).find(|account| !covered(balances, queues, &prefix, *account))
+    {
+        prefix[account] -= 1;
     }
-    k
+    prefix
 }
 
-/// F1 for account `a` with `lim` = 0: its outflow is at most its balance plus its inflow,
+/// F1 for `account` with `lim` = 0: its outflow is at most its balance plus its inflow,
 /// over the integers (§4.5). Queued sums can exceed `i128` (SC-A01-07), so this is
 /// decided exactly, never by an overflow.
-fn covered(balances: &[i128], queues: &[Vec<(usize, i128)>], k: &[usize], a: usize) -> bool {
-    let outflow = queues[a][..k[a]].iter().map(|(_, amount)| *amount);
+fn covered(
+    balances: &[i128],
+    queues: &[Vec<(usize, i128)>],
+    prefix: &[usize],
+    account: usize,
+) -> bool {
+    let outflow = queues[account][..prefix[account]]
+        .iter()
+        .map(|(_, amount)| *amount);
     let inflow = queues
         .iter()
         .enumerate()
-        .flat_map(|(p, q)| &q[..k[p]])
-        .filter(|(to, _)| *to == a)
+        .flat_map(|(sender, queue)| &queue[..prefix[sender]])
+        .filter(|(to, _)| *to == account)
         .map(|(_, amount)| *amount);
-    net_is_non_negative(balances[a], inflow, outflow)
+    net_is_non_negative(balances[account], inflow, outflow)
 }
 
 /// Whether `balance + Σ inflow − Σ outflow ≥ 0`, decided exactly. The sums can exceed
@@ -54,13 +63,13 @@ fn net_is_non_negative(
 ) -> bool {
     const HALF: i128 = 1 << 64;
     let (mut hi, mut lo) = (balance.div_euclid(HALF), balance.rem_euclid(HALF));
-    for a in inflow {
-        hi += a.div_euclid(HALF);
-        lo += a.rem_euclid(HALF);
+    for amount in inflow {
+        hi += amount.div_euclid(HALF);
+        lo += amount.rem_euclid(HALF);
     }
-    for a in outflow {
-        hi -= a.div_euclid(HALF);
-        lo -= a.rem_euclid(HALF);
+    for amount in outflow {
+        hi -= amount.div_euclid(HALF);
+        lo -= amount.rem_euclid(HALF);
     }
     // The net is `hi · 2^64 + lo`; with `lo` carried into [0, 2^64), its sign is `hi`'s.
     hi + lo.div_euclid(HALF) >= 0
@@ -68,13 +77,13 @@ fn net_is_non_negative(
 
 /// Every prefix vector of `queues`, from all zeros to every whole queue.
 fn all_prefixes(queues: &[Vec<(usize, i128)>]) -> Vec<Vec<usize>> {
-    queues.iter().fold(std::vec![Vec::new()], |acc, q| {
+    queues.iter().fold(std::vec![Vec::new()], |acc, queue| {
         acc.iter()
-            .flat_map(|p| {
-                (0..=q.len()).map(move |n| {
-                    let mut p = p.clone();
-                    p.push(n);
-                    p
+            .flat_map(|prefix| {
+                (0..=queue.len()).map(move |n| {
+                    let mut extended = prefix.clone();
+                    extended.push(n);
+                    extended
                 })
             })
             .collect()
@@ -102,9 +111,12 @@ mod checks {
                     let queues = raw
                         .into_iter()
                         .enumerate()
-                        .map(|(a, q)| {
-                            q.into_iter()
-                                .map(|(to, amount)| (if to >= a { to + 1 } else { to }, amount))
+                        .map(|(sender, queue)| {
+                            queue
+                                .into_iter()
+                                .map(|(to, amount)| {
+                                    (if to >= sender { to + 1 } else { to }, amount)
+                                })
                                 .collect()
                         })
                         .collect();
@@ -113,8 +125,8 @@ mod checks {
         })
     }
 
-    fn feasible(balances: &[i128], queues: &[Vec<(usize, i128)>], k: &[usize]) -> bool {
-        (0..balances.len()).all(|a| covered(balances, queues, k, a))
+    fn feasible(balances: &[i128], queues: &[Vec<(usize, i128)>], prefix: &[usize]) -> bool {
+        (0..balances.len()).all(|account| covered(balances, queues, prefix, account))
     }
 
     proptest! {
@@ -124,16 +136,16 @@ mod checks {
         /// (ADR-0010).
         #[test]
         fn the_reference_descent_is_the_greatest_feasible_prefix((balances, queues) in instance()) {
-            let k = greatest_feasible_prefix(&balances, &queues);
+            let descent = greatest_feasible_prefix(&balances, &queues);
             let feasible: Vec<Vec<usize>> = all_prefixes(&queues)
                 .into_iter()
-                .filter(|p| feasible(&balances, &queues, p))
+                .filter(|prefix| feasible(&balances, &queues, prefix))
                 .collect();
             let join: Vec<usize> = (0..balances.len())
-                .map(|a| feasible.iter().map(|p| p[a]).max().unwrap_or(0))
+                .map(|account| feasible.iter().map(|prefix| prefix[account]).max().unwrap_or(0))
                 .collect();
             prop_assert!(feasible.contains(&join), "R4: the join {:?} is infeasible", join);
-            prop_assert_eq!(k, join);
+            prop_assert_eq!(descent, join);
         }
     }
 
@@ -151,14 +163,14 @@ mod checks {
         ];
         assert_eq!(greatest_feasible_prefix(&[0, 0, 4], &chain), [0, 0, 0]);
         // SC-A03-11: sums beyond `i128` are decided exactly.
-        let (max, h) = (i128::MAX, i128::MAX / 2 + 1);
+        let (max, half) = (i128::MAX, i128::MAX / 2 + 1);
         let edge = [
             std::vec![(1, max), (2, max)],
             std::vec![(0, max)],
             std::vec![(0, max)],
         ];
         assert_eq!(greatest_feasible_prefix(&[0, 0, 0], &edge), [2, 1, 1]);
-        let halves = [std::vec![(1, h), (1, h)], std::vec![(0, max)]];
+        let halves = [std::vec![(1, half), (1, half)], std::vec![(0, max)]];
         assert_eq!(greatest_feasible_prefix(&[1, 0], &halves), [2, 1]);
     }
 }

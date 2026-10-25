@@ -104,25 +104,25 @@ fn status(name: &str) -> Status {
 }
 
 /// Maps a client `try_` result to the model's encoding: the success value, or the error name.
-fn outcome<T, C, I>(r: Result<Result<T, C>, Result<crate::Error, I>>) -> Result<i128, String>
+fn outcome<T, C, I>(result: Result<Result<T, C>, Result<crate::Error, I>>) -> Result<i128, String>
 where
     T: Into<i128>,
     C: core::fmt::Debug,
     I: core::fmt::Debug,
 {
-    match r {
-        Ok(Ok(v)) => Ok(v.into()),
-        Err(Ok(e)) => Err(format!("{e:?}")),
+    match result {
+        Ok(Ok(value)) => Ok(value.into()),
+        Err(Ok(err)) => Err(format!("{err:?}")),
         other => panic!(
             "untyped outcome: {:?}",
-            other.map(|_| ()).map_err(|e| e.map(|_| ()))
+            other.map(|_| ()).map_err(|err| err.map(|_| ()))
         ),
     }
 }
 
 /// The first topic of an event, which `#[contractevent]` sets to the event's name.
-fn event_name(e: &xdr::ContractEvent) -> StdVec<u8> {
-    let ContractEventBody::V0(body) = &e.body;
+fn event_name(event: &xdr::ContractEvent) -> StdVec<u8> {
+    let ContractEventBody::V0(body) = &event.body;
     match body.topics.first() {
         Some(ScVal::Symbol(name)) => name.as_vec().clone(),
         _ => StdVec::new(),
@@ -146,64 +146,64 @@ fn match_settlement_events<E: PartialEq + core::fmt::Debug>(
 ) -> Result<(), String> {
     let mut pool: StdVec<&E> = offsets
         .iter()
-        .flat_map(|(o, settled)| core::iter::once(o).chain(settled))
+        .flat_map(|(offset, settled)| core::iter::once(offset).chain(settled))
         .chain(gross)
         .collect();
-    for e in actual {
+    for event in actual {
         let i = pool
             .iter()
-            .position(|x| *x == e)
-            .ok_or_else(|| format!("unexpected event {e:?}"))?;
+            .position(|x| *x == event)
+            .ok_or_else(|| format!("unexpected event {event:?}"))?;
         pool.swap_remove(i);
     }
     if !pool.is_empty() {
         return Err(format!("missing events {pool:?}"));
     }
-    let at = |e: &E| actual.iter().position(|x| x == e).unwrap();
+    let at = |event: &E| actual.iter().position(|x| x == event).unwrap();
     let mut last = None;
-    for (o, settled) in offsets {
-        let here = at(o);
-        if last.is_some_and(|l| here < l) {
-            return Err(format!("offset {o:?} out of order"));
+    for (offset, settled) in offsets {
+        let here = at(offset);
+        if last.is_some_and(|previous| here < previous) {
+            return Err(format!("offset {offset:?} out of order"));
         }
         last = Some(here);
-        if let Some(early) = settled.iter().find(|e| at(e) < here) {
-            return Err(format!("{early:?} comes before its offset {o:?}"));
+        if let Some(early) = settled.iter().find(|event| at(event) < here) {
+            return Err(format!("{early:?} comes before its offset {offset:?}"));
         }
     }
     Ok(())
 }
 
 struct Replay {
-    s: Setup,
+    setup: Setup,
     addr: BTreeMap<String, Address>,
 }
 
 impl Replay {
-    fn a(&self, name: &Option<String>) -> &Address {
+    fn address(&self, name: &Option<String>) -> &Address {
         &self.addr[name.as_ref().expect("pick present")]
     }
 
-    fn payment(&self, p: &ModelPayment) -> Payment {
+    fn payment(&self, model: &ModelPayment) -> Payment {
         Payment {
-            id: p.id,
-            from: self.addr[&p.payer].clone(),
-            to: self.addr[&p.payee].clone(),
-            amount: p.amount,
-            priority: priority(&p.priority),
-            submitted_at: p.submitted_at,
-            status: status(&p.status),
-            settled_at: u64::try_from(p.settled_at).ok(),
+            id: model.id,
+            from: self.addr[&model.payer].clone(),
+            to: self.addr[&model.payee].clone(),
+            amount: model.amount,
+            priority: priority(&model.priority),
+            submitted_at: model.submitted_at,
+            status: status(&model.status),
+            settled_at: u64::try_from(model.settled_at).ok(),
         }
     }
 
-    fn settled_event(&self, v: &State, id: u64) -> xdr::ContractEvent {
-        let p = &v.payments[&id];
-        self.s.ev(Settled {
+    fn settled_event(&self, state: &State, id: u64) -> xdr::ContractEvent {
+        let payment = &state.payments[&id];
+        self.setup.ev(Settled {
             id,
-            from: self.addr[&p.payer].clone(),
-            to: self.addr[&p.payee].clone(),
-            amount: p.amount,
+            from: self.addr[&payment.payer].clone(),
+            to: self.addr[&payment.payee].clone(),
+            amount: payment.amount,
         })
     }
 
@@ -212,72 +212,91 @@ impl Replay {
     #[allow(clippy::type_complexity)]
     fn expected_events(
         &self,
-        v: &State,
+        state: &State,
     ) -> (
         StdVec<(xdr::ContractEvent, StdVec<xdr::ContractEvent>)>,
         StdVec<xdr::ContractEvent>,
     ) {
-        let offsets = v
+        let offsets = state
             .offsets_now
             .iter()
             .map(|ids| {
-                let mut list = vec![&self.s.env];
+                let mut list = vec![&self.setup.env];
                 ids.iter().for_each(|i| list.push_back(*i));
-                let settled = ids.iter().map(|i| self.settled_event(v, *i)).collect();
-                (self.s.ev(Offset { ids: list }), settled)
+                let settled = ids.iter().map(|i| self.settled_event(state, *i)).collect();
+                (self.setup.ev(Offset { ids: list }), settled)
             })
             .collect();
-        let gross = v
+        let gross = state
             .settled_now
             .iter()
-            .filter(|i| !v.offsets_now.iter().any(|ids| ids.contains(i)))
-            .map(|i| self.settled_event(v, *i))
+            .filter(|i| !state.offsets_now.iter().any(|ids| ids.contains(i)))
+            .map(|i| self.settled_event(state, *i))
             .collect();
         (offsets, gross)
     }
 
     /// The contract's `Offset` and `Settled` events from the last call (C-HB-132).
     fn settlement_events(&self) -> StdVec<xdr::ContractEvent> {
-        self.s
+        self.setup
             .our_events()
             .into_iter()
-            .filter(|e| matches!(event_name(e).as_slice(), b"settled" | b"offset"))
+            .filter(|event| matches!(event_name(event).as_slice(), b"settled" | b"offset"))
             .collect()
     }
 
-    fn check(&self, v: &State, at: &str) {
-        let c = self.s.client();
-        let token = self.s.token();
-        for (name, a) in &self.addr {
-            assert_eq!(c.balance(a), v.balances[name], "{at}: balance of {name}");
+    fn check(&self, state: &State, at: &str) {
+        let client = self.setup.client();
+        let token = self.setup.token();
+        for (name, address) in &self.addr {
             assert_eq!(
-                token.balance(a),
-                v.reserve[name],
+                client.balance(address),
+                state.balances[name],
+                "{at}: balance of {name}"
+            );
+            assert_eq!(
+                token.balance(address),
+                state.reserve[name],
                 "{at}: cash held by {name}"
             );
-            for p in ["Urgent", "Normal"] {
-                let model: StdVec<u64> = v
+            for priority_name in ["Urgent", "Normal"] {
+                let model: StdVec<u64> = state
                     .payments
                     .values()
-                    .filter(|m| m.status == "Queued" && m.payer == *name && m.priority == p)
-                    .map(|m| m.id)
+                    .filter(|payment| {
+                        payment.status == "Queued"
+                            && payment.payer == *name
+                            && payment.priority == priority_name
+                    })
+                    .map(|payment| payment.id)
                     .collect();
-                let got: StdVec<u64> = c.queue(a, &priority(p)).iter().collect();
-                assert_eq!(got, model, "{at}: {p} queue of {name}");
+                let got: StdVec<u64> = client
+                    .queue(address, &priority(priority_name))
+                    .iter()
+                    .collect();
+                assert_eq!(got, model, "{at}: {priority_name} queue of {name}");
             }
         }
-        self.s.assert_conserved();
-        let queued = v.payments.values().filter(|m| m.status == "Queued").count();
-        assert_eq!(c.queued_count() as usize, queued, "{at}: queued count");
-        for p in v.payments.values() {
+        self.setup.assert_conserved();
+        let queued = state
+            .payments
+            .values()
+            .filter(|payment| payment.status == "Queued")
+            .count();
+        assert_eq!(client.queued_count() as usize, queued, "{at}: queued count");
+        for payment in state.payments.values() {
             assert_eq!(
-                c.payment(&p.id),
-                Some(self.payment(p)),
+                client.payment(&payment.id),
+                Some(self.payment(payment)),
                 "{at}: payment {}",
-                p.id
+                payment.id
             );
         }
-        assert_eq!(c.payment(&v.next_id), None, "{at}: next id is unused");
+        assert_eq!(
+            client.payment(&state.next_id),
+            None,
+            "{at}: next id is unused"
+        );
     }
 }
 
@@ -287,79 +306,89 @@ fn replay(path: &std::path::Path) -> usize {
     let init = &trace.states[0].value;
     assert_eq!(init.action_taken, "init");
     let funding = *init.reserve.values().next().unwrap();
-    assert!(init.reserve.values().all(|r| *r == funding));
-    let s = Setup::with_config(init.reserve.len(), funding, model_config());
+    assert!(init.reserve.values().all(|reserve| *reserve == funding));
+    let setup = Setup::with_config(init.reserve.len(), funding, model_config());
     // BTreeMap order is alphabetical, so the mapping from names to banks is stable.
     let addr = init
         .reserve
         .keys()
         .cloned()
-        .zip(s.banks.iter().cloned())
+        .zip(setup.banks.iter().cloned())
         .collect();
-    let r = Replay { s, addr };
+    let replay = Replay { setup, addr };
     let file = path.file_name().unwrap().to_string_lossy();
-    r.s.at(init.now);
-    r.check(init, &format!("{file} state 0"));
+    replay.setup.at(init.now);
+    replay.check(init, &format!("{file} state 0"));
 
     for (i, state) in trace.states.iter().enumerate().skip(1) {
-        let v = &state.value;
-        let picks = &v.nondet_picks;
-        let at = format!("{file} state {i} ({} {picks:?})", v.action_taken);
-        let c = r.s.client();
-        let got = match v.action_taken.as_str() {
+        let model = &state.value;
+        let picks = &model.nondet_picks;
+        let at = format!("{file} state {i} ({} {picks:?})", model.action_taken);
+        let client = replay.setup.client();
+        let got = match model.action_taken.as_str() {
             "depositStep" | "depositLargeStep" => outcome(
-                c.try_deposit(r.a(&picks.bank), &picks.amount.unwrap())
+                client
+                    .try_deposit(replay.address(&picks.bank), &picks.amount.unwrap())
                     .map(|ok| ok.map(|()| 0i128)),
             ),
             "withdrawStep" => outcome(
-                c.try_withdraw(r.a(&picks.bank), &picks.amount.unwrap())
+                client
+                    .try_withdraw(replay.address(&picks.bank), &picks.amount.unwrap())
                     .map(|ok| ok.map(|()| 0i128)),
             ),
             "submitStep" | "submitToSelfStep" => outcome(
-                c.try_submit(
-                    r.a(&picks.bank),
-                    r.a(&picks.payee),
-                    &picks.amount.unwrap(),
-                    &priority(picks.priority.as_ref().unwrap()),
-                )
-                .map(|ok| ok.map(i128::from)),
+                client
+                    .try_submit(
+                        replay.address(&picks.bank),
+                        replay.address(&picks.payee),
+                        &picks.amount.unwrap(),
+                        &priority(picks.priority.as_ref().unwrap()),
+                    )
+                    .map(|ok| ok.map(i128::from)),
             ),
             "revokeStep" => outcome(
-                c.try_revoke(&picks.id.unwrap())
+                client
+                    .try_revoke(&picks.id.unwrap())
                     .map(|ok| ok.map(|()| 0i128)),
             ),
             "reprioritiseStep" => outcome(
-                c.try_reprioritise(
-                    &picks.id.unwrap(),
-                    &priority(picks.priority.as_ref().unwrap()),
-                )
-                .map(|ok| ok.map(|()| 0i128)),
+                client
+                    .try_reprioritise(
+                        &picks.id.unwrap(),
+                        &priority(picks.priority.as_ref().unwrap()),
+                    )
+                    .map(|ok| ok.map(|()| 0i128)),
             ),
             "expireStep" => outcome(
-                c.try_expire(&picks.id.unwrap())
+                client
+                    .try_expire(&picks.id.unwrap())
                     .map(|ok| ok.map(|()| 0i128)),
             ),
             // A19: no contract call, only the ledger's close time moves.
             "tickStep" => {
-                assert_eq!(r.s.env.ledger().timestamp() + picks.dt.unwrap(), v.now);
-                r.s.at(v.now);
+                assert_eq!(
+                    replay.setup.env.ledger().timestamp() + picks.dt.unwrap(),
+                    model.now
+                );
+                replay.setup.at(model.now);
                 Ok(0)
             }
             other => panic!("{at}: unknown action {other}"),
         };
-        let expected = if v.last_error.is_empty() {
-            Ok(v.last_value)
+        let expected = if model.last_error.is_empty() {
+            Ok(model.last_value)
         } else {
-            Err(v.last_error.clone())
+            Err(model.last_error.clone())
         };
         assert_eq!(got, expected, "{at}: outcome");
-        if v.action_taken != "tickStep" {
-            let (offsets, gross) = r.expected_events(v);
-            if let Err(e) = match_settlement_events(&r.settlement_events(), &offsets, &gross) {
-                panic!("{at}: Offset and Settled events: {e}");
+        if model.action_taken != "tickStep" {
+            let (offsets, gross) = replay.expected_events(model);
+            if let Err(err) = match_settlement_events(&replay.settlement_events(), &offsets, &gross)
+            {
+                panic!("{at}: Offset and Settled events: {err}");
             }
         }
-        r.check(v, &at);
+        replay.check(model, &at);
     }
     trace.states.len() - 1
 }
@@ -374,15 +403,15 @@ fn replay(path: &std::path::Path) -> usize {
 #[test]
 fn quint_traces_replay_against_the_contract() {
     let files = trace_files();
-    let steps: usize = files.iter().map(|p| replay(p)).sum();
+    let steps: usize = files.iter().map(|path| replay(path)).sum();
     std::println!("replayed {} traces, {steps} steps", files.len());
 }
 
 fn trace_files() -> StdVec<std::path::PathBuf> {
     let mut files: StdVec<_> = std::fs::read_dir(TRACES)
         .expect("trace directory exists")
-        .map(|e| e.unwrap().path())
-        .filter(|p| p.to_string_lossy().ends_with(".itf.json"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".itf.json"))
         .collect();
     files.sort();
     assert!(!files.is_empty(), "no traces in {TRACES}");
@@ -416,54 +445,59 @@ const ACTIONS: [&str; 10] = [
 #[test]
 fn quint_traces_decode_and_cover_the_paths_the_replay_checks() {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    let mut hit = |k: &str| *seen.entry(String::from(k)).or_default() += 1;
+    let mut hit = |key: &str| *seen.entry(String::from(key)).or_default() += 1;
     let (mut submits, mut to_self) = (0, 0);
     for path in trace_files() {
         let data = std::fs::read_to_string(&path).unwrap();
         let trace: itf::Trace<State> = itf::trace_from_str(&data).unwrap();
         for state in &trace.states {
-            let v = &state.value;
+            let model = &state.value;
             assert!(
-                ACTIONS.contains(&v.action_taken.as_str()),
+                ACTIONS.contains(&model.action_taken.as_str()),
                 "{path:?}: {}",
-                v.action_taken
+                model.action_taken
             );
-            for ids in &v.offsets_now {
+            for ids in &model.offsets_now {
                 assert!(ids.len() >= 2, "{path:?}: offset {ids:?}");
-                assert!(ids.windows(2).all(|w| w[0] < w[1]), "{path:?}: {ids:?}");
                 assert!(
-                    ids.iter().all(|i| v.settled_now.contains(i)),
+                    ids.windows(2).all(|pair| pair[0] < pair[1]),
+                    "{path:?}: {ids:?}"
+                );
+                assert!(
+                    ids.iter().all(|i| model.settled_now.contains(i)),
                     "{path:?}: {ids:?}"
                 );
                 hit("offset");
             }
-            for id in &v.settled_now {
-                assert_eq!(v.payments[id].status, "Settled");
+            for id in &model.settled_now {
+                assert_eq!(model.payments[id].status, "Settled");
             }
-            if !v.last_error.is_empty() {
-                hit(&v.last_error);
+            if !model.last_error.is_empty() {
+                hit(&model.last_error);
             }
-            if v.action_taken.starts_with("submit") {
+            if model.action_taken.starts_with("submit") {
                 submits += 1;
-                to_self += usize::from(v.last_error == "SameAccount");
+                to_self += usize::from(model.last_error == "SameAccount");
             }
-            let queued: StdVec<&ModelPayment> = v
+            let queued: StdVec<&ModelPayment> = model
                 .payments
                 .values()
-                .filter(|p| p.status == "Queued")
+                .filter(|payment| payment.status == "Queued")
                 .collect();
             if queued.len() >= 4 {
                 hit("deep queue");
             }
-            if v.settled_now.len() >= 3 {
+            if model.settled_now.len() >= 3 {
                 hit("cascade");
             }
-            if v.payments.values().any(|u| {
-                u.status == "Settled"
-                    && u.priority == "Urgent"
-                    && queued
-                        .iter()
-                        .any(|o| o.priority == "Normal" && o.payer == u.payer && o.id < u.id)
+            if model.payments.values().any(|urgent| {
+                urgent.status == "Settled"
+                    && urgent.priority == "Urgent"
+                    && queued.iter().any(|older| {
+                        older.priority == "Normal"
+                            && older.payer == urgent.payer
+                            && older.id < urgent.id
+                    })
             }) {
                 hit("urgent overtook");
             }
@@ -499,7 +533,9 @@ fn quint_traces_decode_and_cover_the_paths_the_replay_checks() {
 fn settlement_events_match_as_a_set_with_each_offset_before_its_own_settlements() {
     let offsets = [('o', std::vec!['1', '2']), ('p', std::vec!['5', '6'])];
     let gross = ['3', '4'];
-    let ok = |a: &str| match_settlement_events(&a.chars().collect::<StdVec<_>>(), &offsets, &gross);
+    let ok = |events: &str| {
+        match_settlement_events(&events.chars().collect::<StdVec<_>>(), &offsets, &gross)
+    };
     assert_eq!(ok("o12p5634"), Ok(()));
     assert_eq!(
         ok("43o21p65"),

@@ -15,16 +15,16 @@ use super::{covers, greatest_feasible_prefix, Candidate};
 /// The settings `make test` runs with: a pinned seed and `cases` cases. To explore
 /// further, set `PROPTEST_RNG_SEED` and `PROPTEST_CASES`, which win over these.
 fn config(cases: u32) -> Config {
-    let mut c = Config::default();
+    let mut config = Config::default();
     if std::env::var_os("PROPTEST_CASES").is_none() {
-        c.cases = cases;
+        config.cases = cases;
     }
     if std::env::var_os("PROPTEST_RNG_SEED").is_none() {
-        c.rng_seed = RngSeed::Fixed(0x5e771e);
+        config.rng_seed = RngSeed::Fixed(0x5e771e);
     }
     // A pinned seed reproduces any failure, so there is nothing to persist.
-    c.failure_persistence = None;
-    c
+    config.failure_persistence = None;
+    config
 }
 
 /// An instance of the prefix rule: every account's balance and its candidates in `≺`
@@ -50,10 +50,11 @@ fn instance_with(amount: BoxedStrategy<i128>) -> impl Strategy<Value = Instance>
                 queues: raw
                     .into_iter()
                     .enumerate()
-                    .map(|(a, q)| {
-                        q.into_iter()
+                    .map(|(account, queue)| {
+                        queue
+                            .into_iter()
                             .map(|(offset, amount)| Candidate {
-                                to: (a + offset) % n,
+                                to: (account + offset) % n,
                                 amount,
                             })
                             .collect()
@@ -82,17 +83,19 @@ fn edgy() -> BoxedStrategy<i128> {
 /// F1 with `lim` = 0: every account ends non-negative when the first `k[a]` candidates
 /// of every account `a` settle, i.e. its outflow is at most its balance plus its inflow,
 /// over the integers.
-fn feasible(i: &Instance, k: &[usize]) -> bool {
-    (0..i.balances.len()).all(|a| {
-        let outflow = i.queues[a][..k[a]].iter().map(|c| c.amount);
-        let inflow = i
+fn feasible(instance: &Instance, prefix: &[usize]) -> bool {
+    (0..instance.balances.len()).all(|account| {
+        let outflow = instance.queues[account][..prefix[account]]
+            .iter()
+            .map(|candidate| candidate.amount);
+        let inflow = instance
             .queues
             .iter()
             .enumerate()
-            .flat_map(|(p, q)| &q[..k[p]])
-            .filter(|c| c.to == a)
-            .map(|c| c.amount);
-        net_is_non_negative(i.balances[a], inflow, outflow)
+            .flat_map(|(payer, queue)| &queue[..prefix[payer]])
+            .filter(|candidate| candidate.to == account)
+            .map(|candidate| candidate.amount);
+        net_is_non_negative(instance.balances[account], inflow, outflow)
     })
 }
 
@@ -105,13 +108,13 @@ fn net_is_non_negative(
 ) -> bool {
     const HALF: i128 = 1 << 64;
     let (mut hi, mut lo) = (balance.div_euclid(HALF), balance.rem_euclid(HALF));
-    for a in inflow {
-        hi += a.div_euclid(HALF);
-        lo += a.rem_euclid(HALF);
+    for amount in inflow {
+        hi += amount.div_euclid(HALF);
+        lo += amount.rem_euclid(HALF);
     }
-    for a in outflow {
-        hi -= a.div_euclid(HALF);
-        lo -= a.rem_euclid(HALF);
+    for amount in outflow {
+        hi -= amount.div_euclid(HALF);
+        lo -= amount.rem_euclid(HALF);
     }
     // The net is `hi · 2^64 + lo`; with `lo` carried into [0, 2^64), its sign is `hi`'s.
     hi + lo.div_euclid(HALF) >= 0
@@ -119,28 +122,28 @@ fn net_is_non_negative(
 
 /// The balances after the first `k[a]` candidates of every `a` settle. Only for small
 /// instances: it panics on overflow.
-fn end_balances(i: &Instance, k: &[usize]) -> Vec<i128> {
-    let mut b = i.balances.clone();
-    for (a, q) in i.queues.iter().enumerate() {
-        for c in &q[..k[a]] {
-            b[a] -= c.amount;
-            b[c.to] += c.amount;
+fn end_balances(instance: &Instance, prefix: &[usize]) -> Vec<i128> {
+    let mut balances = instance.balances.clone();
+    for (account, queue) in instance.queues.iter().enumerate() {
+        for candidate in &queue[..prefix[account]] {
+            balances[account] -= candidate.amount;
+            balances[candidate.to] += candidate.amount;
         }
     }
-    b
+    balances
 }
 
 /// Every prefix vector of the instance.
-fn all_prefixes(i: &Instance) -> Vec<Vec<usize>> {
+fn all_prefixes(instance: &Instance) -> Vec<Vec<usize>> {
     let mut all = alloc::vec![Vec::new()];
-    for q in &i.queues {
+    for queue in &instance.queues {
         all = all
             .into_iter()
-            .flat_map(|k| {
-                (0..=q.len()).map(move |len| {
-                    let mut k = k.clone();
-                    k.push(len);
-                    k
+            .flat_map(|prefix| {
+                (0..=queue.len()).map(move |len| {
+                    let mut prefix = prefix.clone();
+                    prefix.push(len);
+                    prefix
                 })
             })
             .collect();
@@ -148,43 +151,43 @@ fn all_prefixes(i: &Instance) -> Vec<Vec<usize>> {
     all
 }
 
-fn le(a: &[usize], b: &[usize]) -> bool {
-    a.iter().zip(b).all(|(x, y)| x <= y)
+fn le(left: &[usize], right: &[usize]) -> bool {
+    left.iter().zip(right).all(|(x, y)| x <= y)
 }
 
 /// Strict FIFO gross processing (A2 only): settle any account's covered head until none
 /// is covered. Its result is `k_seq` (§4.10, R6).
-fn gross_only(i: &Instance) -> Vec<usize> {
-    let mut balances = i.balances.clone();
-    let mut k = alloc::vec![0usize; balances.len()];
+fn gross_only(instance: &Instance) -> Vec<usize> {
+    let mut balances = instance.balances.clone();
+    let mut prefix = alloc::vec![0usize; balances.len()];
     loop {
         let mut progressed = false;
-        for (a, q) in i.queues.iter().enumerate() {
-            while let Some(c) = q.get(k[a]) {
-                if balances[a] < c.amount {
+        for (account, queue) in instance.queues.iter().enumerate() {
+            while let Some(candidate) = queue.get(prefix[account]) {
+                if balances[account] < candidate.amount {
                     break;
                 }
-                balances[a] -= c.amount;
-                balances[c.to] += c.amount;
-                k[a] += 1;
+                balances[account] -= candidate.amount;
+                balances[candidate.to] += candidate.amount;
+                prefix[account] += 1;
                 progressed = true;
             }
         }
         if !progressed {
-            return k;
+            return prefix;
         }
     }
 }
 
 /// The instance left after the first `k[a]` candidates of every `a` settle.
-fn after(i: &Instance, k: &[usize]) -> Instance {
+fn after(instance: &Instance, prefix: &[usize]) -> Instance {
     Instance {
-        balances: end_balances(i, k),
-        queues: i
+        balances: end_balances(instance, prefix),
+        queues: instance
             .queues
             .iter()
-            .zip(k)
-            .map(|(q, k)| q[*k..].to_vec())
+            .zip(prefix)
+            .map(|(queue, len)| queue[*len..].to_vec())
             .collect(),
     }
 }
@@ -199,13 +202,13 @@ proptest! {
     /// `amount` is `balance`, one more or one less, as often as it is random.
     #[test]
     fn covers_is_exactly_balance_at_least_amount(
-        (balance, amount) in any::<i128>().prop_flat_map(|b| {
+        (balance, amount) in any::<i128>().prop_flat_map(|balance| {
             let near = prop_oneof![
-                Just(b),
-                Just(b.saturating_add(1)),
-                Just(b.saturating_sub(1)),
+                Just(balance),
+                Just(balance.saturating_add(1)),
+                Just(balance.saturating_sub(1)),
             ];
-            (Just(b), prop_oneof![1 => near, 1 => any::<i128>()])
+            (Just(balance), prop_oneof![1 => near, 1 => any::<i128>()])
         })
     ) {
         prop_assert_eq!(covers(balance, amount), balance >= amount);
@@ -214,63 +217,68 @@ proptest! {
     /// R4, S10: k* has one entry per account and never exceeds an account's queue (§4.5,
     /// Spec O; ADR-0010).
     #[test]
-    fn the_prefix_is_within_every_queue(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        prop_assert_eq!(k.len(), i.balances.len());
-        for (a, q) in i.queues.iter().enumerate() {
-            prop_assert!(k[a] <= q.len(), "k[{}] = {} > {}", a, k[a], q.len());
+    fn the_prefix_is_within_every_queue(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        prop_assert_eq!(prefix.len(), instance.balances.len());
+        for (account, queue) in instance.queues.iter().enumerate() {
+            prop_assert!(
+                prefix[account] <= queue.len(),
+                "k[{}] = {} > {}", account, prefix[account], queue.len()
+            );
         }
     }
 
     /// The prefix the offset settles is feasible: F1 with `lim` = 0 (S10, S2; ADR-0010).
     #[test]
-    fn the_prefix_is_feasible(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        prop_assert!(feasible(&i, &k), "infeasible k = {:?}", k);
+    fn the_prefix_is_feasible(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        prop_assert!(feasible(&instance, &prefix), "infeasible k = {:?}", prefix);
     }
 
     /// R4: the feasible prefix vectors are closed under join, so a greatest one
     /// exists and is unique, and the rule returns it. Checked against every prefix vector
     /// (ADR-0010).
     #[test]
-    fn the_prefix_is_the_greatest_feasible_one(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        let feasible: Vec<Vec<usize>> =
-            all_prefixes(&i).into_iter().filter(|p| feasible(&i, p)).collect();
-        let join: Vec<usize> = (0..i.balances.len())
-            .map(|a| feasible.iter().map(|p| p[a]).max().unwrap_or(0))
+    fn the_prefix_is_the_greatest_feasible_one(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        let feasible: Vec<Vec<usize>> = all_prefixes(&instance)
+            .into_iter()
+            .filter(|vector| feasible(&instance, vector))
+            .collect();
+        let join: Vec<usize> = (0..instance.balances.len())
+            .map(|account| feasible.iter().map(|vector| vector[account]).max().unwrap_or(0))
             .collect();
         prop_assert!(feasible.contains(&join), "R4: the join {:?} is infeasible", join);
-        for p in &feasible {
-            prop_assert!(le(p, &k), "feasible {:?} is not below k* {:?}", p, k);
+        for vector in &feasible {
+            prop_assert!(le(vector, &prefix), "feasible {:?} is not below k* {:?}", vector, prefix);
         }
-        prop_assert_eq!(k, join);
+        prop_assert_eq!(prefix, join);
     }
 
     /// R4: k* is defined by the accounts, not their order. Relabelling the accounts
     /// relabels k* the same way (ADR-0010).
     #[test]
     fn the_prefix_does_not_depend_on_the_account_order(
-        (i, perm) in instance_with(small()).prop_flat_map(|i| {
-            let n = i.balances.len();
-            (Just(i), Just((0..n).collect::<Vec<usize>>()).prop_shuffle())
+        (instance, perm) in instance_with(small()).prop_flat_map(|instance| {
+            let n = instance.balances.len();
+            (Just(instance), Just((0..n).collect::<Vec<usize>>()).prop_shuffle())
         })
     ) {
         // Account `a` becomes account `perm[a]`.
-        let n = i.balances.len();
+        let n = instance.balances.len();
         let mut balances = alloc::vec![0; n];
         let mut queues = alloc::vec![Vec::new(); n];
-        for a in 0..n {
-            balances[perm[a]] = i.balances[a];
-            queues[perm[a]] = i.queues[a]
+        for account in 0..n {
+            balances[perm[account]] = instance.balances[account];
+            queues[perm[account]] = instance.queues[account]
                 .iter()
-                .map(|c| Candidate { to: perm[c.to], amount: c.amount })
+                .map(|candidate| Candidate { to: perm[candidate.to], amount: candidate.amount })
                 .collect();
         }
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
         let relabelled = greatest_feasible_prefix(&balances, &queues);
-        for a in 0..n {
-            prop_assert_eq!(relabelled[perm[a]], k[a], "account {}", a);
+        for account in 0..n {
+            prop_assert_eq!(relabelled[perm[account]], prefix[account], "account {}", account);
         }
     }
 
@@ -278,33 +286,33 @@ proptest! {
     /// great in every account (ADR-0010).
     #[test]
     fn more_liquidity_never_shrinks_the_prefix(
-        i in instance_with(small()),
+        instance in instance_with(small()),
         who in any::<prop::sample::Index>(),
         extra in 0i128..=60,
     ) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        let mut richer = i.clone();
-        richer.balances[who.index(i.balances.len())] += extra;
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        let mut richer = instance.clone();
+        richer.balances[who.index(instance.balances.len())] += extra;
         let k2 = greatest_feasible_prefix(&richer.balances, &richer.queues);
-        prop_assert!(le(&k, &k2), "{:?} then {:?}", k, k2);
+        prop_assert!(le(&prefix, &k2), "{:?} then {:?}", prefix, k2);
     }
 
     /// R6: strict FIFO gross processing alone stops at `k_seq ≤ k*`, so the offset never
     /// settles less than gross processing would (R7 shows it can settle more; ADR-0010).
     #[test]
-    fn gross_processing_never_beats_the_offset(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        let k_seq = gross_only(&i);
-        prop_assert!(le(&k_seq, &k), "k_seq {:?} > k* {:?}", k_seq, k);
+    fn gross_processing_never_beats_the_offset(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        let k_seq = gross_only(&instance);
+        prop_assert!(le(&k_seq, &prefix), "k_seq {:?} > k* {:?}", k_seq, prefix);
     }
 
     /// R5 and S23: after the offset of k*, the greatest feasible prefix of what is left
     /// is zero, so the queues are at rest until something external happens (ADR-0010).
     #[test]
-    fn after_the_offset_nothing_more_is_feasible(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        prop_assume!(feasible(&i, &k));
-        let rest = after(&i, &k);
+    fn after_the_offset_nothing_more_is_feasible(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        prop_assume!(feasible(&instance, &prefix));
+        let rest = after(&instance, &prefix);
         let k2 = greatest_feasible_prefix(&rest.balances, &rest.queues);
         prop_assert!(k2.iter().all(|x| *x == 0), "R5: k* of the rest is {:?}", k2);
     }
@@ -313,19 +321,19 @@ proptest! {
     /// payment it could receive is zero, so nothing behind that candidate overtakes it
     /// (S7, ADR-0008).
     #[test]
-    fn a_candidate_no_inflow_can_cover_blocks_its_queue(i in instance_with(small())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        for (a, q) in i.queues.iter().enumerate() {
-            let Some(head) = q.first() else { continue };
-            let max_in: i128 = i
+    fn a_candidate_no_inflow_can_cover_blocks_its_queue(instance in instance_with(small())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        for (account, queue) in instance.queues.iter().enumerate() {
+            let Some(head) = queue.first() else { continue };
+            let max_in: i128 = instance
                 .queues
                 .iter()
                 .flatten()
-                .filter(|c| c.to == a)
-                .map(|c| c.amount)
+                .filter(|candidate| candidate.to == account)
+                .map(|candidate| candidate.amount)
                 .sum();
-            if head.amount > i.balances[a] + max_in {
-                prop_assert_eq!(k[a], 0, "account {} overtook its head", a);
+            if head.amount > instance.balances[account] + max_in {
+                prop_assert_eq!(prefix[account], 0, "account {} overtook its head", account);
             }
         }
     }
@@ -334,11 +342,11 @@ proptest! {
     /// sums exceed `i128`, and returns the greatest feasible prefix (S2, S10, R4;
     /// ADR-0010).
     #[test]
-    fn sums_beyond_i128_are_decided_exactly_not_a_panic(i in instance_with(edgy())) {
-        let k = greatest_feasible_prefix(&i.balances, &i.queues);
-        prop_assert!(feasible(&i, &k), "infeasible k = {:?}", k);
-        for p in all_prefixes(&i).iter().filter(|p| feasible(&i, p)) {
-            prop_assert!(le(p, &k), "feasible {:?} is not below k* {:?}", p, k);
+    fn sums_beyond_i128_are_decided_exactly_not_a_panic(instance in instance_with(edgy())) {
+        let prefix = greatest_feasible_prefix(&instance.balances, &instance.queues);
+        prop_assert!(feasible(&instance, &prefix), "infeasible k = {:?}", prefix);
+        for vector in all_prefixes(&instance).iter().filter(|vector| feasible(&instance, vector)) {
+            prop_assert!(le(vector, &prefix), "feasible {:?} is not below k* {:?}", vector, prefix);
         }
     }
 }
@@ -351,14 +359,17 @@ proptest! {
 /// (1, 0, 1), which breaks R5; it would settle nothing at all in the second.
 #[test]
 fn at_the_i128_limit_sums_are_decided_exactly() {
-    let c = |to, amount| Candidate { to, amount };
-    let (max, h) = (i128::MAX, i128::MAX / 2 + 1);
+    let candidate = |to, amount| Candidate { to, amount };
+    let (max, half) = (i128::MAX, i128::MAX / 2 + 1);
     let edge = [
-        std::vec![c(1, max), c(2, max)],
-        std::vec![c(0, max)],
-        std::vec![c(0, max)],
+        std::vec![candidate(1, max), candidate(2, max)],
+        std::vec![candidate(0, max)],
+        std::vec![candidate(0, max)],
     ];
     assert_eq!(greatest_feasible_prefix(&[0, 0, 0], &edge), [2, 1, 1]);
-    let halves = [std::vec![c(1, h), c(1, h)], std::vec![c(0, max)]];
+    let halves = [
+        std::vec![candidate(1, half), candidate(1, half)],
+        std::vec![candidate(0, max)],
+    ];
     assert_eq!(greatest_feasible_prefix(&[1, 0], &halves), [2, 1]);
 }

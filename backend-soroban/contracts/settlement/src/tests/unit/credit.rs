@@ -16,7 +16,7 @@
 use crate::tests::support::{default_config, Setup};
 use crate::*;
 
-const N: Priority = Priority::Normal;
+const NORMAL: Priority = Priority::Normal;
 
 fn credit(cr: i128, ovn: i128, coll: i128) -> Credit {
     Credit { cr, ovn, coll }
@@ -29,57 +29,57 @@ fn credit(cr: i128, ovn: i128, coll: i128) -> Credit {
 /// an all-zero credit position.
 #[test]
 fn the_central_bank_sets_a_banks_collateral() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 0));
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 0));
 
-    c.set_collateral(s.bank(0), &100);
+    client.set_collateral(setup.bank(0), &100);
 
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(CollateralSet {
-            bank: s.bank(0).clone(),
+        setup.our_events(),
+        std::vec![setup.ev(CollateralSet {
+            bank: setup.bank(0).clone(),
             value: 100,
         })]
     );
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 100));
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
 }
 
 /// SC-A14-02. A14's guard `x ≥ 0`: zero releases all collateral; a negative value is
 /// `InvalidAmount`.
 #[test]
 fn collateral_can_be_zero_but_not_negative() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    c.set_collateral(s.bank(0), &0);
-    assert_eq!(c.credit(s.bank(0)).coll, 0);
-    c.set_collateral(s.bank(0), &70);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    client.set_collateral(setup.bank(0), &0);
+    assert_eq!(client.credit(setup.bank(0)).coll, 0);
+    client.set_collateral(setup.bank(0), &70);
     for value in [-1, i128::MIN] {
         assert_eq!(
-            c.try_set_collateral(s.bank(0), &value),
+            client.try_set_collateral(setup.bank(0), &value),
             Err(Ok(Error::InvalidAmount))
         );
     }
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 70));
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 70));
 }
 
 /// SC-A14-03. A14 under collat, S21: collateral cannot fall below the credit it backs,
 /// `cr + ovn`. Exactly the credit is allowed; one below is `CollateralBelowCredit`.
 #[test]
 fn collateral_cannot_fall_below_the_credit_it_backs() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    client.open_repo(setup.bank(0), &60);
 
     assert_eq!(
-        c.try_set_collateral(s.bank(0), &59),
+        client.try_set_collateral(setup.bank(0), &59),
         Err(Ok(Error::CollateralBelowCredit))
     );
-    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 100));
-    c.set_collateral(s.bank(0), &60);
-    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 60));
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 100));
+    client.set_collateral(setup.bank(0), &60);
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 60));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -90,30 +90,30 @@ fn collateral_cannot_fall_below_the_credit_it_backs() {
 /// holds still equal its balances (S1, S4; ADR-0011).
 #[test]
 fn a_repo_mints_cash_into_the_contract_and_credits_the_bank() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    s.at(500);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(500);
 
-    let id = c.open_repo(s.bank(0), &60);
+    let id = client.open_repo(setup.bank(0), &60);
 
     assert_eq!(id, 0);
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(RepoOpened {
+        setup.our_events(),
+        std::vec![setup.ev(RepoOpened {
             id,
-            bank: s.bank(0).clone(),
+            bank: setup.bank(0).clone(),
             amount: 60,
         })]
     );
-    assert_eq!(c.balance(s.bank(0)), 60);
-    assert_eq!(s.token().balance(&s.contract), 60);
-    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 100));
+    assert_eq!(client.balance(setup.bank(0)), 60);
+    assert_eq!(setup.token().balance(&setup.contract), 60);
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 100));
     assert_eq!(
-        c.repo(&id),
+        client.repo(&id),
         Some(Repo {
             id,
-            bank: s.bank(0).clone(),
+            bank: setup.bank(0).clone(),
             amount: 60,
             outstanding: 60,
             opened_at: 500,
@@ -121,103 +121,103 @@ fn a_repo_mints_cash_into_the_contract_and_credits_the_bank() {
             rate_bps: 0,
         })
     );
-    s.assert_conserved();
+    setup.assert_conserved();
 }
 
 /// SC-A12-02. S17: credit up to exactly the collateral is allowed, across several
 /// repos; one unit more is `CreditExceedsCollateral` and nothing is minted.
 #[test]
 fn credit_may_reach_but_not_exceed_the_collateral() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    assert_eq!(c.open_repo(s.bank(0), &60), 0);
-    assert_eq!(c.open_repo(s.bank(0), &40), 1);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    assert_eq!(client.open_repo(setup.bank(0), &60), 0);
+    assert_eq!(client.open_repo(setup.bank(0), &40), 1);
 
     assert_eq!(
-        c.try_open_repo(s.bank(0), &1),
+        client.try_open_repo(setup.bank(0), &1),
         Err(Ok(Error::CreditExceedsCollateral))
     );
-    assert_eq!(c.credit(s.bank(0)), credit(100, 0, 100));
-    assert_eq!(s.token().balance(&s.contract), 100);
-    assert_eq!(c.repo(&2), None);
+    assert_eq!(client.credit(setup.bank(0)), credit(100, 0, 100));
+    assert_eq!(setup.token().balance(&setup.contract), 100);
+    assert_eq!(client.repo(&2), None);
 }
 
 /// SC-A12-03. A bank with no collateral gets no credit.
 #[test]
 fn a_bank_with_no_collateral_gets_no_credit() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
     assert_eq!(
-        c.try_open_repo(s.bank(0), &1),
+        client.try_open_repo(setup.bank(0), &1),
         Err(Ok(Error::CreditExceedsCollateral))
     );
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 0));
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(&s.contract), 0);
-    assert_eq!(c.repo(&0), None);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 0));
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(&setup.contract), 0);
+    assert_eq!(client.repo(&0), None);
 }
 
 /// SC-A12-04. A12's guard `x > 0`: a zero or negative repo is `InvalidAmount`.
 #[test]
 fn a_zero_or_negative_repo_is_refused() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
     for amount in [0, -1, i128::MIN] {
         assert_eq!(
-            c.try_open_repo(s.bank(0), &amount),
+            client.try_open_repo(setup.bank(0), &amount),
             Err(Ok(Error::InvalidAmount))
         );
     }
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 100));
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
 }
 
 /// SC-A12-05. `i128` boundary: with collateral `i128::MAX`, a repo of `i128::MAX` is
 /// allowed, and one more unit is refused without overflowing `cr + ovn + x`.
 #[test]
 fn credit_at_i128_max_is_checked_without_overflow() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &i128::MAX);
-    c.open_repo(s.bank(0), &i128::MAX);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &i128::MAX);
+    client.open_repo(setup.bank(0), &i128::MAX);
     assert_eq!(
-        c.try_open_repo(s.bank(0), &1),
+        client.try_open_repo(setup.bank(0), &1),
         Err(Ok(Error::CreditExceedsCollateral))
     );
-    assert_eq!(c.balance(s.bank(0)), i128::MAX);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), i128::MAX);
+    setup.assert_conserved();
 }
 
 /// SC-A12-06. The new money settles the bank's queued payment in the same call (L1 with
 /// δ = 0, S9; ADR-0010, ADR-0011).
 #[test]
 fn a_repo_releases_the_banks_queue() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &50, &N);
-    c.set_collateral(s.bank(0), &100);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    client.set_collateral(setup.bank(0), &100);
 
-    let repo = c.open_repo(s.bank(0), &50);
+    let repo = client.open_repo(setup.bank(0), &50);
 
     assert_eq!(
-        s.our_events(),
+        setup.our_events(),
         std::vec![
-            s.ev(RepoOpened {
+            setup.ev(RepoOpened {
                 id: repo,
-                bank: s.bank(0).clone(),
+                bank: setup.bank(0).clone(),
                 amount: 50,
             }),
-            s.ev(Settled {
+            setup.ev(Settled {
                 id,
-                from: s.bank(0).clone(),
-                to: s.bank(1).clone(),
+                from: setup.bank(0).clone(),
+                to: setup.bank(1).clone(),
                 amount: 50,
             }),
         ]
     );
-    assert_eq!(s.balances(), std::vec![0, 50]);
-    s.assert_conserved();
+    assert_eq!(setup.balances(), std::vec![0, 50]);
+    setup.assert_conserved();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -227,146 +227,146 @@ fn a_repo_releases_the_banks_queue() {
 /// the cash from the contract and lowers `cr` (S1, S4; ADR-0011).
 #[test]
 fn a_partial_repayment_burns_cash_and_lowers_the_credit() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
 
-    c.repay(s.bank(0), &id, &20);
+    client.repay(setup.bank(0), &id, &20);
 
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(RepoRepaid {
+        setup.our_events(),
+        std::vec![setup.ev(RepoRepaid {
             id,
             amount: 20,
             outstanding: 40,
         })]
     );
-    assert_eq!(c.balance(s.bank(0)), 40);
-    assert_eq!(s.token().balance(&s.contract), 40);
-    assert_eq!(c.credit(s.bank(0)), credit(40, 0, 100));
-    let r = c.repo(&id).unwrap();
-    assert_eq!((r.outstanding, r.status), (40, RepoStatus::Intraday));
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 40);
+    assert_eq!(setup.token().balance(&setup.contract), 40);
+    assert_eq!(client.credit(setup.bank(0)), credit(40, 0, 100));
+    let repo = client.repo(&id).unwrap();
+    assert_eq!((repo.outstanding, repo.status), (40, RepoStatus::Intraday));
+    setup.assert_conserved();
 }
 
 /// SC-A13-02. Repaying the whole outstanding amount closes the repo and frees the
 /// collateral behind it.
 #[test]
 fn a_full_repayment_closes_the_repo_and_frees_the_collateral() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
 
-    c.repay(s.bank(0), &id, &60);
+    client.repay(setup.bank(0), &id, &60);
 
-    let r = c.repo(&id).unwrap();
-    assert_eq!((r.outstanding, r.status), (0, RepoStatus::Repaid));
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 100));
-    assert_eq!(s.token().balance(&s.contract), 0);
-    c.set_collateral(s.bank(0), &0);
-    s.assert_conserved();
+    let repo = client.repo(&id).unwrap();
+    assert_eq!((repo.outstanding, repo.status), (0, RepoStatus::Repaid));
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
+    assert_eq!(setup.token().balance(&setup.contract), 0);
+    client.set_collateral(setup.bank(0), &0);
+    setup.assert_conserved();
 }
 
 /// SC-A13-03. A13's actor is the owner or the central bank (S6): the central bank may
 /// repay on the bank's behalf, debiting the bank.
 #[test]
 fn the_central_bank_may_repay_on_the_banks_behalf() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
 
-    c.repay(&s.cb, &id, &60);
+    client.repay(&setup.cb, &id, &60);
 
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(c.repo(&id).unwrap().status, RepoStatus::Repaid);
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Repaid);
 }
 
 /// SC-A13-04. S6: anyone else is `NotAuthorized`, even with their own authorization.
 #[test]
 fn a_third_party_cannot_repay() {
-    let s = Setup::funded(&[0, 100]);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::funded(&[0, 100]);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
     assert_eq!(
-        c.try_repay(s.bank(1), &id, &10),
+        client.try_repay(setup.bank(1), &id, &10),
         Err(Ok(Error::NotAuthorized))
     );
-    assert_eq!(c.repo(&id).unwrap().outstanding, 60);
-    assert_eq!(s.balances(), std::vec![60, 100]);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(setup.balances(), std::vec![60, 100]);
 }
 
 /// SC-A13-05. A13's guard `x ≤ cr`: one more than the outstanding amount is
 /// `RepayExceedsRepo`, and a repaid repo has nothing left to repay.
 #[test]
 fn repaying_more_than_is_outstanding_is_refused() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    s.mint(s.bank(0), 100);
-    c.deposit(s.bank(0), &100);
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    setup.mint(setup.bank(0), 100);
+    client.deposit(setup.bank(0), &100);
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
 
     assert_eq!(
-        c.try_repay(s.bank(0), &id, &61),
+        client.try_repay(setup.bank(0), &id, &61),
         Err(Ok(Error::RepayExceedsRepo))
     );
-    c.repay(s.bank(0), &id, &60);
+    client.repay(setup.bank(0), &id, &60);
     assert_eq!(
-        c.try_repay(s.bank(0), &id, &1),
+        client.try_repay(setup.bank(0), &id, &1),
         Err(Ok(Error::RepayExceedsRepo))
     );
-    assert_eq!(c.balance(s.bank(0)), 100);
+    assert_eq!(client.balance(setup.bank(0)), 100);
 }
 
 /// SC-A13-06. A13's guard `bal − x ≥ −lim` with `lim` = 0: a bank that spent the money
 /// can repay exactly its balance, but not one unit more (`InsufficientFunds`).
 #[test]
 fn a_bank_cannot_repay_more_than_its_balance() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    c.submit(s.bank(0), s.bank(1), &50, &N);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
 
     assert_eq!(
-        c.try_repay(s.bank(0), &id, &11),
+        client.try_repay(setup.bank(0), &id, &11),
         Err(Ok(Error::InsufficientFunds))
     );
-    c.repay(s.bank(0), &id, &10);
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(c.repo(&id).unwrap().outstanding, 50);
-    s.assert_conserved();
+    client.repay(setup.bank(0), &id, &10);
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 50);
+    setup.assert_conserved();
 }
 
 /// SC-A13-07. A zero or negative repayment is `InvalidAmount`.
 #[test]
 fn a_zero_or_negative_repayment_is_refused() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
     for amount in [0, -1, i128::MIN] {
         assert_eq!(
-            c.try_repay(s.bank(0), &id, &amount),
+            client.try_repay(setup.bank(0), &id, &amount),
             Err(Ok(Error::InvalidAmount))
         );
     }
-    assert_eq!(c.repo(&id).unwrap().outstanding, 60);
-    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 100));
-    assert_eq!(c.balance(s.bank(0)), 60);
-    assert_eq!(s.token().balance(&s.contract), 60);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 100));
+    assert_eq!(client.balance(setup.bank(0)), 60);
+    assert_eq!(setup.token().balance(&setup.contract), 60);
 }
 
 /// SC-A13-08. A repo id that was never issued is `UnknownRepo`.
 #[test]
 fn repaying_an_unknown_repo_is_refused() {
-    let s = Setup::new(1, 0);
+    let setup = Setup::new(1, 0);
     assert_eq!(
-        s.client().try_repay(s.bank(0), &0, &1),
+        setup.client().try_repay(setup.bank(0), &0, &1),
         Err(Ok(Error::UnknownRepo))
     );
 }
@@ -379,32 +379,32 @@ fn repaying_an_unknown_repo_is_refused() {
 /// configured penalty rate, and it stays collateralised (S21).
 #[test]
 fn an_overdue_repo_becomes_a_penalty_repo() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    s.at(1_000);
-    let id = c.open_repo(s.bank(0), &60);
-    c.repay(s.bank(0), &id, &20);
-    s.at(1_000 + default_config().repo_term_secs + 1);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(1_000);
+    let id = client.open_repo(setup.bank(0), &60);
+    client.repay(setup.bank(0), &id, &20);
+    setup.at(1_000 + default_config().repo_term_secs + 1);
 
-    c.convert_overdue(&id);
+    client.convert_overdue(&id);
 
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(RepoPenalised {
+        setup.our_events(),
+        std::vec![setup.ev(RepoPenalised {
             id,
             rate_bps: default_config().penalty_rate_bps,
         })]
     );
-    let r = c.repo(&id).unwrap();
+    let repo = client.repo(&id).unwrap();
     assert_eq!(
-        (r.status, r.rate_bps, r.outstanding),
+        (repo.status, repo.rate_bps, repo.outstanding),
         (RepoStatus::Penalty, 500, 40)
     );
-    assert_eq!(c.credit(s.bank(0)), credit(0, 40, 100));
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 40, 100));
     // The money stays where it is: conversion mints and burns nothing.
-    assert_eq!(c.balance(s.bank(0)), 40);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 40);
+    setup.assert_conserved();
 }
 
 /// SC-A20-02. The term's boundary: exactly at `opened_at + repo_term_secs` the repo is
@@ -412,22 +412,22 @@ fn an_overdue_repo_becomes_a_penalty_repo() {
 /// (CAP-88, handbook 09 §3).
 #[test]
 fn a_repo_exactly_at_its_term_is_not_overdue() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    s.at(1_000);
-    let id = c.open_repo(s.bank(0), &60);
-    for t in [1_000, 1_000 + default_config().repo_term_secs] {
-        s.at(t);
-        assert_eq!(c.try_convert_overdue(&id), Err(Ok(Error::NotOverdue)));
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(1_000);
+    let id = client.open_repo(setup.bank(0), &60);
+    for time in [1_000, 1_000 + default_config().repo_term_secs] {
+        setup.at(time);
+        assert_eq!(client.try_convert_overdue(&id), Err(Ok(Error::NotOverdue)));
     }
-    assert_eq!(c.credit(s.bank(0)), credit(60, 0, 100));
+    assert_eq!(client.credit(setup.bank(0)), credit(60, 0, 100));
 }
 
 /// SC-A20-03. The term and the rate are configuration values (ADR-0014).
 #[test]
 fn the_term_and_the_penalty_rate_are_configurable() {
-    let s = Setup::with_config(
+    let setup = Setup::with_config(
         1,
         0,
         Config {
@@ -436,46 +436,49 @@ fn the_term_and_the_penalty_rate_are_configurable() {
             ..default_config()
         },
     );
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    s.at(0);
-    let id = c.open_repo(s.bank(0), &60);
-    s.at(11);
-    c.convert_overdue(&id);
-    assert_eq!(c.repo(&id).unwrap().rate_bps, 1_234);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    setup.at(0);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.at(11);
+    client.convert_overdue(&id);
+    assert_eq!(client.repo(&id).unwrap().rate_bps, 1_234);
 }
 
 /// SC-A20-04. A penalty repo converts once only: `AlreadyPenalty`.
 #[test]
 fn a_penalty_repo_cannot_be_converted_again() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    s.at(default_config().repo_term_secs + 1);
-    c.convert_overdue(&id);
-    assert_eq!(c.try_convert_overdue(&id), Err(Ok(Error::AlreadyPenalty)));
-    assert_eq!(c.credit(s.bank(0)), credit(0, 60, 100));
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&id);
+    assert_eq!(
+        client.try_convert_overdue(&id),
+        Err(Ok(Error::AlreadyPenalty))
+    );
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 60, 100));
 }
 
 /// SC-A20-05. A repaid repo is never overdue: `NotOverdue`.
 #[test]
 fn a_repaid_repo_is_never_overdue() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    c.repay(s.bank(0), &id, &60);
-    s.at(default_config().repo_term_secs + 1);
-    assert_eq!(c.try_convert_overdue(&id), Err(Ok(Error::NotOverdue)));
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    client.repay(setup.bank(0), &id, &60);
+    setup.at(default_config().repo_term_secs + 1);
+    assert_eq!(client.try_convert_overdue(&id), Err(Ok(Error::NotOverdue)));
 }
 
 /// SC-A20-06. A repo id that was never issued is `UnknownRepo`.
 #[test]
 fn converting_an_unknown_repo_is_refused() {
-    let s = Setup::new(1, 0);
+    let setup = Setup::new(1, 0);
     assert_eq!(
-        s.client().try_convert_overdue(&9),
+        setup.client().try_convert_overdue(&9),
         Err(Ok(Error::UnknownRepo))
     );
 }
@@ -484,43 +487,43 @@ fn converting_an_unknown_repo_is_refused() {
 /// repo closes once paid (S1, S4).
 #[test]
 fn a_penalty_repo_is_repaid_by_a_burn() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    s.at(default_config().repo_term_secs + 1);
-    c.convert_overdue(&id);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&id);
 
-    c.repay(s.bank(0), &id, &25);
-    assert_eq!(c.credit(s.bank(0)), credit(0, 35, 100));
-    assert_eq!(c.repo(&id).unwrap().status, RepoStatus::Penalty);
+    client.repay(setup.bank(0), &id, &25);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 35, 100));
+    assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Penalty);
 
-    c.repay(s.bank(0), &id, &35);
-    assert_eq!(c.credit(s.bank(0)), credit(0, 0, 100));
-    assert_eq!(c.repo(&id).unwrap().status, RepoStatus::Repaid);
-    assert_eq!(s.token().balance(&s.contract), 0);
-    s.assert_conserved();
+    client.repay(setup.bank(0), &id, &35);
+    assert_eq!(client.credit(setup.bank(0)), credit(0, 0, 100));
+    assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Repaid);
+    assert_eq!(setup.token().balance(&setup.contract), 0);
+    setup.assert_conserved();
 }
 
 /// SC-A20-08. S21: penalty repos count against the collateral. A new repo must fit in
 /// `coll − cr − ovn`, and the collateral cannot fall below `cr + ovn` (C-DF-028).
 #[test]
 fn penalty_repos_stay_collateralised() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    s.at(default_config().repo_term_secs + 1);
-    c.convert_overdue(&id);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.at(default_config().repo_term_secs + 1);
+    client.convert_overdue(&id);
 
     assert_eq!(
-        c.try_open_repo(s.bank(0), &41),
+        client.try_open_repo(setup.bank(0), &41),
         Err(Ok(Error::CreditExceedsCollateral))
     );
-    c.open_repo(s.bank(0), &40);
-    assert_eq!(c.credit(s.bank(0)), credit(40, 60, 100));
+    client.open_repo(setup.bank(0), &40);
+    assert_eq!(client.credit(setup.bank(0)), credit(40, 60, 100));
     assert_eq!(
-        c.try_set_collateral(s.bank(0), &99),
+        client.try_set_collateral(setup.bank(0), &99),
         Err(Ok(Error::CollateralBelowCredit))
     );
 }

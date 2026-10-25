@@ -57,9 +57,9 @@ impl Setup {
     }
 
     pub fn with_config(n: usize, funding: i128, config: Config) -> Self {
-        let s = Self::build(n, funding, config, Code::Native);
-        s.env.mock_all_auths();
-        s
+        let setup = Self::build(n, funding, config, Code::Native);
+        setup.env.mock_all_auths();
+        setup
     }
 
     /// Mocks no authorization: each test decides which auths the call under test gets.
@@ -70,9 +70,9 @@ impl Setup {
     /// Like [`Setup::with_config`], with the contract registered from `wasm`, the output
     /// of `make build`. For cost tests (TESTING.md, "Costs").
     pub fn from_wasm(wasm: &[u8], n: usize, config: Config) -> Self {
-        let s = Self::build(n, 0, config, Code::Wasm(wasm));
-        s.env.mock_all_auths();
-        s
+        let setup = Self::build(n, 0, config, Code::Wasm(wasm));
+        setup.env.mock_all_auths();
+        setup
     }
 
     fn build(n: usize, funding: i128, config: Config, code: Code) -> Self {
@@ -96,10 +96,10 @@ impl Setup {
         env.mock_all_auths();
         let admin = StellarAssetClient::new(&env, &token);
         admin.set_authorized(&contract, &true);
-        for b in &banks {
-            admin.set_authorized(b, &true);
+        for bank in &banks {
+            admin.set_authorized(bank, &true);
             if funding > 0 {
-                admin.mint(b, &funding);
+                admin.mint(bank, &funding);
             }
         }
         env.set_auths(&[]);
@@ -114,14 +114,14 @@ impl Setup {
 
     /// `n` banks whose settlement balances are `balances[i]`, deposited and nothing else.
     pub fn funded(balances: &[i128]) -> Self {
-        let s = Self::new(balances.len(), 0);
-        for (b, amount) in s.banks.iter().zip(balances) {
+        let setup = Self::new(balances.len(), 0);
+        for (bank, amount) in setup.banks.iter().zip(balances) {
             if *amount > 0 {
-                s.mint(b, *amount);
-                s.client().deposit(b, amount);
+                setup.mint(bank, *amount);
+                setup.client().deposit(bank, amount);
             }
         }
-        s
+        setup
     }
 
     pub fn client(&self) -> SettlementClient<'_> {
@@ -149,8 +149,8 @@ impl Setup {
 
     /// Every bank's settlement balance, in bank order.
     pub fn balances(&self) -> StdVec<i128> {
-        let c = self.client();
-        self.banks.iter().map(|b| c.balance(b)).collect()
+        let client = self.client();
+        self.banks.iter().map(|bank| client.balance(bank)).collect()
     }
 
     /// S1, conservation (ADR-0004): the cash tokens the contract holds equal the sum of
@@ -158,7 +158,10 @@ impl Setup {
     /// line under ADR-0011).
     pub fn assert_conserved(&self) {
         let balances = self.balances();
-        assert!(balances.iter().all(|b| *b >= 0), "negative: {balances:?}");
+        assert!(
+            balances.iter().all(|balance| *balance >= 0),
+            "negative: {balances:?}"
+        );
         let sum: i128 = balances.iter().sum();
         assert_eq!(
             self.token().balance(&self.contract),
@@ -194,7 +197,7 @@ impl Setup {
             .all()
             .events()
             .iter()
-            .filter(|e| e.contract_id == ours)
+            .filter(|event| event.contract_id == ours)
             .cloned()
             .collect()
     }

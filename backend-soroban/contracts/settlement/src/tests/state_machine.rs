@@ -39,10 +39,10 @@ use super::reference::{config, greatest_feasible_prefix};
 use super::support::Setup;
 use crate::{Config, Credit, Error, Payment, Priority, Repo, RepoStatus, Status};
 
-const N: usize = 3;
+const BANKS: usize = 3;
 const FUNDING: i128 = 500;
 /// The central bank, as an actor index next to the banks.
-const CB: usize = N;
+const CB: usize = BANKS;
 
 /// A queue cap no run reaches, so the cap's rule (which the property tests SC-P-01 and
 /// SC-P-11 and the unit tests cover) stays out of the comparison; short expiry and repo
@@ -82,14 +82,14 @@ pub struct ModelRepo {
 pub struct Model {
     cfg: Config,
     /// Cash tokens each bank holds outside the contract.
-    holding: [i128; N],
+    holding: [i128; BANKS],
     /// `bal`.
-    balances: [i128; N],
+    balances: [i128; BANKS],
     /// `ord`, keyed by sequence number `q`.
     payments: BTreeMap<u64, ModelPayment>,
     next_id: u64,
     /// `coll`.
-    coll: [i128; N],
+    coll: [i128; BANKS],
     repos: Vec<ModelRepo>,
     /// A19: the ledger's close time.
     now: u64,
@@ -98,20 +98,20 @@ pub struct Model {
 }
 
 impl Model {
-    /// Bank `a`'s queued payments in `≺` order (§4.5): urgent before normal, then by id.
-    fn candidates(&self, a: usize) -> Vec<u64> {
+    /// `bank`'s queued payments in `≺` order (§4.5): urgent before normal, then by id.
+    fn candidates(&self, bank: usize) -> Vec<u64> {
         let mut ids: Vec<(bool, u64)> = self
             .payments
             .iter()
-            .filter(|(_, p)| p.status == Status::Queued && p.from == a)
-            .map(|(id, p)| (p.priority != Priority::Urgent, *id))
+            .filter(|(_, payment)| payment.status == Status::Queued && payment.from == bank)
+            .map(|(id, payment)| (payment.priority != Priority::Urgent, *id))
             .collect();
         ids.sort();
         ids.into_iter().map(|(_, id)| id).collect()
     }
 
-    fn queue(&self, a: usize, priority: Priority) -> Vec<u64> {
-        self.candidates(a)
+    fn queue(&self, bank: usize, priority: Priority) -> Vec<u64> {
+        self.candidates(bank)
             .into_iter()
             .filter(|id| self.payments[id].priority == priority)
             .collect()
@@ -119,7 +119,7 @@ impl Model {
 
     /// The eager closure: settle S(k*) (R6, S9, S23).
     fn settle(&mut self) {
-        let candidates: Vec<Vec<u64>> = (0..N).map(|a| self.candidates(a)).collect();
+        let candidates: Vec<Vec<u64>> = (0..BANKS).map(|bank| self.candidates(bank)).collect();
         let queues: Vec<Vec<(usize, i128)>> = candidates
             .iter()
             .map(|ids| {
@@ -128,40 +128,40 @@ impl Model {
                     .collect()
             })
             .collect();
-        let k = greatest_feasible_prefix(&self.balances, &queues);
-        for (a, ids) in candidates.iter().enumerate() {
-            for id in &ids[..k[a]] {
-                let p = self.payments.get_mut(id).unwrap();
-                p.status = Status::Settled;
-                p.settled_at = Some(self.now);
-                self.balances[p.from] -= p.amount;
-                self.balances[p.to] += p.amount;
+        let prefix = greatest_feasible_prefix(&self.balances, &queues);
+        for (bank, ids) in candidates.iter().enumerate() {
+            for id in &ids[..prefix[bank]] {
+                let payment = self.payments.get_mut(id).unwrap();
+                payment.status = Status::Settled;
+                payment.settled_at = Some(self.now);
+                self.balances[payment.from] -= payment.amount;
+                self.balances[payment.to] += payment.amount;
             }
         }
     }
 
-    /// `cr` and `ovn` of bank `a`: its outstanding intraday and penalty repos.
-    fn credit(&self, a: usize) -> Credit {
+    /// `cr` and `ovn` of `bank`: its outstanding intraday and penalty repos.
+    fn credit(&self, bank: usize) -> Credit {
         let sum = |status| {
             self.repos
                 .iter()
-                .filter(|r| r.bank == a && r.status == status)
-                .map(|r| r.outstanding)
+                .filter(|repo| repo.bank == bank && repo.status == status)
+                .map(|repo| repo.outstanding)
                 .sum()
         };
         Credit {
             cr: sum(RepoStatus::Intraday),
             ovn: sum(RepoStatus::Penalty),
-            coll: self.coll[a],
+            coll: self.coll[bank],
         }
     }
 
     fn queued(&self, id: u64) -> Result<&ModelPayment, Error> {
-        let p = self.payments.get(&id).ok_or(Error::UnknownPayment)?;
-        if p.status != Status::Queued {
+        let payment = self.payments.get(&id).ok_or(Error::UnknownPayment)?;
+        if payment.status != Status::Queued {
             return Err(Error::NotQueued);
         }
-        Ok(p)
+        Ok(payment)
     }
 }
 
@@ -221,11 +221,11 @@ impl ReferenceStateMachine for Reference {
     fn init_state() -> BoxedStrategy<Model> {
         Just(Model {
             cfg: test_config(),
-            holding: [FUNDING; N],
-            balances: [0; N],
+            holding: [FUNDING; BANKS],
+            balances: [0; BANKS],
             payments: BTreeMap::new(),
             next_id: 0,
-            coll: [0; N],
+            coll: [0; BANKS],
             repos: Vec::new(),
             now: 0,
             last: Ok(0),
@@ -233,39 +233,39 @@ impl ReferenceStateMachine for Reference {
         .boxed()
     }
 
-    fn transitions(s: &Model) -> BoxedStrategy<Transition> {
+    fn transitions(state: &Model) -> BoxedStrategy<Transition> {
         // Mostly ids that are queued, sometimes final or unknown ones.
-        let queued: Vec<u64> = s
+        let queued: Vec<u64> = state
             .payments
             .iter()
-            .filter(|(_, p)| p.status == Status::Queued)
+            .filter(|(_, payment)| payment.status == Status::Queued)
             .map(|(id, _)| *id)
             .collect();
-        let any_id = (0..s.next_id + 2).boxed();
+        let any_id = (0..state.next_id + 2).boxed();
         let id = if queued.is_empty() {
             any_id
         } else {
             prop_oneof![3 => prop::sample::select(queued), 1 => any_id].boxed()
         };
-        let repo = (0..s.repos.len() as u64 + 2).boxed();
+        let repo = (0..state.repos.len() as u64 + 2).boxed();
         let amount = || 1i128..=300;
         let priority = || prop_oneof![Just(Priority::Normal), Just(Priority::Urgent)];
         // Random inputs rarely hit a boundary or reach the credit and expiry paths, so these
         // are drawn on purpose: the exact holding, balance, collateral headroom and
         // outstanding amount, one over the holding, the balance and the headroom, and the
         // payments and repos past their expiry or term.
-        let (holding, balances) = (s.holding, s.balances);
-        let outstanding: Vec<(u64, usize, i128)> = s
+        let (holding, balances) = (state.holding, state.balances);
+        let outstanding: Vec<(u64, usize, i128)> = state
             .repos
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.outstanding > 0)
-            .map(|(i, r)| (i as u64, r.bank, r.outstanding))
+            .filter(|(_, repo)| repo.outstanding > 0)
+            .map(|(i, repo)| (i as u64, repo.bank, repo.outstanding))
             .collect();
         // With no case to draw from, each one falls back to the call that brings it into
         // reach: collateral for a repo, a repo for a repayment, time for the expiry and term.
         let collateral = || {
-            (0..N, 1i128..=400)
+            (0..BANKS, 1i128..=400)
                 .prop_map(|(bank, value)| Transition::SetCollateral { bank, value })
                 .boxed()
         };
@@ -277,12 +277,12 @@ impl ReferenceStateMachine for Reference {
                 amount,
             }
         });
-        let headroom: Vec<(usize, i128)> = (0..N)
+        let headroom: Vec<(usize, i128)> = (0..BANKS)
             .map(|bank| {
-                let c = s.credit(bank);
-                (bank, c.coll - c.cr - c.ovn)
+                let credit = state.credit(bank);
+                (bank, credit.coll - credit.cr - credit.ovn)
             })
-            .filter(|(_, h)| *h > 0)
+            .filter(|(_, available)| *available > 0)
             .collect();
         let exact_repo = pick(headroom.clone(), collateral(), |(bank, amount)| {
             Transition::OpenRepo { bank, amount }
@@ -293,33 +293,33 @@ impl ReferenceStateMachine for Reference {
                 amount: amount + 1,
             }
         });
-        let past_expiry: Vec<u64> = s
+        let past_expiry: Vec<u64> = state
             .payments
             .iter()
-            .filter(|(_, p)| p.status == Status::Queued)
-            .filter(|(_, p)| s.now > p.submitted_at + s.cfg.expiry_secs)
+            .filter(|(_, payment)| payment.status == Status::Queued)
+            .filter(|(_, payment)| state.now > payment.submitted_at + state.cfg.expiry_secs)
             .map(|(id, _)| *id)
             .collect();
         let due_expire = pick(past_expiry, past(), |id| Transition::Expire { id });
-        let past_term: Vec<u64> = s
+        let past_term: Vec<u64> = state
             .repos
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.status == RepoStatus::Intraday)
-            .filter(|(_, r)| s.now > r.opened_at + s.cfg.repo_term_secs)
+            .filter(|(_, repo)| repo.status == RepoStatus::Intraday)
+            .filter(|(_, repo)| state.now > repo.opened_at + state.cfg.repo_term_secs)
             .map(|(i, _)| i as u64)
             .collect();
         let due_convert = pick(past_term, past(), |repo| Transition::ConvertOverdue {
             repo,
         });
         prop_oneof![
-            3 => (0..N, amount()).prop_map(|(bank, amount)| Transition::Deposit { bank, amount }),
-            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank].max(1) }),
-            1 => (0..N).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank] + 1 }),
-            1 => (0..N, amount()).prop_map(|(bank, amount)| Transition::Withdraw { bank, amount }),
-            1 => (0..N).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank].max(1) }),
-            1 => (0..N).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank] + 1 }),
-            6 => (0..N, 0..N, amount(), priority())
+            3 => (0..BANKS, amount()).prop_map(|(bank, amount)| Transition::Deposit { bank, amount }),
+            1 => (0..BANKS).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank].max(1) }),
+            1 => (0..BANKS).prop_map(move |bank| Transition::Deposit { bank, amount: holding[bank] + 1 }),
+            1 => (0..BANKS, amount()).prop_map(|(bank, amount)| Transition::Withdraw { bank, amount }),
+            1 => (0..BANKS).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank].max(1) }),
+            1 => (0..BANKS).prop_map(move |bank| Transition::Withdraw { bank, amount: balances[bank] + 1 }),
+            6 => (0..BANKS, 0..BANKS, amount(), priority())
                 .prop_map(|(from, to, amount, priority)| Transition::Submit { from, to, amount, priority }),
             2 => id.clone().prop_map(|id| Transition::Revoke { id }),
             2 => (id.clone(), priority()).prop_map(|(id, priority)| Transition::Reprioritise { id, priority }),
@@ -327,8 +327,8 @@ impl ReferenceStateMachine for Reference {
             2 => due_expire,
             2 => prop_oneof![Just(1u64), Just(100), Just(101), 0u64..=150]
                 .prop_map(|secs| Transition::Tick { secs }),
-            2 => (0..N, 0i128..=400).prop_map(|(bank, value)| Transition::SetCollateral { bank, value }),
-            1 => (0..N, amount()).prop_map(|(bank, amount)| Transition::OpenRepo { bank, amount }),
+            2 => (0..BANKS, 0i128..=400).prop_map(|(bank, value)| Transition::SetCollateral { bank, value }),
+            1 => (0..BANKS, amount()).prop_map(|(bank, amount)| Transition::OpenRepo { bank, amount }),
             3 => exact_repo,
             1 => over_repo,
             1 => (0..=CB, repo.clone(), amount())
@@ -340,26 +340,26 @@ impl ReferenceStateMachine for Reference {
         .boxed()
     }
 
-    fn apply(mut s: Model, t: &Transition) -> Model {
-        s.last = match *t {
+    fn apply(mut state: Model, transition: &Transition) -> Model {
+        state.last = match *transition {
             Transition::Deposit { bank, amount } => {
-                if s.holding[bank] < amount {
+                if state.holding[bank] < amount {
                     Err(Error::TokenTransferFailed)
                 } else {
-                    s.holding[bank] -= amount;
-                    s.balances[bank] += amount;
-                    s.settle();
+                    state.holding[bank] -= amount;
+                    state.balances[bank] += amount;
+                    state.settle();
                     Ok(0)
                 }
             }
             Transition::Withdraw { bank, amount } => {
-                if s.balances[bank] < amount {
+                if state.balances[bank] < amount {
                     Err(Error::InsufficientFunds)
                 } else {
                     // No reservations: a withdrawal may spend what a queued payment needs
                     // (ADR-0018), and it settles nothing.
-                    s.balances[bank] -= amount;
-                    s.holding[bank] += amount;
+                    state.balances[bank] -= amount;
+                    state.holding[bank] += amount;
                     Ok(0)
                 }
             }
@@ -372,117 +372,123 @@ impl ReferenceStateMachine for Reference {
                 if from == to {
                     Err(Error::SameAccount)
                 } else {
-                    let id = s.next_id;
-                    s.next_id += 1;
-                    s.payments.insert(
+                    let id = state.next_id;
+                    state.next_id += 1;
+                    state.payments.insert(
                         id,
                         ModelPayment {
                             from,
                             to,
                             amount,
                             priority,
-                            submitted_at: s.now,
+                            submitted_at: state.now,
                             status: Status::Queued,
                             settled_at: None,
                         },
                     );
-                    s.settle();
+                    state.settle();
                     Ok(id.into())
                 }
             }
-            Transition::Revoke { id } => match s.queued(id) {
-                Err(e) => Err(e),
+            Transition::Revoke { id } => match state.queued(id) {
+                Err(err) => Err(err),
                 Ok(_) => {
-                    s.payments.get_mut(&id).unwrap().status = Status::Revoked;
-                    s.settle();
+                    state.payments.get_mut(&id).unwrap().status = Status::Revoked;
+                    state.settle();
                     Ok(0)
                 }
             },
-            Transition::Reprioritise { id, priority } => match s.queued(id) {
-                Err(e) => Err(e),
-                Ok(p) if p.priority == priority => Err(Error::SamePriority),
+            Transition::Reprioritise { id, priority } => match state.queued(id) {
+                Err(err) => Err(err),
+                Ok(payment) if payment.priority == priority => Err(Error::SamePriority),
                 Ok(_) => {
-                    s.payments.get_mut(&id).unwrap().priority = priority;
-                    s.settle();
+                    state.payments.get_mut(&id).unwrap().priority = priority;
+                    state.settle();
                     Ok(0)
                 }
             },
-            Transition::Expire { id } => match s.queued(id) {
-                Err(e) => Err(e),
-                Ok(p) if s.now <= p.submitted_at + s.cfg.expiry_secs => Err(Error::NotExpired),
+            Transition::Expire { id } => match state.queued(id) {
+                Err(err) => Err(err),
+                Ok(payment) if state.now <= payment.submitted_at + state.cfg.expiry_secs => {
+                    Err(Error::NotExpired)
+                }
                 Ok(_) => {
-                    s.payments.get_mut(&id).unwrap().status = Status::Expired;
-                    s.settle();
+                    state.payments.get_mut(&id).unwrap().status = Status::Expired;
+                    state.settle();
                     Ok(0)
                 }
             },
             Transition::Tick { secs } => {
                 // Time alone settles nothing: nothing is timed (ADR-0017).
-                s.now += secs;
+                state.now += secs;
                 Ok(0)
             }
             Transition::SetCollateral { bank, value } => {
-                let c = s.credit(bank);
-                if value < c.cr + c.ovn {
+                let credit = state.credit(bank);
+                if value < credit.cr + credit.ovn {
                     Err(Error::CollateralBelowCredit)
                 } else {
-                    s.coll[bank] = value;
+                    state.coll[bank] = value;
                     Ok(0)
                 }
             }
             Transition::OpenRepo { bank, amount } => {
-                let c = s.credit(bank);
-                if c.cr + c.ovn + amount > c.coll {
+                let credit = state.credit(bank);
+                if credit.cr + credit.ovn + amount > credit.coll {
                     Err(Error::CreditExceedsCollateral)
                 } else {
-                    s.repos.push(ModelRepo {
+                    state.repos.push(ModelRepo {
                         bank,
                         amount,
                         outstanding: amount,
-                        opened_at: s.now,
+                        opened_at: state.now,
                         status: RepoStatus::Intraday,
                         rate_bps: 0,
                     });
-                    s.balances[bank] += amount;
-                    s.settle();
-                    Ok((s.repos.len() - 1) as i128)
+                    state.balances[bank] += amount;
+                    state.settle();
+                    Ok((state.repos.len() - 1) as i128)
                 }
             }
             Transition::Repay {
                 actor,
                 repo,
                 amount,
-            } => match s.repos.get(repo as usize) {
+            } => match state.repos.get(repo as usize) {
                 None => Err(Error::UnknownRepo),
-                Some(r) if actor != r.bank && actor != CB => Err(Error::NotAuthorized),
-                Some(r) if amount > r.outstanding => Err(Error::RepayExceedsRepo),
-                Some(r) if s.balances[r.bank] < amount => Err(Error::InsufficientFunds),
-                Some(r) => {
-                    let bank = r.bank;
-                    let r = &mut s.repos[repo as usize];
-                    r.outstanding -= amount;
-                    if r.outstanding == 0 {
-                        r.status = RepoStatus::Repaid;
+                Some(record) if actor != record.bank && actor != CB => Err(Error::NotAuthorized),
+                Some(record) if amount > record.outstanding => Err(Error::RepayExceedsRepo),
+                Some(record) if state.balances[record.bank] < amount => {
+                    Err(Error::InsufficientFunds)
+                }
+                Some(record) => {
+                    let bank = record.bank;
+                    let record = &mut state.repos[repo as usize];
+                    record.outstanding -= amount;
+                    if record.outstanding == 0 {
+                        record.status = RepoStatus::Repaid;
                     }
-                    s.balances[bank] -= amount;
+                    state.balances[bank] -= amount;
                     Ok(0)
                 }
             },
-            Transition::ConvertOverdue { repo } => match s.repos.get(repo as usize) {
+            Transition::ConvertOverdue { repo } => match state.repos.get(repo as usize) {
                 None => Err(Error::UnknownRepo),
-                Some(r) if r.status == RepoStatus::Repaid => Err(Error::NotOverdue),
-                Some(r) if r.status == RepoStatus::Penalty => Err(Error::AlreadyPenalty),
-                Some(r) if s.now <= r.opened_at + s.cfg.repo_term_secs => Err(Error::NotOverdue),
+                Some(record) if record.status == RepoStatus::Repaid => Err(Error::NotOverdue),
+                Some(record) if record.status == RepoStatus::Penalty => Err(Error::AlreadyPenalty),
+                Some(record) if state.now <= record.opened_at + state.cfg.repo_term_secs => {
+                    Err(Error::NotOverdue)
+                }
                 Some(_) => {
-                    let rate = s.cfg.penalty_rate_bps;
-                    let r = &mut s.repos[repo as usize];
-                    r.status = RepoStatus::Penalty;
-                    r.rate_bps = rate;
+                    let rate = state.cfg.penalty_rate_bps;
+                    let record = &mut state.repos[repo as usize];
+                    record.status = RepoStatus::Penalty;
+                    record.rate_bps = rate;
                     Ok(0)
                 }
             },
         };
-        s
+        state
     }
 }
 
@@ -490,30 +496,30 @@ impl ReferenceStateMachine for Reference {
 fn pick<T: Clone + core::fmt::Debug + 'static>(
     cases: Vec<T>,
     fallback: BoxedStrategy<Transition>,
-    f: impl Fn(T) -> Transition + 'static,
+    to_transition: impl Fn(T) -> Transition + 'static,
 ) -> BoxedStrategy<Transition> {
     if cases.is_empty() {
         fallback
     } else {
-        prop::sample::select(cases).prop_map(f).boxed()
+        prop::sample::select(cases).prop_map(to_transition).boxed()
     }
 }
 
 /// The call's outcome as the model writes it; anything but a contract error is a failure.
 fn outcome<T: Into<i128>, C: core::fmt::Debug, I: core::fmt::Debug>(
-    r: Result<Result<T, C>, Result<Error, I>>,
+    result: Result<Result<T, C>, Result<Error, I>>,
 ) -> Result<i128, Error> {
-    match r {
-        Ok(Ok(v)) => Ok(v.into()),
-        Err(Ok(e)) => Err(e),
-        Ok(Err(c)) => panic!("conversion error: {c:?}"),
+    match result {
+        Ok(Ok(value)) => Ok(value.into()),
+        Err(Ok(err)) => Err(err),
+        Ok(Err(conversion)) => panic!("conversion error: {conversion:?}"),
         Err(Err(i)) => panic!("untyped error: {i:?}"),
     }
 }
 
 /// `()` as the model's success value, 0.
-fn unit<C>(r: Result<(), C>) -> Result<i128, C> {
-    r.map(|()| 0)
+fn unit<C>(result: Result<(), C>) -> Result<i128, C> {
+    result.map(|()| 0)
 }
 
 pub struct SettlementMachine;
@@ -523,62 +529,62 @@ impl StateMachineTest for SettlementMachine {
     type Reference = Reference;
 
     fn init_test(model: &Model) -> Setup {
-        Setup::with_config(N, FUNDING, model.cfg.clone())
+        Setup::with_config(BANKS, FUNDING, model.cfg.clone())
     }
 
-    fn apply(sut: Setup, model: &Model, t: Transition) -> Setup {
+    fn apply(sut: Setup, model: &Model, transition: Transition) -> Setup {
         {
-            let c = sut.client();
-            let b = |i: usize| {
+            let client = sut.client();
+            let address = |i: usize| {
                 if i == CB {
                     sut.cb.clone()
                 } else {
                     sut.bank(i).clone()
                 }
             };
-            let got = match t {
+            let got = match transition {
                 Transition::Deposit { bank, amount } => {
-                    outcome(c.try_deposit(&b(bank), &amount).map(unit))
+                    outcome(client.try_deposit(&address(bank), &amount).map(unit))
                 }
                 Transition::Withdraw { bank, amount } => {
-                    outcome(c.try_withdraw(&b(bank), &amount).map(unit))
+                    outcome(client.try_withdraw(&address(bank), &amount).map(unit))
                 }
                 Transition::Submit {
                     from,
                     to,
                     amount,
                     priority,
-                } => outcome(c.try_submit(&b(from), &b(to), &amount, &priority)),
-                Transition::Revoke { id } => outcome(c.try_revoke(&id).map(unit)),
+                } => outcome(client.try_submit(&address(from), &address(to), &amount, &priority)),
+                Transition::Revoke { id } => outcome(client.try_revoke(&id).map(unit)),
                 Transition::Reprioritise { id, priority } => {
-                    outcome(c.try_reprioritise(&id, &priority).map(unit))
+                    outcome(client.try_reprioritise(&id, &priority).map(unit))
                 }
-                Transition::Expire { id } => outcome(c.try_expire(&id).map(unit)),
+                Transition::Expire { id } => outcome(client.try_expire(&id).map(unit)),
                 Transition::Tick { .. } => {
                     // The model has already moved its clock (A19).
                     sut.at(model.now);
                     Ok(0)
                 }
                 Transition::SetCollateral { bank, value } => {
-                    outcome(c.try_set_collateral(&b(bank), &value).map(unit))
+                    outcome(client.try_set_collateral(&address(bank), &value).map(unit))
                 }
                 Transition::OpenRepo { bank, amount } => {
-                    outcome(c.try_open_repo(&b(bank), &amount))
+                    outcome(client.try_open_repo(&address(bank), &amount))
                 }
                 Transition::Repay {
                     actor,
                     repo,
                     amount,
-                } => outcome(c.try_repay(&b(actor), &repo, &amount).map(unit)),
+                } => outcome(client.try_repay(&address(actor), &repo, &amount).map(unit)),
                 Transition::ConvertOverdue { repo } => {
-                    outcome(c.try_convert_overdue(&repo).map(unit))
+                    outcome(client.try_convert_overdue(&repo).map(unit))
                 }
             };
-            assert_eq!(got, model.last, "outcome of {t:?}");
+            assert_eq!(got, model.last, "outcome of {transition:?}");
 
-            for i in 0..N {
+            for i in 0..BANKS {
                 assert_eq!(
-                    c.balance(sut.bank(i)),
+                    client.balance(sut.bank(i)),
                     model.balances[i],
                     "balance of bank {i}"
                 );
@@ -587,7 +593,11 @@ impl StateMachineTest for SettlementMachine {
                     model.holding[i],
                     "holding of bank {i}"
                 );
-                assert_eq!(c.credit(sut.bank(i)), model.credit(i), "credit of bank {i}");
+                assert_eq!(
+                    client.credit(sut.bank(i)),
+                    model.credit(i),
+                    "credit of bank {i}"
+                );
                 for priority in [Priority::Urgent, Priority::Normal] {
                     assert_eq!(
                         sut.queue(i, priority),
@@ -596,40 +606,45 @@ impl StateMachineTest for SettlementMachine {
                     );
                 }
             }
-            for (id, p) in &model.payments {
+            for (id, payment) in &model.payments {
                 let expected = Payment {
                     id: *id,
-                    from: b(p.from),
-                    to: b(p.to),
-                    amount: p.amount,
-                    priority: p.priority,
-                    submitted_at: p.submitted_at,
-                    status: p.status,
-                    settled_at: p.settled_at,
+                    from: address(payment.from),
+                    to: address(payment.to),
+                    amount: payment.amount,
+                    priority: payment.priority,
+                    submitted_at: payment.submitted_at,
+                    status: payment.status,
+                    settled_at: payment.settled_at,
                 };
-                assert_eq!(c.payment(id), Some(expected), "payment {id}");
+                assert_eq!(client.payment(id), Some(expected), "payment {id}");
             }
-            assert_eq!(c.payment(&model.next_id), None, "payment {}", model.next_id);
+            assert_eq!(
+                client.payment(&model.next_id),
+                None,
+                "payment {}",
+                model.next_id
+            );
             let queued = model
                 .payments
                 .values()
-                .filter(|p| p.status == Status::Queued)
+                .filter(|payment| payment.status == Status::Queued)
                 .count();
-            assert_eq!(c.queued_count() as usize, queued, "queued_count");
-            for (id, r) in model.repos.iter().enumerate() {
+            assert_eq!(client.queued_count() as usize, queued, "queued_count");
+            for (id, repo) in model.repos.iter().enumerate() {
                 let expected = Repo {
                     id: id as u64,
-                    bank: b(r.bank),
-                    amount: r.amount,
-                    outstanding: r.outstanding,
-                    opened_at: r.opened_at,
-                    status: r.status,
-                    rate_bps: r.rate_bps,
+                    bank: address(repo.bank),
+                    amount: repo.amount,
+                    outstanding: repo.outstanding,
+                    opened_at: repo.opened_at,
+                    status: repo.status,
+                    rate_bps: repo.rate_bps,
                 };
-                assert_eq!(c.repo(&(id as u64)), Some(expected), "repo {id}");
+                assert_eq!(client.repo(&(id as u64)), Some(expected), "repo {id}");
             }
             assert_eq!(
-                c.repo(&(model.repos.len() as u64)),
+                client.repo(&(model.repos.len() as u64)),
                 None,
                 "repo {}",
                 model.repos.len()

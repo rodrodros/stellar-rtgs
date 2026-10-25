@@ -20,13 +20,14 @@ use soroban_sdk::{
 use crate::tests::support::{default_config, Setup};
 use crate::*;
 
-const N: Priority = Priority::Normal;
+const NORMAL: Priority = Priority::Normal;
 
 /// Every ledger entry this contract owns (its instance and its own data), with the
 /// ledger it lives until.
-fn our_entries(s: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
-    let ours = ScAddress::from(&s.contract);
-    s.env
+fn our_entries(setup: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
+    let ours = ScAddress::from(&setup.contract);
+    setup
+        .env
         .to_ledger_snapshot()
         .ledger_entries
         .iter()
@@ -41,8 +42,8 @@ fn our_entries(s: &Setup) -> std::vec::Vec<(LedgerKey, u32)> {
 }
 
 /// Asserts that every entry the contract owns lives until exactly `until`.
-fn assert_every_entry_lives_until(s: &Setup, until: u32) {
-    let entries = our_entries(s);
+fn assert_every_entry_lives_until(setup: &Setup, until: u32) {
+    let entries = our_entries(setup);
     assert!(!entries.is_empty());
     for (key, live_until) in entries {
         assert_eq!(live_until, until, "entry {key:?}");
@@ -53,33 +54,33 @@ fn assert_every_entry_lives_until(s: &Setup, until: u32) {
 /// (about 30 days) from the ledger of the deposit.
 #[test]
 fn a_deposit_extends_the_instance_and_the_balance_to_thirty_days() {
-    let s = Setup::new(2, 1_000);
-    s.env.ledger().set_sequence_number(1_000);
+    let setup = Setup::new(2, 1_000);
+    setup.env.ledger().set_sequence_number(1_000);
 
-    s.client().deposit(s.bank(0), &600);
+    setup.client().deposit(setup.bank(0), &600);
 
-    assert_every_entry_lives_until(&s, 1_000 + BUMP_AMOUNT);
+    assert_every_entry_lives_until(&setup, 1_000 + BUMP_AMOUNT);
 }
 
 /// An entry is extended again once its remaining TTL falls below `BUMP_THRESHOLD`, and
 /// not before, so a busy entry is not rewritten on every call.
 #[test]
 fn an_entry_is_extended_again_only_below_the_threshold() {
-    let s = Setup::new(1, 1_000);
-    let c = s.client();
-    s.env.ledger().set_sequence_number(1_000);
-    c.deposit(s.bank(0), &100);
+    let setup = Setup::new(1, 1_000);
+    let client = setup.client();
+    setup.env.ledger().set_sequence_number(1_000);
+    client.deposit(setup.bank(0), &100);
 
     // One ledger later the TTL is still above the threshold: unchanged.
-    s.env.ledger().set_sequence_number(1_001);
-    c.deposit(s.bank(0), &100);
-    assert_every_entry_lives_until(&s, 1_000 + BUMP_AMOUNT);
+    setup.env.ledger().set_sequence_number(1_001);
+    client.deposit(setup.bank(0), &100);
+    assert_every_entry_lives_until(&setup, 1_000 + BUMP_AMOUNT);
 
     // Once the remaining TTL is below the threshold, the next write extends it again.
     let later = 1_000 + (BUMP_AMOUNT - BUMP_THRESHOLD) + 1;
-    s.env.ledger().set_sequence_number(later);
-    c.deposit(s.bank(0), &100);
-    assert_every_entry_lives_until(&s, later + BUMP_AMOUNT);
+    setup.env.ledger().set_sequence_number(later);
+    client.deposit(setup.bank(0), &100);
+    assert_every_entry_lives_until(&setup, later + BUMP_AMOUNT);
 }
 
 /// Every entry point extends every entry it writes: payments, queues, credit, repos and
@@ -87,33 +88,33 @@ fn an_entry_is_extended_again_only_below_the_threshold() {
 /// afterwards every entry the contract owns lives `BUMP_AMOUNT` ledgers from it.
 #[test]
 fn every_entry_point_extends_every_entry_it_writes() {
-    let s = Setup::new(3, 1_000);
-    let c = s.client();
-    s.env.ledger().set_sequence_number(5_000);
-    s.at(1_000);
+    let setup = Setup::new(3, 1_000);
+    let client = setup.client();
+    setup.env.ledger().set_sequence_number(5_000);
+    setup.at(1_000);
 
-    c.deposit(s.bank(0), &500);
-    c.withdraw(s.bank(0), &100);
-    c.submit(s.bank(0), s.bank(1), &50, &N);
-    let revoked = c.submit(s.bank(1), s.bank(2), &900, &N);
-    let moved = c.submit(s.bank(1), s.bank(2), &800, &N);
-    let expired = c.submit(s.bank(2), s.bank(0), &700, &N);
-    c.revoke(&revoked);
-    c.reprioritise(&moved, &Priority::Urgent);
-    c.set_collateral(s.bank(2), &300);
-    let repo = c.open_repo(s.bank(2), &200);
-    c.repay(s.bank(2), &repo, &50);
-    let overdue = c.open_repo(s.bank(2), &50);
-    s.at(1_000
+    client.deposit(setup.bank(0), &500);
+    client.withdraw(setup.bank(0), &100);
+    client.submit(setup.bank(0), setup.bank(1), &50, &NORMAL);
+    let revoked = client.submit(setup.bank(1), setup.bank(2), &900, &NORMAL);
+    let moved = client.submit(setup.bank(1), setup.bank(2), &800, &NORMAL);
+    let expired = client.submit(setup.bank(2), setup.bank(0), &700, &NORMAL);
+    client.revoke(&revoked);
+    client.reprioritise(&moved, &Priority::Urgent);
+    client.set_collateral(setup.bank(2), &300);
+    let repo = client.open_repo(setup.bank(2), &200);
+    client.repay(setup.bank(2), &repo, &50);
+    let overdue = client.open_repo(setup.bank(2), &50);
+    setup.at(1_000
         + default_config()
             .expiry_secs
             .max(default_config().repo_term_secs)
         + 1);
-    c.expire(&expired);
-    c.convert_overdue(&overdue);
+    client.expire(&expired);
+    client.convert_overdue(&overdue);
 
-    assert_every_entry_lives_until(&s, 5_000 + BUMP_AMOUNT);
-    s.assert_conserved();
+    assert_every_entry_lives_until(&setup, 5_000 + BUMP_AMOUNT);
+    setup.assert_conserved();
 }
 
 /// The queue cap the cost test holds the contract to: C-SC-204's ceiling of about 66
@@ -143,9 +144,9 @@ const WASM: &str = concat!(
 #[test]
 fn an_offset_over_a_full_queue_fits_in_one_transaction() {
     let wasm =
-        std::fs::read(WASM).unwrap_or_else(|e| panic!("{WASM}: {e}; run `make build` first"));
+        std::fs::read(WASM).unwrap_or_else(|err| panic!("{WASM}: {err}; run `make build` first"));
     let cap = QUEUE_CAP_UNDER_TEST;
-    let s = Setup::from_wasm(
+    let setup = Setup::from_wasm(
         &wasm,
         cap as usize,
         Config {
@@ -153,23 +154,23 @@ fn an_offset_over_a_full_queue_fits_in_one_transaction() {
             ..default_config()
         },
     );
-    let c = s.client();
+    let client = setup.client();
     let n = cap as usize;
     for i in 0..n {
         let amount = if i == 0 { 11 } else { 10 };
-        c.submit(s.bank(i), s.bank((i + 1) % n), &amount, &N);
+        client.submit(setup.bank(i), setup.bank((i + 1) % n), &amount, &NORMAL);
     }
-    assert_eq!(c.queued_count(), cap);
-    s.mint(s.bank(0), 1);
+    assert_eq!(client.queued_count(), cap);
+    setup.mint(setup.bank(0), 1);
 
-    c.deposit(s.bank(0), &1);
+    client.deposit(setup.bank(0), &1);
 
-    let used = s.env.cost_estimate().resources();
-    assert_eq!(c.queued_count(), 0);
+    let used = setup.env.cost_estimate().resources();
+    assert_eq!(client.queued_count(), 0);
     let mut expected = std::vec![0_i128; n];
     expected[1] = 1;
-    assert_eq!(s.balances(), expected);
-    s.assert_conserved();
+    assert_eq!(setup.balances(), expected);
+    setup.assert_conserved();
     // Mainnet's per-transaction limits.
     assert!(used.write_entries <= 200, "{used:?}");
     assert!(used.instructions <= 400_000_000, "{used:?}");

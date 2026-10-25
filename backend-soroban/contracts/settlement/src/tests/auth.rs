@@ -17,8 +17,8 @@ use soroban_sdk::{
 use super::support::{default_config, Setup};
 use crate::{Error, Priority, RepoStatus, Status};
 
-const N: Priority = Priority::Normal;
-const U: Priority = Priority::Urgent;
+const NORMAL: Priority = Priority::Normal;
+const URGENT: Priority = Priority::Urgent;
 
 /// One authorized call of `function` on `contract`, with its sub-invocations.
 pub fn call(
@@ -45,10 +45,10 @@ fn auth_failure() -> soroban_sdk::Error {
 
 /// Invokes `function(args)` on the contract and returns the raw host error it fails with.
 /// The generated client's `try_` methods reduce every host error to `Abort`.
-fn host_error(s: &Setup, function: &str, args: Vec<Val>) -> soroban_sdk::Error {
-    match s.env.try_invoke_contract::<Val, soroban_sdk::Error>(
-        &s.contract,
-        &Symbol::new(&s.env, function),
+fn host_error(setup: &Setup, function: &str, args: Vec<Val>) -> soroban_sdk::Error {
+    match setup.env.try_invoke_contract::<Val, soroban_sdk::Error>(
+        &setup.contract,
+        &Symbol::new(&setup.env, function),
         args,
     ) {
         Err(Ok(error)) => error,
@@ -59,16 +59,16 @@ fn host_error(s: &Setup, function: &str, args: Vec<Val>) -> soroban_sdk::Error {
 /// Mocks exactly one authorization: `who` signs `function(args)` on the contract, with
 /// `sub_invokes` beneath it. Nothing else is authorized.
 fn authorize(
-    s: &Setup,
+    setup: &Setup,
     who: &Address,
     function: &str,
     args: Vec<Val>,
     sub_invokes: &[MockAuthInvoke],
 ) {
-    s.env.mock_auths(&[MockAuth {
+    setup.env.mock_auths(&[MockAuth {
         address: who,
         invoke: &MockAuthInvoke {
-            contract: &s.contract,
+            contract: &setup.contract,
             fn_name: function,
             args,
             sub_invokes,
@@ -83,23 +83,23 @@ fn authorize(
 /// transfer the contract makes on the bank's behalf.
 #[test]
 fn deposit_is_authorized_by_the_bank_for_itself_and_the_transfer() {
-    let s = Setup::new(1, 1_000);
-    s.client().deposit(s.bank(0), &600);
-    let e = &s.env;
+    let setup = Setup::new(1, 1_000);
+    setup.client().deposit(setup.bank(0), &600);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
+            setup.bank(0).clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "deposit",
-                (s.bank(0).clone(), 600_i128).into_val(e),
+                (setup.bank(0).clone(), 600_i128).into_val(env),
                 std::vec![call(
-                    e,
-                    &s.token,
+                    env,
+                    &setup.token,
                     "transfer",
-                    (s.bank(0).clone(), s.contract.clone(), 600_i128).into_val(e),
+                    (setup.bank(0).clone(), setup.contract.clone(), 600_i128).into_val(env),
                     std::vec![],
                 )],
             )
@@ -111,42 +111,42 @@ fn deposit_is_authorized_by_the_bank_for_itself_and_the_transfer() {
 /// moves; with exactly the bank's tree it succeeds.
 #[test]
 fn deposit_without_the_banks_authorization_fails() {
-    let s = Setup::strict(1, 1_000);
-    let e = &s.env;
-    let args: Vec<Val> = (s.bank(0).clone(), 600_i128).into_val(e);
+    let setup = Setup::strict(1, 1_000);
+    let env = &setup.env;
+    let args: Vec<Val> = (setup.bank(0).clone(), 600_i128).into_val(env);
 
-    assert_eq!(host_error(&s, "deposit", args.clone()), auth_failure());
-    assert_eq!(s.token().balance(s.bank(0)), 1_000);
-    assert_eq!(s.token().balance(&s.contract), 0);
-    assert_eq!(s.client().balance(s.bank(0)), 0);
+    assert_eq!(host_error(&setup, "deposit", args.clone()), auth_failure());
+    assert_eq!(setup.token().balance(setup.bank(0)), 1_000);
+    assert_eq!(setup.token().balance(&setup.contract), 0);
+    assert_eq!(setup.client().balance(setup.bank(0)), 0);
 
     let transfer = MockAuthInvoke {
-        contract: &s.token,
+        contract: &setup.token,
         fn_name: "transfer",
-        args: (s.bank(0).clone(), s.contract.clone(), 600_i128).into_val(e),
+        args: (setup.bank(0).clone(), setup.contract.clone(), 600_i128).into_val(env),
         sub_invokes: &[],
     };
-    authorize(&s, s.bank(0), "deposit", args, &[transfer]);
-    s.client().deposit(s.bank(0), &600);
-    assert_eq!(s.client().balance(s.bank(0)), 600);
+    authorize(&setup, setup.bank(0), "deposit", args, &[transfer]);
+    setup.client().deposit(setup.bank(0), &600);
+    assert_eq!(setup.client().balance(setup.bank(0)), 600);
 }
 
 /// SC-A11-12. S6 for A11: the bank authorizes `withdraw` alone; the contract authorizes
 /// its own transfer out as the direct caller (C-SC-074).
 #[test]
 fn withdraw_is_authorized_by_the_bank_alone() {
-    let s = Setup::funded(&[1_000]);
-    s.client().withdraw(s.bank(0), &300);
-    let e = &s.env;
+    let setup = Setup::funded(&[1_000]);
+    setup.client().withdraw(setup.bank(0), &300);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
+            setup.bank(0).clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "withdraw",
-                (s.bank(0).clone(), 300_i128).into_val(e),
+                (setup.bank(0).clone(), 300_i128).into_val(env),
                 std::vec![],
             )
         )]
@@ -157,18 +157,18 @@ fn withdraw_is_authorized_by_the_bank_alone() {
 /// nothing moves; with exactly the bank's tree it succeeds.
 #[test]
 fn withdraw_without_the_banks_authorization_fails() {
-    let s = Setup::funded(&[1_000]);
-    s.env.set_auths(&[]);
-    let c = s.client();
-    let args: Vec<Val> = (s.bank(0).clone(), 300_i128).into_val(&s.env);
+    let setup = Setup::funded(&[1_000]);
+    setup.env.set_auths(&[]);
+    let client = setup.client();
+    let args: Vec<Val> = (setup.bank(0).clone(), 300_i128).into_val(&setup.env);
 
-    assert_eq!(host_error(&s, "withdraw", args.clone()), auth_failure());
-    assert_eq!(c.balance(s.bank(0)), 1_000);
-    assert_eq!(s.token().balance(&s.contract), 1_000);
+    assert_eq!(host_error(&setup, "withdraw", args.clone()), auth_failure());
+    assert_eq!(client.balance(setup.bank(0)), 1_000);
+    assert_eq!(setup.token().balance(&setup.contract), 1_000);
 
-    authorize(&s, s.bank(0), "withdraw", args, &[]);
-    c.withdraw(s.bank(0), &300);
-    assert_eq!(c.balance(s.bank(0)), 700);
+    authorize(&setup, setup.bank(0), "withdraw", args, &[]);
+    client.withdraw(setup.bank(0), &300);
+    assert_eq!(client.balance(setup.bank(0)), 700);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -178,18 +178,26 @@ fn withdraw_without_the_banks_authorization_fails() {
 /// the submission, and nothing else, even when the payment settles at once.
 #[test]
 fn submit_is_authorized_by_the_sender_alone() {
-    let s = Setup::funded(&[100, 0]);
-    s.client().submit(s.bank(0), s.bank(1), &40, &N);
-    let e = &s.env;
+    let setup = Setup::funded(&[100, 0]);
+    setup
+        .client()
+        .submit(setup.bank(0), setup.bank(1), &40, &NORMAL);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
+            setup.bank(0).clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "submit",
-                (s.bank(0).clone(), s.bank(1).clone(), 40_i128, N).into_val(e),
+                (
+                    setup.bank(0).clone(),
+                    setup.bank(1).clone(),
+                    40_i128,
+                    NORMAL
+                )
+                    .into_val(env),
                 std::vec![],
             )
         )]
@@ -200,37 +208,49 @@ fn submit_is_authorized_by_the_sender_alone() {
 /// nothing is queued; with exactly the sender's tree it settles.
 #[test]
 fn submit_without_the_senders_authorization_fails() {
-    let s = Setup::funded(&[100, 0]);
-    s.env.set_auths(&[]);
-    let c = s.client();
-    let args: Vec<Val> = (s.bank(0).clone(), s.bank(1).clone(), 40_i128, N).into_val(&s.env);
+    let setup = Setup::funded(&[100, 0]);
+    setup.env.set_auths(&[]);
+    let client = setup.client();
+    let args: Vec<Val> = (
+        setup.bank(0).clone(),
+        setup.bank(1).clone(),
+        40_i128,
+        NORMAL,
+    )
+        .into_val(&setup.env);
 
-    assert_eq!(host_error(&s, "submit", args.clone()), auth_failure());
-    assert_eq!(s.balances(), std::vec![100, 0]);
-    assert_eq!(c.queued_count(), 0);
-    assert_eq!(c.payment(&0), None);
+    assert_eq!(host_error(&setup, "submit", args.clone()), auth_failure());
+    assert_eq!(setup.balances(), std::vec![100, 0]);
+    assert_eq!(client.queued_count(), 0);
+    assert_eq!(client.payment(&0), None);
 
-    authorize(&s, s.bank(0), "submit", args, &[]);
-    c.submit(s.bank(0), s.bank(1), &40, &N);
-    assert_eq!(s.balances(), std::vec![60, 40]);
+    authorize(&setup, setup.bank(0), "submit", args, &[]);
+    client.submit(setup.bank(0), setup.bank(1), &40, &NORMAL);
+    assert_eq!(setup.balances(), std::vec![60, 40]);
 }
 
 /// SC-A01-16. S6 for A1: the receiver's authorization cannot submit a payment that
 /// debits the sender; the sender's can.
 #[test]
 fn the_receiver_cannot_submit_a_payment_from_the_sender() {
-    let s = Setup::funded(&[100, 0]);
-    let c = s.client();
-    let args: Vec<Val> = (s.bank(0).clone(), s.bank(1).clone(), 40_i128, N).into_val(&s.env);
+    let setup = Setup::funded(&[100, 0]);
+    let client = setup.client();
+    let args: Vec<Val> = (
+        setup.bank(0).clone(),
+        setup.bank(1).clone(),
+        40_i128,
+        NORMAL,
+    )
+        .into_val(&setup.env);
 
-    authorize(&s, s.bank(1), "submit", args.clone(), &[]);
-    assert_eq!(host_error(&s, "submit", args.clone()), auth_failure());
-    assert_eq!(s.balances(), std::vec![100, 0]);
-    assert_eq!(c.payment(&0), None);
+    authorize(&setup, setup.bank(1), "submit", args.clone(), &[]);
+    assert_eq!(host_error(&setup, "submit", args.clone()), auth_failure());
+    assert_eq!(setup.balances(), std::vec![100, 0]);
+    assert_eq!(client.payment(&0), None);
 
-    authorize(&s, s.bank(0), "submit", args, &[]);
-    c.submit(s.bank(0), s.bank(1), &40, &N);
-    assert_eq!(s.balances(), std::vec![60, 40]);
+    authorize(&setup, setup.bank(0), "submit", args, &[]);
+    client.submit(setup.bank(0), setup.bank(1), &40, &NORMAL);
+    assert_eq!(setup.balances(), std::vec![60, 40]);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -239,16 +259,22 @@ fn the_receiver_cannot_submit_a_payment_from_the_sender() {
 /// SC-A06-10. S6 for A6: the sender authorizes the revocation.
 #[test]
 fn revoke_is_authorized_by_the_sender() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &60, &N);
-    c.revoke(&id);
-    let e = &s.env;
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    client.revoke(&id);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
-            call(e, &s.contract, "revoke", (id,).into_val(e), std::vec![])
+            setup.bank(0).clone(),
+            call(
+                env,
+                &setup.contract,
+                "revoke",
+                (id,).into_val(env),
+                std::vec![]
+            )
         )]
     );
 }
@@ -258,40 +284,40 @@ fn revoke_is_authorized_by_the_sender() {
 /// receiver's consent is neither needed nor enough (ADR-0016).
 #[test]
 fn only_the_sender_can_revoke() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &60, &N);
-    let args: Vec<Val> = (id,).into_val(&s.env);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    let args: Vec<Val> = (id,).into_val(&setup.env);
 
-    authorize(&s, s.bank(1), "revoke", args.clone(), &[]);
-    assert_eq!(host_error(&s, "revoke", args.clone()), auth_failure());
-    s.env.set_auths(&[]);
-    assert_eq!(host_error(&s, "revoke", args.clone()), auth_failure());
-    assert_eq!(c.payment(&id).unwrap().status, Status::Queued);
-    assert_eq!(c.queued_count(), 1);
+    authorize(&setup, setup.bank(1), "revoke", args.clone(), &[]);
+    assert_eq!(host_error(&setup, "revoke", args.clone()), auth_failure());
+    setup.env.set_auths(&[]);
+    assert_eq!(host_error(&setup, "revoke", args.clone()), auth_failure());
+    assert_eq!(client.payment(&id).unwrap().status, Status::Queued);
+    assert_eq!(client.queued_count(), 1);
 
-    authorize(&s, s.bank(0), "revoke", args, &[]);
-    c.revoke(&id);
-    assert_eq!(c.payment(&id).unwrap().status, Status::Revoked);
+    authorize(&setup, setup.bank(0), "revoke", args, &[]);
+    client.revoke(&id);
+    assert_eq!(client.payment(&id).unwrap().status, Status::Revoked);
 }
 
 /// SC-A08-08. S6 for A8: the sender authorizes the reprioritisation.
 #[test]
 fn reprioritise_is_authorized_by_the_sender() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &60, &N);
-    c.reprioritise(&id, &U);
-    let e = &s.env;
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    client.reprioritise(&id, &URGENT);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
+            setup.bank(0).clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "reprioritise",
-                (id, U).into_val(e),
+                (id, URGENT).into_val(env),
                 std::vec![],
             )
         )]
@@ -302,21 +328,27 @@ fn reprioritise_is_authorized_by_the_sender() {
 /// reprioritise, and nothing moves; the sender's can.
 #[test]
 fn only_the_sender_can_reprioritise() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &60, &N);
-    let args: Vec<Val> = (id, U).into_val(&s.env);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    let args: Vec<Val> = (id, URGENT).into_val(&setup.env);
 
-    authorize(&s, s.bank(1), "reprioritise", args.clone(), &[]);
-    assert_eq!(host_error(&s, "reprioritise", args.clone()), auth_failure());
-    s.env.set_auths(&[]);
-    assert_eq!(host_error(&s, "reprioritise", args.clone()), auth_failure());
-    assert_eq!(c.payment(&id).unwrap().priority, N);
-    assert_eq!(s.queue(0, N), std::vec![id]);
+    authorize(&setup, setup.bank(1), "reprioritise", args.clone(), &[]);
+    assert_eq!(
+        host_error(&setup, "reprioritise", args.clone()),
+        auth_failure()
+    );
+    setup.env.set_auths(&[]);
+    assert_eq!(
+        host_error(&setup, "reprioritise", args.clone()),
+        auth_failure()
+    );
+    assert_eq!(client.payment(&id).unwrap().priority, NORMAL);
+    assert_eq!(setup.queue(0, NORMAL), std::vec![id]);
 
-    authorize(&s, s.bank(0), "reprioritise", args, &[]);
-    c.reprioritise(&id, &U);
-    assert_eq!(s.queue(0, U), std::vec![id]);
+    authorize(&setup, setup.bank(0), "reprioritise", args, &[]);
+    client.reprioritise(&id, &URGENT);
+    assert_eq!(setup.queue(0, URGENT), std::vec![id]);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -326,33 +358,33 @@ fn only_the_sender_can_reprioritise() {
 /// authorization at all (ADR-0015; M1: attributed to `sys` whoever triggers it).
 #[test]
 fn expire_needs_no_authorization() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    let id = c.submit(s.bank(0), s.bank(1), &60, &N);
-    s.env.set_auths(&[]);
-    s.at(default_config().expiry_secs + 1);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    let id = client.submit(setup.bank(0), setup.bank(1), &60, &NORMAL);
+    setup.env.set_auths(&[]);
+    setup.at(default_config().expiry_secs + 1);
 
-    c.expire(&id);
+    client.expire(&id);
 
-    assert!(s.env.auths().is_empty());
-    assert_eq!(c.payment(&id).unwrap().status, Status::Expired);
+    assert!(setup.env.auths().is_empty());
+    assert_eq!(client.payment(&id).unwrap().status, Status::Expired);
 }
 
 /// SC-A20-09. S6: converting an overdue repo is a system step (ADR-0014); any keeper may
 /// trigger it with no authorization.
 #[test]
 fn convert_overdue_needs_no_authorization() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    s.env.set_auths(&[]);
-    s.at(default_config().repo_term_secs + 1);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.env.set_auths(&[]);
+    setup.at(default_config().repo_term_secs + 1);
 
-    c.convert_overdue(&id);
+    client.convert_overdue(&id);
 
-    assert!(s.env.auths().is_empty());
-    assert_eq!(c.repo(&id).unwrap().status, RepoStatus::Penalty);
+    assert!(setup.env.auths().is_empty());
+    assert_eq!(client.repo(&id).unwrap().status, RepoStatus::Penalty);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -361,18 +393,18 @@ fn convert_overdue_needs_no_authorization() {
 /// SC-A14-04. S6 for A14: the central bank authorizes `set_collateral`.
 #[test]
 fn set_collateral_is_authorized_by_the_central_bank() {
-    let s = Setup::new(1, 0);
-    s.client().set_collateral(s.bank(0), &100);
-    let e = &s.env;
+    let setup = Setup::new(1, 0);
+    setup.client().set_collateral(setup.bank(0), &100);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.cb.clone(),
+            setup.cb.clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "set_collateral",
-                (s.bank(0).clone(), 100_i128).into_val(e),
+                (setup.bank(0).clone(), 100_i128).into_val(env),
                 std::vec![],
             )
         )]
@@ -383,25 +415,25 @@ fn set_collateral_is_authorized_by_the_central_bank() {
 /// bank's collateral; the central bank's can.
 #[test]
 fn only_the_central_bank_can_set_collateral() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    let args: Vec<Val> = (s.bank(0).clone(), 100_i128).into_val(&s.env);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    let args: Vec<Val> = (setup.bank(0).clone(), 100_i128).into_val(&setup.env);
 
-    authorize(&s, s.bank(0), "set_collateral", args.clone(), &[]);
+    authorize(&setup, setup.bank(0), "set_collateral", args.clone(), &[]);
     assert_eq!(
-        host_error(&s, "set_collateral", args.clone()),
+        host_error(&setup, "set_collateral", args.clone()),
         auth_failure()
     );
-    s.env.set_auths(&[]);
+    setup.env.set_auths(&[]);
     assert_eq!(
-        host_error(&s, "set_collateral", args.clone()),
+        host_error(&setup, "set_collateral", args.clone()),
         auth_failure()
     );
-    assert_eq!(c.credit(s.bank(0)).coll, 0);
+    assert_eq!(client.credit(setup.bank(0)).coll, 0);
 
-    authorize(&s, &s.cb, "set_collateral", args, &[]);
-    c.set_collateral(s.bank(0), &100);
-    assert_eq!(c.credit(s.bank(0)).coll, 100);
+    authorize(&setup, &setup.cb, "set_collateral", args, &[]);
+    client.set_collateral(setup.bank(0), &100);
+    assert_eq!(client.credit(setup.bank(0)).coll, 100);
 }
 
 /// SC-A12-07. S6 for A12, D1: the central bank authorizes the repo, and in the same tree
@@ -409,25 +441,25 @@ fn only_the_central_bank_can_set_collateral() {
 /// The central bank's account is the SAC admin here, which is provisional (see `Setup`).
 #[test]
 fn open_repo_is_authorized_by_the_central_bank_with_the_mint() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    c.open_repo(s.bank(0), &60);
-    let e = &s.env;
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    client.open_repo(setup.bank(0), &60);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.cb.clone(),
+            setup.cb.clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "open_repo",
-                (s.bank(0).clone(), 60_i128).into_val(e),
+                (setup.bank(0).clone(), 60_i128).into_val(env),
                 std::vec![call(
-                    e,
-                    &s.token,
+                    env,
+                    &setup.token,
                     "mint",
-                    (s.contract.clone(), 60_i128).into_val(e),
+                    (setup.contract.clone(), 60_i128).into_val(env),
                     std::vec![],
                 )],
             )
@@ -439,57 +471,63 @@ fn open_repo_is_authorized_by_the_central_bank_with_the_mint() {
 /// repo, and nothing is minted; the central bank's tree with the mint can.
 #[test]
 fn only_the_central_bank_can_open_a_repo() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let e = &s.env;
-    let args: Vec<Val> = (s.bank(0).clone(), 60_i128).into_val(e);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let env = &setup.env;
+    let args: Vec<Val> = (setup.bank(0).clone(), 60_i128).into_val(env);
     let mint = MockAuthInvoke {
-        contract: &s.token,
+        contract: &setup.token,
         fn_name: "mint",
-        args: (s.contract.clone(), 60_i128).into_val(e),
+        args: (setup.contract.clone(), 60_i128).into_val(env),
         sub_invokes: &[],
     };
 
     authorize(
-        &s,
-        s.bank(0),
+        &setup,
+        setup.bank(0),
         "open_repo",
         args.clone(),
         core::slice::from_ref(&mint),
     );
-    assert_eq!(host_error(&s, "open_repo", args.clone()), auth_failure());
-    s.env.set_auths(&[]);
-    assert_eq!(host_error(&s, "open_repo", args.clone()), auth_failure());
-    assert_eq!(s.token().balance(&s.contract), 0);
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(c.credit(s.bank(0)).cr, 0);
-    assert_eq!(c.repo(&0), None);
+    assert_eq!(
+        host_error(&setup, "open_repo", args.clone()),
+        auth_failure()
+    );
+    setup.env.set_auths(&[]);
+    assert_eq!(
+        host_error(&setup, "open_repo", args.clone()),
+        auth_failure()
+    );
+    assert_eq!(setup.token().balance(&setup.contract), 0);
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(client.credit(setup.bank(0)).cr, 0);
+    assert_eq!(client.repo(&0), None);
 
-    authorize(&s, &s.cb, "open_repo", args, &[mint]);
-    c.open_repo(s.bank(0), &60);
-    assert_eq!(c.balance(s.bank(0)), 60);
+    authorize(&setup, &setup.cb, "open_repo", args, &[mint]);
+    client.open_repo(setup.bank(0), &60);
+    assert_eq!(client.balance(setup.bank(0)), 60);
 }
 
 /// SC-A13-09. S6 for A13: the repaying bank authorizes `repay` alone; the contract burns
 /// its own tokens as the direct caller, so the burn needs no one else's authorization.
 #[test]
 fn repay_is_authorized_by_the_actor_alone() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    c.repay(s.bank(0), &id, &20);
-    let e = &s.env;
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    client.repay(setup.bank(0), &id, &20);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.bank(0).clone(),
+            setup.bank(0).clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "repay",
-                (s.bank(0).clone(), id, 20_i128).into_val(e),
+                (setup.bank(0).clone(), id, 20_i128).into_val(env),
                 std::vec![],
             )
         )]
@@ -500,21 +538,21 @@ fn repay_is_authorized_by_the_actor_alone() {
 /// alone, and the bank authorizes nothing.
 #[test]
 fn repay_by_the_central_bank_is_authorized_by_the_central_bank_alone() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    c.repay(&s.cb, &id, &20);
-    let e = &s.env;
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    client.repay(&setup.cb, &id, &20);
+    let env = &setup.env;
     assert_eq!(
-        e.auths(),
+        env.auths(),
         std::vec![(
-            s.cb.clone(),
+            setup.cb.clone(),
             call(
-                e,
-                &s.contract,
+                env,
+                &setup.contract,
                 "repay",
-                (s.cb.clone(), id, 20_i128).into_val(e),
+                (setup.cb.clone(), id, 20_i128).into_val(env),
                 std::vec![],
             )
         )]
@@ -525,38 +563,38 @@ fn repay_by_the_central_bank_is_authorized_by_the_central_bank_alone() {
 /// actor's authorization fails, and nothing is burned; with the actor's tree it succeeds.
 #[test]
 fn repay_without_the_actors_authorization_fails() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
-    s.env.set_auths(&[]);
-    let by_bank: Vec<Val> = (s.bank(0).clone(), id, 20_i128).into_val(&s.env);
-    let by_cb: Vec<Val> = (s.cb.clone(), id, 20_i128).into_val(&s.env);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
+    setup.env.set_auths(&[]);
+    let by_bank: Vec<Val> = (setup.bank(0).clone(), id, 20_i128).into_val(&setup.env);
+    let by_cb: Vec<Val> = (setup.cb.clone(), id, 20_i128).into_val(&setup.env);
 
-    assert_eq!(host_error(&s, "repay", by_bank.clone()), auth_failure());
-    authorize(&s, s.bank(0), "repay", by_cb.clone(), &[]);
-    assert_eq!(host_error(&s, "repay", by_cb.clone()), auth_failure());
-    assert_eq!(s.token().balance(&s.contract), 60);
-    assert_eq!(c.balance(s.bank(0)), 60);
-    assert_eq!(c.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(host_error(&setup, "repay", by_bank.clone()), auth_failure());
+    authorize(&setup, setup.bank(0), "repay", by_cb.clone(), &[]);
+    assert_eq!(host_error(&setup, "repay", by_cb.clone()), auth_failure());
+    assert_eq!(setup.token().balance(&setup.contract), 60);
+    assert_eq!(client.balance(setup.bank(0)), 60);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 60);
 
-    authorize(&s, s.bank(0), "repay", by_bank, &[]);
-    c.repay(s.bank(0), &id, &20);
-    assert_eq!(c.repo(&id).unwrap().outstanding, 40);
+    authorize(&setup, setup.bank(0), "repay", by_bank, &[]);
+    client.repay(setup.bank(0), &id, &20);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 40);
 }
 
 /// SC-A13-04. S6: a third party that authorizes its own call is still refused by the
 /// contract's rule, with `NotAuthorized`, and nothing changes.
 #[test]
 fn an_authorized_third_party_is_still_not_authorized_to_repay() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    c.set_collateral(s.bank(0), &100);
-    let id = c.open_repo(s.bank(0), &60);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    client.set_collateral(setup.bank(0), &100);
+    let id = client.open_repo(setup.bank(0), &60);
     assert_eq!(
-        c.try_repay(s.bank(1), &id, &20),
+        client.try_repay(setup.bank(1), &id, &20),
         Err(Ok(Error::NotAuthorized))
     );
-    assert_eq!(c.repo(&id).unwrap().outstanding, 60);
-    assert_eq!(c.balance(s.bank(0)), 60);
+    assert_eq!(client.repo(&id).unwrap().outstanding, 60);
+    assert_eq!(client.balance(setup.bank(0)), 60);
 }

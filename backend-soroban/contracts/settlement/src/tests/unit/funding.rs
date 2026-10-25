@@ -24,10 +24,10 @@ use crate::*;
 /// credit authority (S6 for A12–A14; ADR-0011).
 #[test]
 fn the_constructor_records_the_configuration_and_the_central_bank() {
-    let s = Setup::new(0, 0);
-    let c = s.client();
-    assert_eq!(c.config(), default_config());
-    assert_eq!(c.central_bank(), s.cb);
+    let setup = Setup::new(0, 0);
+    let client = setup.client();
+    assert_eq!(client.config(), default_config());
+    assert_eq!(client.central_bank(), setup.cb);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -37,23 +37,23 @@ fn the_constructor_records_the_configuration_and_the_central_bank() {
 /// settlement balance by the same amount (S1, S4; ADR-0003, ADR-0004).
 #[test]
 fn deposit_moves_tokens_into_the_contract_and_credits_the_bank() {
-    let s = Setup::new(1, 1_000);
-    let c = s.client();
+    let setup = Setup::new(1, 1_000);
+    let client = setup.client();
 
-    c.deposit(s.bank(0), &600);
+    client.deposit(setup.bank(0), &600);
 
     // Our one event: the SAC's transfer event comes from the token contract.
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(Deposited {
-            bank: s.bank(0).clone(),
+        setup.our_events(),
+        std::vec![setup.ev(Deposited {
+            bank: setup.bank(0).clone(),
             amount: 600,
         })]
     );
-    assert_eq!(s.token().balance(s.bank(0)), 400);
-    assert_eq!(s.token().balance(&s.contract), 600);
-    assert_eq!(c.balance(s.bank(0)), 600);
-    s.assert_conserved();
+    assert_eq!(setup.token().balance(setup.bank(0)), 400);
+    assert_eq!(setup.token().balance(&setup.contract), 600);
+    assert_eq!(client.balance(setup.bank(0)), 600);
+    setup.assert_conserved();
 }
 
 /// SC-A11-02. A11's guard at its boundary: depositing exactly what the bank holds
@@ -61,34 +61,34 @@ fn deposit_moves_tokens_into_the_contract_and_credits_the_bank() {
 /// sum, not one balance (review finding H2).
 #[test]
 fn deposit_of_exactly_the_banks_holding_succeeds_and_deposits_add_up() {
-    let s = Setup::new(2, 1_000);
-    let c = s.client();
-    c.deposit(s.bank(0), &400);
-    c.deposit(s.bank(1), &250);
-    c.deposit(s.bank(0), &600);
-    c.deposit(s.bank(1), &50);
-    assert_eq!(s.balances(), std::vec![1_000, 300]);
-    assert_eq!(s.token().balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(s.bank(1)), 700);
-    assert_eq!(s.token().balance(&s.contract), 1_300);
-    s.assert_conserved();
+    let setup = Setup::new(2, 1_000);
+    let client = setup.client();
+    client.deposit(setup.bank(0), &400);
+    client.deposit(setup.bank(1), &250);
+    client.deposit(setup.bank(0), &600);
+    client.deposit(setup.bank(1), &50);
+    assert_eq!(setup.balances(), std::vec![1_000, 300]);
+    assert_eq!(setup.token().balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(setup.bank(1)), 700);
+    assert_eq!(setup.token().balance(&setup.contract), 1_300);
+    setup.assert_conserved();
 }
 
 /// SC-A11-03. A11's guard `x > 0`: a zero or negative deposit is refused with
 /// `InvalidAmount`, and nothing moves.
 #[test]
 fn deposit_of_zero_or_a_negative_amount_is_refused() {
-    let s = Setup::new(1, 1_000);
-    let c = s.client();
+    let setup = Setup::new(1, 1_000);
+    let client = setup.client();
     for amount in [0, -1, i128::MIN] {
         assert_eq!(
-            c.try_deposit(s.bank(0), &amount),
+            client.try_deposit(setup.bank(0), &amount),
             Err(Ok(Error::InvalidAmount))
         );
     }
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(s.bank(0)), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(setup.bank(0)), 1_000);
+    setup.assert_conserved();
 }
 
 /// SC-A11-04. A11's guard `bal − x ≥ 0` on the trustline side: depositing one more than
@@ -96,15 +96,15 @@ fn deposit_of_zero_or_a_negative_amount_is_refused() {
 /// `TokenTransferFailed`, and nothing moves.
 #[test]
 fn deposit_of_one_more_than_the_bank_holds_is_refused() {
-    let s = Setup::new(1, 1_000);
-    let c = s.client();
+    let setup = Setup::new(1, 1_000);
+    let client = setup.client();
     assert_eq!(
-        c.try_deposit(s.bank(0), &1_001),
+        client.try_deposit(setup.bank(0), &1_001),
         Err(Ok(Error::TokenTransferFailed))
     );
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(s.bank(0)), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(setup.bank(0)), 1_000);
+    setup.assert_conserved();
 }
 
 /// SC-A11-05. A11 at the `i128` boundary: once the contract holds `i128::MAX`, one more unit cannot
@@ -112,27 +112,27 @@ fn deposit_of_one_more_than_the_bank_holds_is_refused() {
 /// internal balances can never overflow either (S1 bounds them by the tokens held).
 #[test]
 fn deposit_that_would_overflow_the_contracts_holding_is_refused_by_the_sac() {
-    let s = Setup::new(2, 0);
-    let c = s.client();
-    s.mint(s.bank(0), i128::MAX);
-    s.mint(s.bank(1), 1);
-    c.deposit(s.bank(0), &i128::MAX);
-    assert_eq!(c.balance(s.bank(0)), i128::MAX);
+    let setup = Setup::new(2, 0);
+    let client = setup.client();
+    setup.mint(setup.bank(0), i128::MAX);
+    setup.mint(setup.bank(1), 1);
+    client.deposit(setup.bank(0), &i128::MAX);
+    assert_eq!(client.balance(setup.bank(0)), i128::MAX);
 
     assert_eq!(
-        c.try_deposit(s.bank(1), &1),
+        client.try_deposit(setup.bank(1), &1),
         Err(Ok(Error::TokenTransferFailed))
     );
-    assert_eq!(c.balance(s.bank(1)), 0);
-    assert_eq!(s.token().balance(s.bank(1)), 1);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(1)), 0);
+    assert_eq!(setup.token().balance(setup.bank(1)), 1);
+    setup.assert_conserved();
 }
 
 /// SC-A11-14. §4.4's initial state: a bank that never deposited has `bal` = 0.
 #[test]
 fn balance_of_an_unknown_bank_is_zero() {
-    let s = Setup::new(1, 0);
-    assert_eq!(s.client().balance(s.bank(0)), 0);
+    let setup = Setup::new(1, 0);
+    assert_eq!(setup.client().balance(setup.bank(0)), 0);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -142,77 +142,77 @@ fn balance_of_an_unknown_bank_is_zero() {
 /// the contract (S1, S4; ADR-0004).
 #[test]
 fn withdraw_debits_the_bank_and_pays_the_tokens_out() {
-    let s = Setup::funded(&[1_000]);
-    let c = s.client();
+    let setup = Setup::funded(&[1_000]);
+    let client = setup.client();
 
-    c.withdraw(s.bank(0), &300);
+    client.withdraw(setup.bank(0), &300);
 
     assert_eq!(
-        s.our_events(),
-        std::vec![s.ev(Withdrawn {
-            bank: s.bank(0).clone(),
+        setup.our_events(),
+        std::vec![setup.ev(Withdrawn {
+            bank: setup.bank(0).clone(),
             amount: 300,
         })]
     );
-    assert_eq!(c.balance(s.bank(0)), 700);
-    assert_eq!(s.token().balance(s.bank(0)), 300);
-    assert_eq!(s.token().balance(&s.contract), 700);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 700);
+    assert_eq!(setup.token().balance(setup.bank(0)), 300);
+    assert_eq!(setup.token().balance(&setup.contract), 700);
+    setup.assert_conserved();
 }
 
 /// SC-A11-07. A11's guard at its boundary: withdrawing exactly the balance leaves 0,
 /// including at `i128::MAX` (S2).
 #[test]
 fn withdraw_of_exactly_the_balance_leaves_zero_even_at_i128_max() {
-    let s = Setup::new(1, 0);
-    let c = s.client();
-    s.mint(s.bank(0), i128::MAX);
-    c.deposit(s.bank(0), &i128::MAX);
+    let setup = Setup::new(1, 0);
+    let client = setup.client();
+    setup.mint(setup.bank(0), i128::MAX);
+    client.deposit(setup.bank(0), &i128::MAX);
 
-    c.withdraw(s.bank(0), &i128::MAX);
+    client.withdraw(setup.bank(0), &i128::MAX);
 
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(s.bank(0)), i128::MAX);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(setup.bank(0)), i128::MAX);
+    setup.assert_conserved();
 }
 
 /// SC-A11-08. Withdrawing one more than the balance is refused with `InsufficientFunds`,
 /// and nothing moves (S2: no credit line, ADR-0011).
 #[test]
 fn withdraw_of_one_more_than_the_balance_is_refused() {
-    let s = Setup::funded(&[1_000]);
-    let c = s.client();
+    let setup = Setup::funded(&[1_000]);
+    let client = setup.client();
     assert_eq!(
-        c.try_withdraw(s.bank(0), &1_001),
+        client.try_withdraw(setup.bank(0), &1_001),
         Err(Ok(Error::InsufficientFunds))
     );
-    assert_eq!(c.balance(s.bank(0)), 1_000);
-    assert_eq!(s.token().balance(&s.contract), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 1_000);
+    assert_eq!(setup.token().balance(&setup.contract), 1_000);
+    setup.assert_conserved();
 }
 
 /// SC-A11-09. A11's guard `x > 0`: a zero or negative withdrawal is refused with
 /// `InvalidAmount`.
 #[test]
 fn withdraw_of_zero_or_a_negative_amount_is_refused() {
-    let s = Setup::funded(&[1_000]);
-    let c = s.client();
+    let setup = Setup::funded(&[1_000]);
+    let client = setup.client();
     for amount in [0, -1, i128::MIN] {
         assert_eq!(
-            c.try_withdraw(s.bank(0), &amount),
+            client.try_withdraw(setup.bank(0), &amount),
             Err(Ok(Error::InvalidAmount))
         );
     }
-    assert_eq!(c.balance(s.bank(0)), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 1_000);
+    setup.assert_conserved();
 }
 
 /// SC-A11-10. A11's guard with `bal` = 0: a bank that never deposited cannot withdraw.
 #[test]
 fn withdraw_by_a_bank_with_no_balance_is_refused() {
-    let s = Setup::new(1, 1_000);
+    let setup = Setup::new(1, 1_000);
     assert_eq!(
-        s.client().try_withdraw(s.bank(0), &1),
+        setup.client().try_withdraw(setup.bank(0), &1),
         Err(Ok(Error::InsufficientFunds))
     );
 }
@@ -222,18 +222,18 @@ fn withdraw_by_a_bank_with_no_balance_is_refused() {
 /// uncovered.
 #[test]
 fn withdraw_may_spend_what_a_queued_payment_would_need() {
-    let s = Setup::funded(&[50, 0]);
-    let c = s.client();
-    let head = c.submit(s.bank(0), s.bank(1), &60, &Priority::Normal);
-    let behind = c.submit(s.bank(0), s.bank(1), &10, &Priority::Normal);
+    let setup = Setup::funded(&[50, 0]);
+    let client = setup.client();
+    let head = client.submit(setup.bank(0), setup.bank(1), &60, &Priority::Normal);
+    let behind = client.submit(setup.bank(0), setup.bank(1), &10, &Priority::Normal);
 
-    c.withdraw(s.bank(0), &45);
-    c.revoke(&head);
+    client.withdraw(setup.bank(0), &45);
+    client.revoke(&head);
 
-    assert_eq!(c.balance(s.bank(0)), 5);
-    assert_eq!(s.queue(0, Priority::Normal), std::vec![behind]);
-    assert_eq!(c.payment(&behind).unwrap().status, Status::Queued);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 5);
+    assert_eq!(setup.queue(0, Priority::Normal), std::vec![behind]);
+    assert_eq!(client.payment(&behind).unwrap().status, Status::Queued);
+    setup.assert_conserved();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -244,34 +244,34 @@ fn withdraw_may_spend_what_a_queued_payment_would_need() {
 /// `TokenTransferFailed`, and nothing moves (S1).
 #[test]
 fn a_deauthorized_bank_cannot_deposit() {
-    let s = Setup::new(1, 1_000);
-    let c = s.client();
-    s.admin().set_authorized(s.bank(0), &false);
+    let setup = Setup::new(1, 1_000);
+    let client = setup.client();
+    setup.admin().set_authorized(setup.bank(0), &false);
 
     assert_eq!(
-        c.try_deposit(s.bank(0), &600),
+        client.try_deposit(setup.bank(0), &600),
         Err(Ok(Error::TokenTransferFailed))
     );
 
-    assert_eq!(c.balance(s.bank(0)), 0);
-    assert_eq!(s.token().balance(s.bank(0)), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 0);
+    assert_eq!(setup.token().balance(setup.bank(0)), 1_000);
+    setup.assert_conserved();
 }
 
 /// SC-A11-16. ADR-0003: a withdrawal to a deauthorized bank is refused by the SAC,
 /// reported as `TokenTransferFailed`, and the settlement balance is unchanged (S1, S2).
 #[test]
 fn a_withdrawal_to_a_deauthorized_bank_is_refused() {
-    let s = Setup::funded(&[1_000]);
-    let c = s.client();
-    s.admin().set_authorized(s.bank(0), &false);
+    let setup = Setup::funded(&[1_000]);
+    let client = setup.client();
+    setup.admin().set_authorized(setup.bank(0), &false);
 
     assert_eq!(
-        c.try_withdraw(s.bank(0), &300),
+        client.try_withdraw(setup.bank(0), &300),
         Err(Ok(Error::TokenTransferFailed))
     );
 
-    assert_eq!(c.balance(s.bank(0)), 1_000);
-    assert_eq!(s.token().balance(&s.contract), 1_000);
-    s.assert_conserved();
+    assert_eq!(client.balance(setup.bank(0)), 1_000);
+    assert_eq!(setup.token().balance(&setup.contract), 1_000);
+    setup.assert_conserved();
 }
