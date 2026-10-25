@@ -133,13 +133,14 @@ describe("Dashboard", () => {
     expect(screen.queryByRole("button", { name: "Load older payment orders" })).toBeNull();
   });
 
-  it("says so when the store's first load failed, and offers to reconnect", async () => {
+  it("says so when the store's first load failed, and retries on request", async () => {
     setup({ storeError: { title: "Network unreachable", detail: "The network's RPC did not answer." } });
     const alert = await screen.findByText(/Couldn't load the system's state/);
     expect(alert.parentElement!.textContent).toMatch(/Network unreachable/);
-    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
     expect(screen.getByText(/Payment orders couldn't be loaded/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Load older payment orders" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again now" }));
+    await waitFor(() => expect(screen.queryByText(/Couldn't load the system's state/)).toBeNull());
   });
 
   it("degrades the credit section where entry points are stubs", async () => {

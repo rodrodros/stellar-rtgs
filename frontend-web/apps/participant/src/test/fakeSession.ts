@@ -106,6 +106,11 @@ export function createFakeSession(options: FakeOptions = {}) {
   };
   const store = {
     refresh: async () => publish([]),
+    retry: () => {
+      snapshot = { ...snapshot, status: "ready" };
+      delete (snapshot as { error?: unknown }).error;
+      publish([]);
+    },
     getSnapshot: () => snapshot,
     subscribe: (l: () => void) => {
       listeners.add(l);

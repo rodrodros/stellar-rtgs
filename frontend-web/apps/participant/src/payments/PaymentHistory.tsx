@@ -124,7 +124,7 @@ export function PaymentHistory() {
       </div>
       {rows.length === 0 ? (
         <p className="note">
-          {loading ? "Loading payment orders…" : storeStatus === "error" ? "Payment orders couldn't be loaded; reconnect above." : "No payment orders found."}
+          {loading ? "Loading payment orders…" : storeStatus === "error" ? "Payment orders couldn't be loaded yet; see above." : "No payment orders found."}
         </p>
       ) : (
         <table className="history">

@@ -10,7 +10,6 @@ import { NetworkSwitcher } from "./connect/NetworkSwitcher.tsx";
 import { StoreHealth } from "./connect/StoreHealth.tsx";
 import { Dashboard } from "./Dashboard.tsx";
 import { ActingBankProvider } from "./session/ActingBank.tsx";
-import { ReconnectContext } from "./session/Reconnect.tsx";
 import { ErrorBoundary } from "./ui/ErrorBoundary.tsx";
 
 function localStore(): Storage | undefined {
@@ -79,15 +78,13 @@ export function App(props: { env?: Env; bank?: string }) {
         </div>
       )}
       <ErrorBoundary key={sessionKey(connection.session)} onReset={connection.reconnect}>
-        <ReconnectContext.Provider value={connection.reconnect}>
-          <RtgsProvider session={connection.session}>
-            <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
-              <BankBar />
-              <StoreHealth />
-              <Dashboard />
-            </ActingBankProvider>
-          </RtgsProvider>
-        </ReconnectContext.Provider>
+        <RtgsProvider session={connection.session}>
+          <ActingBankProvider {...(props.bank ? { initialBank: props.bank } : {})}>
+            <BankBar />
+            <StoreHealth />
+            <Dashboard />
+          </ActingBankProvider>
+        </RtgsProvider>
       </ErrorBoundary>
       <DeploymentSettings
         key={`settings:${network.id}:${version}`}

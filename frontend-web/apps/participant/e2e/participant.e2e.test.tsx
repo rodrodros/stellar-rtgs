@@ -31,16 +31,8 @@ async function healthy(): Promise<boolean> {
 const up = await healthy();
 if (!up) console.warn(`e2e: skipped, no healthy devnet RPC at ${RPC} (set RTGS_DEVNET_RPC, run make devnet-up)`);
 
-/**
- * Waits on the network: ledgers close every few seconds and the feed polls every 2. On timeout
- * the error carries `context`'s text, e.g. the panel showing an error.
- */
-const eventually = <T,>(check: () => T, context?: () => HTMLElement) =>
-  waitFor(check, {
-    timeout: 90_000,
-    interval: 250,
-    ...(context ? { onTimeout: (e: Error) => new Error(`${e.message.split("\n")[0]}\n${context().textContent}`) } : {}),
-  });
+/** Waits on the network: ledgers close every few seconds and the feed polls every 2. */
+const eventually = <T,>(check: () => T) => waitFor(check, { timeout: 90_000, interval: 250 });
 
 describe.skipIf(!up)("participant app on the devnet", () => {
   const seed = `fe-bank-e2e-${Date.now()}`;
@@ -50,7 +42,18 @@ describe.skipIf(!up)("participant app on the devnet", () => {
 
   beforeAll(async () => {
     const devnet = { ...withOverrides(loadNetworks({})[0]!, { rpcUrl: RPC }), devnetSeed: seed };
-    await bootstrapDevnet({ network: devnet, wasm: await readSettlementWasm(WASM), banks: 2 });
+    const wasm = await readSettlementWasm(WASM);
+    // The bootstrap resumes where it stopped, so a transient failure (RPC not yet showing an
+    // account friendbot just funded) is retried rather than failing the suite.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await bootstrapDevnet({ network: devnet, wasm, banks: 2 });
+        break;
+      } catch (e) {
+        if (attempt === 3) throw e;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
     a = render(<App env={env} bank="1" />).container;
     b = render(<App env={env} bank="2" />).container;
   });
