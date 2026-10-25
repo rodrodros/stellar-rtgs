@@ -74,17 +74,17 @@ All commands come from the research handbook, which ran each of them on this mac
 **Hand mutants.** To show that a property test catches a bug, run it against hand-written mutants, under the pinned seed and other seeds:
 
 ```sh
-lib=contracts/settlement/src/lib.rs
+SCRATCH=$(mktemp -d) lib=contracts/settlement/src/lib.rs
 cp $lib $SCRATCH/lib.rs   # edit the copy into the mutant, then:
 diff -u --label a/$lib --label b/$lib $lib $SCRATCH/lib.rs > $SCRATCH/no_closure.patch
 make mutate TEST=reprioritisation_moves_only_the_priority MUTANTS="$SCRATCH/*.patch"   # SEEDS=4 by default
 ```
 
-- `scripts/mutate.sh` applies each patch to a copy in `target/mutate/`, builds it into its own target directory, and runs the test binary under every seed in parallel, with shrinking off. It prints one line per mutant: `no_closure  pinned: killed  seeds 1-4 killed: 4/4`. It exits 0 when every mutant is killed, 1 when any survives, 2 when a mutant doesn't apply or build, and 3 when a run only timed out.
+- `scripts/mutate.sh` applies each patch to a copy in `target/mutate/`, builds it into its own target directory, and runs the test binary under every seed in parallel, with shrinking off. It prints one line per mutant: `no_closure  pinned: killed  seeds 1-4 killed: 4/4`. Its exit status is the first that applies: 2 for anything that isn't a verdict (a usage error, a held lock, a failing baseline, a mutant that doesn't apply or build); 1 when a mutant survives under any seed; 3 when a run timed out; 0 when every mutant is killed under every seed.
 - `TEST` must match exactly one test, and the test can't be one that reads the Wasm (`storage.rs`'s cost test): the copy has no `make build` output.
 - The worktree is never edited, so other cargo commands and agents keep working while it runs. One sweep at a time holds `target/mutate/`; a second one in the same worktree stops with an error rather than mixing results.
-- A sweep of six mutants takes 15–25 s once `target/mutate/` is built, with 4 seeds or 20. The first run builds the dependencies, one to two minutes, into a second target directory of about 1.3 GB.
-- `make mutate-selftest` checks the script itself: a mutant the test catches is killed, a no-op mutant survives, and a stale patch is an error.
+- A sweep of six mutants takes 15–25 s once `target/mutate/` is built, with 4 seeds or 20. The first run builds the dependencies, one to two minutes, into a second target directory of about 1.3 GB: give it a tool timeout of 5 min, or run it in the background.
+- `make mutate-selftest` checks the script itself; its header lists the cases.
 
 ## 3. Model-based tests: Quint traces replayed against the contract
 
@@ -167,7 +167,7 @@ Add each of these when there is code worth it. Commands are in handbook 04.
 | Layer | When | Where and how | Trap |
 |---|---|---|---|
 | Coverage | now, informational; gate at 95% once payments exist | `make cov`; add `--fail-under-lines 95` | Code run as Wasm shows 0%; exclude the Kani crate (C-ST-107) |
-| Mutation | once the settlement logic exists | `cargo mutants --no-shuffle -p settlement -j 4`; require 0 missed. While later flows still have red tests, scope it to code and a test that are green: `cargo mutants -p settlement -f contracts/settlement/src/lib.rs -F revoke -- tests::props::revocation_takes_out_only_the_revoked_payment` (2 mutants, about 3 min, most of it building its own copy). Hand mutants: §2 | 97% coverage still missed 3 mutants in the lab (C-ST-033). Its baseline must pass, so an unscoped run fails on the red tests |
+| Mutation | once the settlement logic exists | `cargo mutants --no-shuffle -p settlement -j 4`; require 0 missed. While later flows still have red tests, scope it to code and a test that are green: `cargo mutants -p settlement -o target -f contracts/settlement/src/lib.rs -F revoke -- tests::props::revocation_takes_out_only_the_revoked_payment` (2 mutants, 1.5–3 min, most of it building its own copy). Hand mutants: §2 | 97% coverage still missed 3 mutants in the lab (C-ST-033). Its baseline must pass, so an unscoped run fails on the red tests |
 | Kani | for rules in `crates/rtgs-core` | a `kani/` crate with small bounds; `cargo kani` | Can't compile the test host (C-ST-059); keep proofs one step |
 | Fuzzing | once there are entry points with arithmetic | `cargo +nightly fuzz` in `contracts/settlement/fuzz` | On macOS, use `--sanitizer=none` (C-HB-051) |
 | Scout | before any review | `SCOUT_OFFLINE=1 cargo scout-audit ...` | Exits 0 with findings; fail on the `FAIL` file (C-HB-050) |

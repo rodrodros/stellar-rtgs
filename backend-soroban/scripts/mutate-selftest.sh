@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Self-test of scripts/mutate.sh: a mutant the test catches is killed, even with the
-# caller's PROPTEST_ settings exported; a no-op mutant survives; a patch that doesn't apply,
+# caller's PROPTEST_ settings exported; a no-op mutant survives, also right after a killed
+# one; a hang is a timeout; a patch that doesn't apply,
 # a mutant that doesn't build, a filter matching several tests and a held lock are each an
 # error; and the worktree is left as it was. `make mutate-selftest` runs it.
 set -uo pipefail
@@ -11,6 +12,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fail=0
 before=$(shasum "$lib")
+# The lock case below takes target/mutate/lock over, so a live sweep must not hold it.
+holder=$(cat target/mutate/lock/pid 2>/dev/null || true)
+if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+  echo "a mutate run (pid $holder) is in progress in this worktree; run the self-test after it" >&2
+  exit 2
+fi
 
 # mutant <name> <perl substitution>: a patch of lib.rs, as `git diff` would write it.
 mutant() {
@@ -46,10 +53,18 @@ PROPTEST_CASES=1 PROPTEST_RNG_SEED=1 \
 mutant no_op 's/\z/\n\/\/ no-op mutant\n/'
 expect 1 "no_op  pinned: survived  seeds 1-2 killed: 0/2" "a no-op mutant survives" \
   --seeds 2 "$test" "$work/no_op.patch"
+# The copy is reset between mutants, so the no-op one doesn't run the killed one's code.
+expect 1 "no_op  pinned: survived  seeds 1-2 killed: 0/2" "each mutant starts from the worktree" \
+  --seeds 2 "$test" "$work/no_closure.patch" "$work/no_op.patch"
 
-sed 's/^-/-garbled /' "$work/no_closure.patch" >"$work/stale.patch"
-expect 2 "stale: does not apply" "a patch that doesn't apply is an error" \
-  --seeds 2 "$test" "$work/stale.patch"
+# Every submission hangs.
+mutant hang 's/(\) -> Result<u64, Error> \{\n)(\s*from\.require_auth\(\);)/$1        loop {}\n$2/'
+expect 3 "hang  pinned: timeout  seeds 1-2 killed: 0/2  (2 timed out)" "a hang is a timeout, not a kill" \
+  --seeds 2 --timeout 5 "$test" "$work/hang.patch"
+
+sed 's/^-/-garbled /' "$work/no_closure.patch" >"$work/garbled.patch"
+expect 2 "garbled: does not apply" "a patch that doesn't apply is an error" \
+  --seeds 2 "$test" "$work/garbled.patch"
 
 mutant unviable 's/\z/\nfn unviable() -> u8 { "not a u8" }\n/'
 expect 2 "unviable  unviable: does not build" "a mutant that doesn't build is an error" \

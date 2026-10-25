@@ -1,6 +1,9 @@
 # Rust's output directory
 target
 
+# cargo-mutants' report, when run without `-o target`
+mutants.out*/
+
 # Soroban test snapshots: regenerated on every test run, never reviewed
 **/test_snapshots/
 

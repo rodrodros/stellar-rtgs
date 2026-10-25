@@ -11,9 +11,10 @@
 # off: a sweep needs killed or survived, not a minimal case. A run killed by its timeout
 # (by default ten times the baseline's, at least 60 s) is reported apart, not as a kill.
 #
-# Exit status: 0 when every mutant is killed, 1 when any survives, 2 on a usage error, a
-# baseline that fails, or a mutant that doesn't apply, doesn't build or can't be run, and
-# 3 when the only doubt is a timeout.
+# Exit status, the first that applies: 2 on a usage error, a held lock, a baseline that
+# fails, or a mutant that doesn't apply, doesn't build or whose test never ran; 1 when a
+# mutant survives under any seed, pinned or not; 3 when a run timed out; 0 when every
+# mutant is killed under every seed; 130 when interrupted.
 set -euo pipefail
 caller=$PWD
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -26,10 +27,11 @@ seeds=4
 package=settlement
 timeout=""
 while [ $# -gt 0 ]; do
+  case $1 in --seeds | --package | --timeout) [ $# -ge 2 ] || usage ;; esac
   case $1 in
-    --seeds) seeds=${2:-}; shift 2 ;;
-    --package) package=${2:-}; shift 2 ;;
-    --timeout) timeout=${2:-}; shift 2 ;;
+    --seeds) seeds=$2; shift 2 ;;
+    --package) package=$2; shift 2 ;;
+    --timeout) timeout=$2; shift 2 ;;
     *) break ;;
   esac
 done
@@ -63,16 +65,19 @@ if ! mkdir "$lock" 2>/dev/null; then
 fi
 echo $$ >"$lock/pid"
 trap 'rm -rf "$lock"' EXIT
+# A step that fails unexpectedly is an error, not the "survived" status 1.
+trap 'exit 2' ERR
 # Background jobs ignore SIGINT in a script, so stop them, and the test each one runs, here.
 stop() {
   trap - INT TERM
   for job in $(jobs -p); do
-    pkill -P "$job" 2>/dev/null
-    kill "$job" 2>/dev/null
+    pkill -P "$job" 2>/dev/null || true
+    kill "$job" 2>/dev/null || true
   done
   exit 130
 }
 trap stop INT TERM
+rm -rf "$work/runs"
 mkdir -p "$src"
 
 # Checksums, not times: a file reset to an older mtime than its build output would leave
@@ -94,11 +99,12 @@ build() {
 }
 
 # run <binary> <seed|pinned> <out>: one run, killed after $timeout seconds. Writes its exit
-# status to <out>.status. The caller's PROPTEST_ settings never reach it, so "pinned" is
-# the seed and case count `make test` uses.
+# status to <out>.status. The caller's PROPTEST_RNG_SEED and PROPTEST_CASES never reach
+# it, so "pinned" is the seed and case count `make test` uses.
 run() {
   local seed_env=() status=0
   [ "$2" = pinned ] || seed_env=(PROPTEST_RNG_SEED="$2")
+  cd "$package_dir"
   env -u PROPTEST_RNG_SEED -u PROPTEST_CASES ${seed_env[@]+"${seed_env[@]}"} \
     PROPTEST_MAX_SHRINK_ITERS=0 \
     perl -e 'alarm shift; exec @ARGV or exit 3' "$timeout" "$1" "$filter" >"$3" 2>&1 || status=$?
@@ -109,13 +115,15 @@ run() {
 sweep() {
   rm -rf "$2"
   mkdir -p "$2"
-  run "$1" pinned "$2/pinned" &
-  for seed in $(seq 1 "$seeds"); do run "$1" "$seed" "$2/$seed" & done
+  # The verdicts report a run that dies of a signal; its shell's own notice would repeat it.
+  run "$1" pinned "$2/pinned" 2>/dev/null &
+  for seed in $(seq 1 "$seeds"); do run "$1" "$seed" "$2/$seed" 2>/dev/null & done
   wait
 }
 
-# verdict <out>: survived (the one test passed), killed (it failed, or the process died of
-# a signal, as on a stack overflow), timeout, or error (anything else: it never ran).
+# verdict <out>: survived (the one test passed), killed (it failed, or the test crashed:
+# SIGILL to SIGSEGV but SIGKILL, as on a stack overflow), timeout, or error (anything
+# else: it never ran, or something outside the test killed it).
 verdict() {
   local status
   status=$(cat "$1.status")
@@ -125,7 +133,7 @@ verdict() {
     echo timeout
   elif [ "$status" = 101 ] && grep -q '^test result: FAILED' "$1"; then
     echo killed
-  elif [ "$status" -gt 128 ]; then
+  elif [ "$status" -ge 132 ] && [ "$status" -le 139 ] && [ "$status" != 137 ]; then
     echo killed
   else
     echo error
@@ -139,6 +147,10 @@ if [ -z "$binary" ]; then
   tail -40 "$work/build.log" >&2
   exit 2
 fi
+# Each run starts in the package's directory, as under `cargo test`.
+package_dir=$(jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable != null) | .manifest_path' \
+  "$work/build.json" | sed -n 1p)
+package_dir=${package_dir%/Cargo.toml}
 baseline_timeout=${timeout:-600}
 given_timeout=$timeout
 timeout=$baseline_timeout
