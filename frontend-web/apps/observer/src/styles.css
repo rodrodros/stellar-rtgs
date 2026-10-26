@@ -251,8 +251,56 @@ h3 {
   border: 1px solid var(--warn);
 }
 
-.loading {
+.load {
+  margin: 10px 0;
   color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.load p {
+  margin: 4px 0 0;
+}
+
+.load-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.load-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s;
+}
+
+.load-bar.indeterminate span {
+  position: absolute;
+  width: 30%;
+  animation: slide 1.4s ease-in-out infinite;
+}
+
+@keyframes slide {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-bar span {
+    transition: none;
+  }
+  .load-bar.indeterminate span {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.4;
+  }
 }
 
 .grid {

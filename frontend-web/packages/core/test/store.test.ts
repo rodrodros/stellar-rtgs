@@ -26,8 +26,8 @@ function fakeSession() {
     read: {
       config: async () => config,
       queuedCount: async () => 0,
-      latestPaymentId: async () => undefined,
-      payments: async () => [],
+      latestPaymentId: vi.fn(async (): Promise<bigint | undefined> => undefined),
+      payments: vi.fn(async (_range: { from: bigint; to: bigint }, _opts?: { onRead?: () => void }): Promise<Payment[]> => []),
       repo: async () => undefined,
       payment: vi.fn(async (id: bigint) => payments.get(id)),
       bank: vi.fn(async (address: string) => view(address, 0n)),
@@ -229,6 +229,70 @@ describe("store", () => {
     expect(store.getSnapshot().registryError).toMatchObject({ kind: "rpc" });
     expect(store.getSnapshot().error).toBeUndefined();
     await vi.waitFor(() => expect(store.getSnapshot().registryError).toBeUndefined());
+    store.stop();
+  });
+
+  it("reports the initial load's progress, and shows the registry's banks before reading the payment orders", async () => {
+    const fake = fakeSession();
+    const C = "GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGSNFHEYVXM3XOJMDS674JZ";
+    fake.registry.load.mockImplementation(async () => {
+      fake.registry.banks = [...fake.registry.banks, { address: C, sources: ["ledger"] }];
+      return [];
+    });
+    let release!: () => void;
+    const views = new Promise<void>((r) => (release = r));
+    fake.read.bank.mockImplementation(async (address: string) => {
+      await views;
+      return view(address, 0n);
+    });
+    fake.read.latestPaymentId.mockResolvedValue(2n);
+    fake.read.payments.mockImplementation(async (range, opts) => {
+      for (let id = range.from; id <= range.to; id++) opts?.onRead?.();
+      return [];
+    });
+    const store = new RtgsStore(fake.session);
+    const steps: string[] = [];
+    store.subscribe(() => {
+      const p = store.getSnapshot().loading;
+      const step = p && `${p.index + 1}/${p.count} ${p.step}${p.total === undefined ? "" : ` ${p.done}/${p.total}`}`;
+      if (step && steps.at(-1) !== step) steps.push(step);
+    });
+    store.start();
+    await vi.waitFor(() => expect(fake.read.bank).toHaveBeenCalledTimes(3));
+    expect(store.getSnapshot().registry.map((b) => b.address)).toContain(C);
+    expect(fake.read.latestPaymentId).not.toHaveBeenCalled();
+    release();
+    await ready(store);
+    expect(store.getSnapshot().loading).toBeUndefined();
+    expect(steps).toEqual([
+      "1/5 config",
+      "2/5 registry",
+      "3/5 banks 0/3",
+      "3/5 banks 1/3",
+      "3/5 banks 2/3",
+      "3/5 banks 3/3",
+      "4/5 payments",
+      "4/5 payments 0/3",
+      "4/5 payments 1/3",
+      "4/5 payments 2/3",
+      "4/5 payments 3/3",
+      "5/5 repos",
+    ]);
+    store.stop();
+  });
+
+  it("leaves out the repos step when the contract doesn't implement repos", async () => {
+    const fake = fakeSession();
+    (fake.session as { capabilities: object }).capabilities = { ...allAvailable(), repo: "stub" };
+    const store = new RtgsStore(fake.session);
+    const counts = new Set<number>();
+    store.subscribe(() => {
+      const p = store.getSnapshot().loading;
+      if (p) counts.add(p.count);
+    });
+    store.start();
+    await ready(store);
+    expect([...counts]).toEqual([4]);
     store.stop();
   });
 });

@@ -1,7 +1,8 @@
 // The shared read model: a snapshot of the system the apps render, kept current by the event
-// feed. It loads the views first (config, every known bank's balance and queues, the newest
-// payment orders), then replays events from the retention window and follows new ones. The
-// views stay authoritative: after each batch of events, the banks it touched are re-read.
+// feed. It loads the views first (config, the bank registry, every known bank's balance and
+// queues, then the newest payment orders and repos), reporting its progress, then replays events
+// from the retention window and follows new ones. The views stay authoritative: after each batch
+// of events, the banks it touched are re-read.
 //
 // Framework-agnostic: `subscribe` / `getSnapshot` fit React's `useSyncExternalStore`.
 import type { Capabilities } from "../capabilities.ts";
@@ -30,8 +31,24 @@ export interface StoreOptions {
   registryPollMs?: number;
 }
 
+/** A step of the initial load, in the order they run. */
+export type LoadStep = "config" | "registry" | "banks" | "payments" | "repos";
+
+/** How far the initial load has got. */
+export interface LoadProgress {
+  step: LoadStep;
+  /** The step's position (from 0) among the `count` steps this contract needs. */
+  index: number;
+  count: number;
+  /** Items read of `total`, once the step knows how many it reads. */
+  done?: number;
+  total?: number;
+}
+
 export interface SystemSnapshot {
   status: "loading" | "ready" | "error";
+  /** While `status` is "loading": the initial load's current step, and how far it has got. */
+  loading?: LoadProgress;
   /**
    * The last failure of the initial load or of a refresh; cleared by the next one that
    * succeeds. Registry failures are reported apart, in `registryError`.
@@ -179,21 +196,41 @@ export class RtgsStore {
 
   /**
    * The initial load. A failure (an RPC timeout or rate limit) leaves `status: "error"` and
-   * tries again with backoff while the store runs; `retry()` tries again at once.
+   * tries again with backoff while the store runs; `retry()` tries again at once. The banks come
+   * first, so they show while the (slower) payment orders and repos are read.
    */
   private async load(): Promise<void> {
-    const { read, registry } = this.session;
+    const { read, registry, capabilities } = this.session;
     this.loadAttempts += 1;
+    const steps: LoadStep[] = ["config", "registry", "banks", "payments"];
+    if (capabilities.repo === "available") steps.push("repos");
+    const progress = (step: LoadStep, items?: { done: number; total: number }) => {
+      if (this.running) this.update({ loading: { step, index: steps.indexOf(step), count: steps.length, ...items } });
+    };
+    /** Counts the step's items as they are read. */
+    const counter = (step: LoadStep, total: number) => {
+      let done = 0;
+      progress(step, { done, total });
+      return () => progress(step, { done: ++done, total });
+    };
     try {
+      progress("config");
       const [config, queuedCount, ledger] = await Promise.all([read.config(), read.queuedCount(), this.session.latestLedger()]);
       if (!this.running) return;
       this.update({ config, queuedCount, ledger });
+      progress("registry");
       await this.reloadRegistry();
-      await this.loadRecentPayments();
-      await this.loadRepos();
-      await this.refreshBanks(registry.list().map((b) => b.address));
+      // The step's first update publishes the registry, so the banks show before their views.
+      const banks = registry.list().map((b) => b.address);
+      await this.refreshBanks(banks, counter("banks", banks.length));
+      progress("payments");
+      await this.loadRecentPayments((total) => counter("payments", total));
+      if (capabilities.repo === "available") {
+        progress("repos");
+        await this.loadRepos((total) => counter("repos", total));
+      }
       if (!this.running) return;
-      this.update({ status: "ready", error: undefined });
+      this.update({ status: "ready", loading: undefined, error: undefined });
       this.followEvents();
     } catch (e) {
       if (!this.running) return;
@@ -224,17 +261,19 @@ export class RtgsStore {
     }
   }
 
-  private async loadRecentPayments(): Promise<void> {
+  /** `counting(total)`, once the newest id is found, returns what to call per payment order read. */
+  private async loadRecentPayments(counting?: (total: number) => () => void): Promise<void> {
     const { read } = this.session;
     const latest = await read.latestPaymentId();
     if (latest === undefined) return;
     const count = BigInt(this.options.recentPayments ?? 200);
     const from = latest + 1n > count ? latest + 1n - count : 0n;
-    this.model = mergePayments(this.model, await read.payments({ from, to: latest }));
+    const onRead = counting?.(Number(latest - from) + 1);
+    this.model = mergePayments(this.model, await read.payments({ from, to: latest }, onRead ? { onRead } : {}));
   }
 
   /** Repos have no list view; with `repo` implemented, ids are probed like payment ids. */
-  private async loadRepos(): Promise<void> {
+  private async loadRepos(counting?: (total: number) => () => void): Promise<void> {
     const { read, capabilities } = this.session;
     if (capabilities.repo !== "available") return;
     const last = await latestId(async (id) => (await read.repo(id)) !== undefined);
@@ -242,7 +281,14 @@ export class RtgsStore {
     const count = BigInt(this.options.recentRepos ?? 200);
     const from = last + 1n > count ? last + 1n - count : 0n;
     const ids = Array.from({ length: Number(last - from) + 1 }, (_, i) => from + BigInt(i));
-    const repos = (await mapLimit(ids, 8, (id) => read.repo(id))).filter((r): r is Repo => !!r);
+    const onRead = counting?.(ids.length);
+    const repos = (
+      await mapLimit(ids, 8, async (id) => {
+        const repo = await read.repo(id);
+        onRead?.();
+        return repo;
+      })
+    ).filter((r): r is Repo => !!r);
     this.model = mergeRepos(this.model, repos);
   }
 
@@ -341,11 +387,16 @@ export class RtgsStore {
     }
   }
 
-  private async refreshBanks(addresses: string[]): Promise<void> {
+  /** `onRead` is called per bank read. */
+  private async refreshBanks(addresses: string[], onRead?: () => void): Promise<void> {
     const known = new Set(this.session.registry.list().map((b) => b.address));
     const targets = addresses.filter((a) => known.has(a));
     const config = this.snapshot.config;
-    const views = await mapLimit(targets, 4, (address) => this.session.read.bank(address, config ? { config } : {}));
+    const views = await mapLimit(targets, 4, async (address) => {
+      const view = await this.session.read.bank(address, config ? { config } : {});
+      onRead?.();
+      return view;
+    });
     if (!this.running) return;
     const banks = new Map(this.banks);
     for (const view of views) {

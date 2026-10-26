@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { latestId, mapLimit } from "../src/contract/gateway.ts";
+import { latestId, mapLimit, SettlementReader } from "../src/contract/gateway.ts";
 import { toConfig, toPayment } from "../src/contract/convert.ts";
+import { RtgsError } from "../src/errors.ts";
+import type { Payment } from "../src/types.ts";
 import { A, B } from "./helpers.ts";
 
 describe("latestId", () => {
@@ -16,6 +18,21 @@ describe("latestId", () => {
 
   it("returns undefined when nothing was issued", async () => {
     expect(await latestId(async () => false)).toBeUndefined();
+  });
+});
+
+describe("SettlementReader.payments", () => {
+  it("skips ids not issued and archived entries, and counts every id it reads", async () => {
+    const reader = Object.create(SettlementReader.prototype) as SettlementReader;
+    reader.payment = async (id: bigint): Promise<Payment | undefined> => {
+      if (id === 1n) throw new RtgsError("archived", "Archived entry", "Its time to live ran out.");
+      if (id === 3n) return undefined;
+      return { id, from: A, to: B, amount: 1n, priority: "normal", submittedAt: 1, status: "queued" };
+    };
+    let reads = 0;
+    const found = await reader.payments({ from: 0n, to: 3n }, { onRead: () => (reads += 1) });
+    expect(found.map((p) => p.id)).toEqual([0n, 2n]);
+    expect(reads).toBe(4);
   });
 });
 

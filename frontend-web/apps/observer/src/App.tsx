@@ -5,6 +5,7 @@ import { defaultNetwork, loadNetworks, RtgsProvider, useConnection, useSession, 
 import { LedgerDrawer, PaymentDrawer, TxDrawer } from "./components/Drawers.tsx";
 import { FlowMatrix } from "./components/FlowMatrix.tsx";
 import { ChainStatus, ConnectBar, MainnetConfirm, PaymentSearch, RetentionBar } from "./components/Header.tsx";
+import { LoadBar, ProgressBar } from "./components/Progress.tsx";
 import { SimulationBanner } from "./components/Simulation.tsx";
 import { BanksTable, CapabilityNote, CreditPanel, QueueGauge, QueueLanes } from "./components/System.tsx";
 import { Timeline } from "./components/Timeline.tsx";
@@ -40,7 +41,6 @@ function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefin
 function Dashboard(props: { onReconnect: () => void }) {
   const { query } = useQuery();
   const { network } = useSession();
-  const status = useSnapshot((s) => s.status);
   const error = useSnapshot((s) => s.error);
   const registryError = useSnapshot((s) => s.registryError);
   const simulation = useSimView();
@@ -64,7 +64,7 @@ function Dashboard(props: { onReconnect: () => void }) {
           missing. It is read again every 30 seconds.
         </div>
       )}
-      {status === "loading" && <p className="loading">Reading balances, queues and recent payment orders…</p>}
+      <LoadBar />
       <main className="grid">
         <BanksTable />
         <div className="col col-system">
@@ -149,7 +149,7 @@ function Observer(props: { env: Env }) {
         />
       )}
       {connection.error && <ErrorBanner error={connection.error} network={network} onRetry={connection.reconnect} />}
-      {connection.connecting && network && <p className="loading">Connecting to {network.label}…</p>}
+      {connection.connecting && network && <ProgressBar label={`Connecting to ${network.label}…`} />}
       <RtgsProvider session={connection.session} storeOptions={storeOptions}>
         <Dashboard onReconnect={connection.reconnect} />
       </RtgsProvider>
