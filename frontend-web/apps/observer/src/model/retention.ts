@@ -2,19 +2,20 @@
 // events for its window only (about 7 days by default), so nothing older can be loaded.
 import type { FeedStart, FeedStatus } from "../core.ts";
 
-/** The whole retention window, live ledgers only, or from a ledger number. */
-export type StartChoice = "retention" | "now" | number;
+/** Recent history (the default), the whole retention window, live ledgers only, or from a ledger number. */
+export type StartChoice = "recent" | "retention" | "now" | number;
 
 export function toFeedStart(choice: StartChoice): FeedStart {
+  if (choice === "recent") return "recent";
   if (choice === "retention") return "retention-start";
   if (choice === "now") return "now";
   return { ledger: choice };
 }
 
 export function parseStart(text: string | null | undefined): StartChoice {
-  if (text === "now") return "now";
+  if (text === "now" || text === "retention") return text;
   if (text && /^\d+$/.test(text)) return Number(text);
-  return "retention";
+  return "recent";
 }
 
 export interface RetentionWindow {
@@ -40,15 +41,6 @@ export function retentionWindow(status: FeedStatus): RetentionWindow | undefined
     ledgers: latestLedger - oldestLedger + 1,
     spanSecs: Math.max(0, latestLedgerCloseTime - oldestLedgerCloseTime),
   };
-}
-
-/** The ledger about `secs` before the latest, from the window's average close interval, clamped to the window. */
-export function ledgerSecondsAgo(window: RetentionWindow, secs: number): number {
-  const ledgers = window.latestLedger - window.oldestLedger;
-  if (ledgers <= 0 || window.spanSecs <= 0) return window.oldestLedger;
-  const perLedger = window.spanSecs / ledgers;
-  const back = Math.ceil(secs / perLedger);
-  return Math.max(window.oldestLedger, window.latestLedger - back);
 }
 
 /** Why a start ledger can't be used, or undefined if it can. */

@@ -82,6 +82,28 @@ describe("event feed", () => {
     expect(f2.status().clamped).toBe(false);
   });
 
+  it("starts recent at the later of the last recentLedgers and the deployment, within the window", async () => {
+    vi.useFakeTimers();
+    const recent = async (deployed: number | undefined | Error, recentLedgers: number) => {
+      const { server, requests } = fakeServer([]);
+      const deployedLedger = async () => {
+        if (deployed instanceof Error) throw deployed;
+        return deployed;
+      };
+      const feed = new EventFeed({ server, contractId: CONTRACT, deployedLedger }, { from: "recent", recentLedgers });
+      feed.start();
+      await drain(feed, 1);
+      expect(feed.status().clamped).toBe(false);
+      return requests[0]?.startLedger;
+    };
+    expect(await recent(undefined, 100)).toBe(100);
+    expect(await recent(170, 100)).toBe(170);
+    expect(await recent(120, 100)).toBe(120);
+    expect(await recent(90, 100)).toBe(100);
+    expect(await recent(new Error("down"), 100)).toBe(100);
+    expect(await recent(undefined, 1_000)).toBe(50);
+  });
+
   it("drops events it has already delivered", async () => {
     vi.useFakeTimers();
     const { server } = fakeServer([[event(60, 1)], [event(60, 1), event(61, 1)]]);

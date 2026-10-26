@@ -47,7 +47,7 @@ export function formatQuery(query: ObserverQuery): string {
   if (query.network) p.set("network", query.network);
   if (query.contract) p.set("contract", query.contract);
   else if (query.invalidContract) p.set("contract", query.invalidContract);
-  if (query.from !== "retention") p.set("from", String(query.from));
+  if (query.from !== "recent") p.set("from", String(query.from));
   if (query.payment !== undefined) p.set("payment", query.payment.toString());
   if (query.tx) p.set("tx", query.tx);
   if (query.ledger !== undefined) p.set("ledger", String(query.ledger));

@@ -51,6 +51,23 @@ export async function readData(ctx: TxContext, account: string, names: string[])
   return found;
 }
 
+/**
+ * The ledger `contractId` was published at on the central bank's account, right after its
+ * deploy (a reset republishes it); undefined if the account names another contract.
+ */
+export async function readSettlementLedger(ctx: TxContext, centralBank: string, contractId: string): Promise<number | undefined> {
+  let response;
+  try {
+    response = await ctx.server.getLedgerEntries(dataKey(centralBank, SETTLEMENT_KEY));
+  } catch (e) {
+    throw toRtgsError(e);
+  }
+  const [entry] = response.entries;
+  if (entry?.val.type !== "data") return undefined;
+  const value = Buffer.from(entry.val.data.dataValue.value).toString("utf8");
+  return value === contractId ? entry.lastModifiedLedgerSeq : undefined;
+}
+
 export interface LedgerBank extends BankEntry {
   index: number;
 }

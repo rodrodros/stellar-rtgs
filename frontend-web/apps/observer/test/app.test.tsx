@@ -451,11 +451,12 @@ describe("links and the URL", () => {
 });
 
 describe("limits and failures after connecting", () => {
-  it("loads from about an hour ago, clamped to the retention window", () => {
+  it("loads the last hour by default, and the whole retention window on request", () => {
     open("");
-    fireEvent.change(screen.getByLabelText("Load events from"), { target: { value: "hour" } });
+    expect((screen.getByLabelText("Load events from") as HTMLSelectElement).value).toBe("recent");
+    fireEvent.change(screen.getByLabelText("Load events from"), { target: { value: "retention" } });
     fireEvent.click(screen.getByRole("button", { name: "Load" }));
-    expect(window.location.search).toBe("?network=devnet&from=90");
+    expect(window.location.search).toBe("?network=devnet&from=retention");
   });
 
   it("warns once the store has dropped older events, and drops the possibly cut transaction", () => {
