@@ -1,12 +1,14 @@
 // Display helpers. Amounts stay bigint stroops until here; times are Unix seconds of ledger
 // close time, the RTGS's clock.
-import { formatAmount, parseAmount } from "@rtgs/core";
+import { CASH_DECIMALS, parseAmount } from "@rtgs/core";
 
-/** `12345000000n` -> `"1,234.5"`. */
+/** `12325000000n` -> `"1,233"`: whole units, rounded half away from zero, thousands grouped. */
 export function amountText(stroops: bigint, code?: string): string {
-  const [whole = "", fraction] = formatAmount(stroops).split(".");
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-  const text = fraction ? `${grouped}.${fraction}` : grouped;
+  const unit = 10n ** BigInt(CASH_DECIMALS);
+  const abs = stroops < 0n ? -stroops : stroops;
+  const whole = (abs + unit / 2n) / unit;
+  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const text = stroops < 0n && whole > 0n ? `-${grouped}` : grouped;
   return code ? `${text} ${code}` : text;
 }
 
