@@ -2,7 +2,7 @@
 // the central bank registered on its account (registry/ledger.ts), the devnet identities, and
 // any address the event feed mentions. The central bank and the contract are not banks.
 import { notifyAll } from "../listeners.ts";
-import { DEFAULT_DEVNET_SEED, type NetworkConfig } from "../network/networks.ts";
+import { DEFAULT_DEVNET_SEED, hasSeed, type NetworkConfig } from "../network/networks.ts";
 import { deriveDevnetKeypair, bankLabel, devnetBankName } from "../signer/keypair.ts";
 import type { Signer } from "../signer/signer.ts";
 import type { TxContext } from "../tx.ts";
@@ -64,7 +64,7 @@ export class BankRegistry {
 
   /** Names devnet identities ("Owl Street") by address, so even unregistered ones read well. */
   private devnetName(address: string): string | undefined {
-    if (this.net.id !== "devnet") return undefined;
+    if (!hasSeed(this.net)) return undefined;
     if (!this.devnetNames) {
       const seed = this.net.devnetSeed ?? DEFAULT_DEVNET_SEED;
       this.devnetNames = new Map(

@@ -1,6 +1,6 @@
 // The top bar: the network switch (mainnet only behind a typed confirmation), the contract,
 // the signer and its role, and the ledger clock.
-import { connectWallet, devnetIdentities, disconnectWallet, toRtgsError, type NetworkId, type RtgsError } from "@rtgs/core";
+import { connectWallet, devnetIdentities, disconnectWallet, hasSeed, toRtgsError, type NetworkId, type RtgsError } from "@rtgs/core";
 import { useState } from "react";
 import { useAppSession } from "../session/AppSession.tsx";
 import { Address } from "./Address.tsx";
@@ -91,9 +91,9 @@ function SignerPanel() {
             Disconnect
           </button>
         </>
-      ) : network.id === "devnet" ? (
+      ) : hasSeed(network) ? (
         <button type="button" onClick={() => app.setSigner(devnetIdentities(network, 0).centralBank)}>
-          Use the devnet central bank key
+          Use the demo central bank key
         </button>
       ) : (
         <button type="button" onClick={connect} disabled={connecting}>

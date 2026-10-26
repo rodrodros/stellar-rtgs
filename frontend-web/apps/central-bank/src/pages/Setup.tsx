@@ -1,10 +1,11 @@
-// Setup: on devnet, the one-click bootstrap (core's bootstrapDevnet, which mirrors
+// Setup: on devnet or a seeded testnet, the one-click bootstrap (core's bootstrapDevnet, which mirrors
 // integration/lib.sh); on any network, pointing the app at a deployment and an RPC.
 import {
   DEFAULT_CASH,
   DEFAULT_CONFIG,
   bootstrapDevnet,
   formatAmount,
+  hasSeed,
   loadSettlementWasm,
   parseAmount,
   toRtgsError,
@@ -28,7 +29,7 @@ export function Setup(props: { devnetBanks?: number }) {
           <strong>{app.error.title}</strong> {app.error.detail}
         </p>
       ) : null}
-      {app.network.id === "devnet" ? <DevnetBootstrap {...props} /> : null}
+      {hasSeed(app.network) ? <DevnetBootstrap {...props} /> : null}
       <DeploymentForm />
     </section>
   );
@@ -189,7 +190,7 @@ function DeploymentForm() {
     >
       <h3>Deployment on {app.network.label}</h3>
       <p className="muted">
-        {app.network.id === "devnet"
+        {hasSeed(app.network)
           ? "Leave the contract empty to use the one the central bank published. "
           : "Point the app at an existing settlement contract. "}
         The cash token is read from the contract. Leave a field empty to use the build's setting.

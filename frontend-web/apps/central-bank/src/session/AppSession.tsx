@@ -4,6 +4,7 @@
 import {
   defaultNetwork,
   devnetIdentities,
+  hasSeed,
   loadNetworks,
   overridesStore,
   withOverrides,
@@ -47,9 +48,9 @@ export function signerFor(signer: Signer | undefined, network: Pick<NetworkConfi
   return signer && signer.networkPassphrase === network.passphrase ? signer : undefined;
 }
 
-/** On devnet the central bank's key is derived in the browser, so it is the default signer. */
+/** On devnet (or a seeded testnet) the central bank's key is derived in the browser, so it is the default signer. */
 export function defaultSigner(network: NetworkConfig): Signer | undefined {
-  return network.id === "devnet" ? devnetIdentities(network, 0).centralBank : undefined;
+  return hasSeed(network) ? devnetIdentities(network, 0).centralBank : undefined;
 }
 
 const APP_KEY = "central-bank";

@@ -18,7 +18,7 @@ import { Asset, AuthClawbackEnabledFlag, AuthRequiredFlag, AuthRevocableFlag, ha
 import { Buffer } from "buffer";
 import { Client as SettlementClient } from "../generated/settlement.ts";
 import { RtgsError, toRtgsError } from "../errors.ts";
-import type { NetworkConfig } from "../network/networks.ts";
+import { hasSeed, type NetworkConfig } from "../network/networks.ts";
 import { assertNetwork, rpcServer } from "../rpc.ts";
 import { devnetIdentities } from "../signer/keypair.ts";
 import { sdkSigning, type Signer } from "../signer/signer.ts";
@@ -66,8 +66,10 @@ export interface Deployment {
 
 export async function bootstrapDevnet(options: BootstrapOptions): Promise<Deployment> {
   const { network: net, wasm } = options;
-  if (net.id !== "devnet") throw new RtgsError("config", "Devnet only", "The bootstrap deploys only on the devnet.");
-  if (!net.friendbotUrl) throw new RtgsError("config", "No friendbot", "The devnet needs a friendbot URL.");
+  if (!hasSeed(net)) {
+    throw new RtgsError("config", "Devnet or seeded testnet only", "The bootstrap deploys on the devnet, or on the testnet with a seed set.");
+  }
+  if (!net.friendbotUrl) throw new RtgsError("config", "No friendbot", `The ${net.label} needs a friendbot URL.`);
   const config = options.config ?? DEFAULT_CONFIG;
   const cash = options.cash ?? DEFAULT_CASH;
   const report = options.onStep ?? (() => {});
