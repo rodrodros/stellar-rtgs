@@ -7,6 +7,10 @@ cd "$(dirname "${BASH_SOURCE[0]}")"
 
 git pull --ff-only
 git log -1 --format='deploying %h %s'
+# No build attestations: one is new on every build, so an unchanged image would get a new id and
+# `up --build` would restart its service. (Compose's `provenance: false` doesn't stop it.) These
+# images never leave the server.
+export BUILDX_NO_DEFAULT_ATTESTATIONS=1
 docker compose up -d --build
 testnet=(docker compose -f compose.testnet.yml --env-file .env.testnet)
 if [[ -f .env.testnet ]]; then "${testnet[@]}" up -d --build; fi
