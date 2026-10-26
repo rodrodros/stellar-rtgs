@@ -21,4 +21,5 @@ RUN test -n "$VITE_RTGS_DEVNET_RPC_URL" && test -n "$VITE_RTGS_DEVNET_CENTRAL_BA
 
 FROM caddy:2 AS web
 COPY --from=deploy Caddyfile /etc/caddy/Caddyfile
+COPY --from=deploy llms.txt /usr/share/rtgs/llms.txt
 COPY --from=observer-build /app/apps/observer/dist /srv

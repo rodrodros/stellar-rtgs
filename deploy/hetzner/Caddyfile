@@ -6,6 +6,14 @@
 		reverse_proxy quickstart:8000
 	}
 
+	# What this site is and how to read it, for LLMs: the SPA is an empty shell to a fetch.
+	# A template, so the host and the central bank come from the environment.
+	handle /llms.txt {
+		root * /usr/share/rtgs
+		templates
+		file_server
+	}
+
 	# The observer, a static SPA.
 	handle {
 		root * /srv
