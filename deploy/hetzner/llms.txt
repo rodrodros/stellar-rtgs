@@ -4,6 +4,8 @@
 
 The observer at https://{{env "SITE_HOST"}}/ is a single-page app that renders in the browser, so fetching it returns an empty shell. To see what is happening, read the chain through the RPC below instead. The central bank's app (https://{{env "SITE_HOST"}}/central-bank/) and the participants' app (https://{{env "SITE_HOST"}}/participant/?bank=<G-address>) are hosted too; on this devnet they sign in the browser as the demo identities, so anyone can act through them.
 
+The apps here open on the public Stellar testnet, where the same simulation runs; switch to the devnet in their network selector. This file describes the devnet. For the testnet deployment, read https://{{env "TESTNET_SITE_HOST"}}/llms.txt.
+
 ## Network
 
 - RPC: https://{{env "SITE_HOST"}}/rpc (Stellar RPC, JSON-RPC 2.0 over POST; there is no Horizon and no public friendbot)

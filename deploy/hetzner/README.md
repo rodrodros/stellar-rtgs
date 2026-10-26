@@ -37,7 +37,7 @@ docker compose up -d --build quickstart simulator
 docker compose logs -f simulator      # the bootstrap prints the deployment JSON, then the simulation starts
 ```
 
-Copy the deployment's `centralBank` into `.env` as `RTGS_DEVNET_CENTRAL_BANK`, then start the apps:
+Copy the deployment's `centralBank` into `.env` as `RTGS_DEVNET_CENTRAL_BANK`. This site's apps open on the testnet by default (see [Testnet](#testnet)); until the testnet is set up, add `DEFAULT_NETWORK=devnet` to `.env`. Then start the apps:
 
 ```sh
 docker compose up -d --build web
@@ -87,5 +87,12 @@ tn logs -f simulator                    # the bootstrap prints the deployment JS
 ```
 
 Copy the deployment's `centralBank` into `.env.testnet` as `RTGS_TESTNET_CENTRAL_BANK`, then start the apps with `tn up -d --build web`. The observer is at `https://TESTNET_SITE_HOST/`. `update.sh` updates the testnet project too once `.env.testnet` exists.
+
+The main site (`SITE_HOST`) opens on the testnet too, with the devnet a switch away in each app's network selector. Its build needs the testnet's seed and central bank, so copy them into `.env` as well, drop any `DEFAULT_NETWORK=devnet`, and rebuild:
+
+```sh
+grep -E '^RTGS_TESTNET_(SEED|CENTRAL_BANK)=' .env.testnet >> .env
+docker compose up -d --build web
+```
 
 SDF resets the testnet every few months. After a reset, restart the simulator (`tn restart simulator`): the bootstrap funds the accounts again and deploys a new contract. The central bank's address stays the same, so the apps need no rebuild.
