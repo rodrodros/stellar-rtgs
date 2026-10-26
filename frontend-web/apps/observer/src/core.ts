@@ -4,6 +4,7 @@ export {
   defaultNetwork,
   expiresAt,
   flowMatrix,
+  CASH_DECIMALS,
   formatAmount,
   isExpired,
   ledgerUrl,

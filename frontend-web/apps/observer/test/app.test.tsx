@@ -120,7 +120,7 @@ describe("system picture", () => {
     const row = (name: string) => within(flows).getAllByText(name)[1]!.closest("tr")!.textContent;
     expect(row("Bank A")).toMatch(/300 USD/);
     fireEvent.click(within(flows).getByRole("radio", { name: "Queued" }));
-    expect(row("Bank C")).toMatch(/1000 USD.*10 USD/);
+    expect(row("Bank C")).toMatch(/1,000 USD.*10 USD/);
   });
 });
 

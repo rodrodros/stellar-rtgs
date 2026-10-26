@@ -1,14 +1,23 @@
 // Small display pieces every panel uses: amounts in the cash token, addresses by name, close
 // times, and links to payment orders, transactions and the network's explorer.
 import type { ReactNode } from "react";
-import { formatAmount, useSession } from "../core.ts";
+import { CASH_DECIMALS, formatAmount, useSession } from "../core.ts";
 import { useNav } from "../state/query.tsx";
+
+/** `12325000000n` -> `"1,233"`: whole units, rounded half away from zero, thousands grouped. */
+export function amountText(stroops: bigint): string {
+  const unit = 10n ** BigInt(CASH_DECIMALS);
+  const abs = stroops < 0n ? -stroops : stroops;
+  const whole = (abs + unit / 2n) / unit;
+  const grouped = whole.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return stroops < 0n && whole > 0n ? `-${grouped}` : grouped;
+}
 
 export function Amount(props: { value: bigint; signed?: boolean }) {
   const { cashToken } = useSession();
-  const text = formatAmount(props.value);
+  const text = amountText(props.value);
   return (
-    <span className="amount">
+    <span className="amount" title={formatAmount(props.value)}>
       {props.signed && props.value > 0n ? "+" : ""}
       {text} <span className="unit">{cashToken.code}</span>
     </span>
