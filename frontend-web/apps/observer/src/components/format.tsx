@@ -2,7 +2,10 @@
 // times, and links to payment orders, transactions and the network's explorer.
 import type { ReactNode } from "react";
 import { CASH_DECIMALS, formatAmount, useSession } from "../core.ts";
+import { appLink, appUrls } from "../model/apps.ts";
 import { useNav } from "../state/query.tsx";
+
+const APPS = appUrls(import.meta.env);
 
 /** `12325000000n` -> `"1,233"`: whole units, rounded half away from zero, thousands grouped. */
 export function amountText(stroops: bigint): string {
@@ -36,6 +39,14 @@ export function Address(props: { address: string }) {
   const nameOf = useNameOf();
   const role =
     address === session.centralBank ? "cb" : address === session.contractId ? "contract" : session.registry.get(address) ? "bank" : "unknown";
+  const href = role === "cb" || role === "bank" ? appLink(APPS, role, address) : undefined;
+  if (href) {
+    return (
+      <a className={`address address-${role}`} title={`${address} — open its app in a new tab`} href={href} target="_blank" rel="noopener noreferrer">
+        {nameOf(address)}
+      </a>
+    );
+  }
   return (
     <span className={`address address-${role}`} title={address}>
       {nameOf(address)}
