@@ -1,6 +1,16 @@
 // A fake session and store for component tests: the shapes core's React hooks read, with a
 // scripted scenario. Nothing touches the network.
-import { allAvailable, type BankView, type Capabilities, type FeedEvent, type NetworkConfig, type PaymentRecord, type RtgsSession, type SystemSnapshot } from "@rtgs/core";
+import {
+  allAvailable,
+  type BankView,
+  type Capabilities,
+  type FeedEvent,
+  type NetworkConfig,
+  type PaymentRecord,
+  type RtgsSession,
+  type SimStatus,
+  type SystemSnapshot,
+} from "@rtgs/core";
 import { vi } from "vitest";
 import { A, B, C, CB, CONTRACT, deposited, settled, submitted, transfer, tx } from "./events.ts";
 
@@ -132,6 +142,8 @@ export function fakeSession(snapshot: SystemSnapshot = snapshotOf(), network: Pa
     refresh: vi.fn(),
   };
   const read = { payment: vi.fn(async (_id: bigint) => undefined as unknown) };
+  /** No simulator has published, unless a test says otherwise. */
+  const simStatus = vi.fn(async (): Promise<SimStatus | undefined> => undefined);
   const session = {
     network: { id: "devnet", label: "Devnet (local)", rpcUrl: "http://localhost:8300/rpc", passphrase: "x", banks: [], allowHttp: true, ...network },
     contractId: CONTRACT,
@@ -146,11 +158,13 @@ export function fakeSession(snapshot: SystemSnapshot = snapshotOf(), network: Pa
       list: () => current.registry,
     },
     read,
+    simStatus,
     store: vi.fn(() => ({ store, release: vi.fn() })),
   };
   return {
     session: session as unknown as RtgsSession,
     read,
+    simStatus,
     set(patch: Partial<SystemSnapshot>) {
       current = { ...current, ...patch };
       for (const l of listeners) l();

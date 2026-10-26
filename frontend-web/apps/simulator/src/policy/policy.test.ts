@@ -209,9 +209,16 @@ describe("defaultTuning", () => {
 });
 
 describe("PROFILES", () => {
-  it("keeps calm to covered payments, deposits, withdrawals and top-ups", () => {
-    expect(Object.keys(PROFILES.calm.weights).sort()).toEqual(["deposit", "issue", "submit", "withdraw"]);
+  it("keeps calm to covered payments, deposits, withdrawals, top-ups and the keeper", () => {
+    expect(Object.keys(PROFILES.calm.weights).sort()).toEqual(["convertOverdue", "deposit", "expire", "issue", "submit", "withdraw"]);
     expect(PROFILES.calm.submitMix).toEqual({ covered: 1, uncovered: 0, gridlock: 0 });
+  });
+
+  it("keeps the keeper on, as a priority, in every profile", () => {
+    for (const profile of Object.values(PROFILES)) {
+      expect(profile.weights.expire).toBeGreaterThanOrEqual(20);
+      expect(profile.weights.convertOverdue).toBeGreaterThanOrEqual(20);
+    }
   });
 
   it("leans gridlock towards queueing and crossing submits", () => {

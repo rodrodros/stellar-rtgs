@@ -22,7 +22,7 @@ export {
   type NetworkOverrides,
 } from "./network/networks.ts";
 export { connect, RtgsActor, RtgsReader, RtgsSession, type BankView, type ConnectOptions } from "./session.ts";
-export type { LedgerClock } from "./rpc.ts";
+export { RPC_TIMEOUT_MS, type LedgerClock } from "./rpc.ts";
 
 // Signers
 export type { Signer } from "./signer/signer.ts";
@@ -42,9 +42,11 @@ export { RtgsStore, type StoreOptions, type SystemSnapshot } from "./model/store
 export { applyEvents, emptyState, mergePayments, mergeRepos, type LifecycleStep, type ModelState, type PaymentRecord } from "./model/reducer.ts";
 export { analyseQueues, covers, expirablePayments, expiresAt, isExpired, type BankQueues, type QueueAnalysis } from "./model/queues.ts";
 export { flowMatrix, netFlows, type FlowMatrix } from "./model/flows.ts";
+export { overdueRepos, termEndOf } from "./model/repos.ts";
 
 // Bank registry and the cash token
 export { BankRegistry, type Bank, type BankSource } from "./registry/banks.ts";
+export { SIM_STATUS_KEY, formatSimStatus, parseSimStatus, type SimStatus } from "./registry/ledger.ts";
 export type { CashToken, CashTokenReader, Holding } from "./token/cash-token.ts";
 export { CLAWBACK_LIMITS, TokenAdmin } from "./token/token-admin.ts";
 

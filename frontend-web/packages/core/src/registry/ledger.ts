@@ -5,6 +5,7 @@
 //   rtgs.settlement   the settlement contract's id
 //   rtgs.bank.<i>     a bank's G-address
 //   rtgs.bname.<i>    its display name
+//   rtgs.sim          what the headless simulator is doing, and when it last said so
 //
 // Keys and values are at most 64 bytes. RPC can't list an account's data entries, so readers
 // scan indices in batches of 50 and stop at the first batch with no bank. Registration fills
@@ -19,6 +20,7 @@ import { sendClassic, type TxContext } from "../tx.ts";
 import type { TxOutcome } from "../types.ts";
 
 export const SETTLEMENT_KEY = "rtgs.settlement";
+export const SIM_STATUS_KEY = "rtgs.sim";
 export const bankKey = (i: number) => `rtgs.bank.${i}`;
 export const nameKey = (i: number) => `rtgs.bname.${i}`;
 const BATCH = 50;
@@ -127,4 +129,39 @@ export async function discoverDeployment(ctx: TxContext, centralBank: string): P
 
 export function publishDeployment(ctx: TxContext, cb: Signer, contractId: string): Promise<TxOutcome> {
   return sendClassic(ctx, cb, [Operation.manageData({ name: SETTLEMENT_KEY, value: contractId })]);
+}
+
+/**
+ * What the headless simulator last published. `at` is ledger close time (Unix seconds) at the
+ * write: while running it rewrites `running` as a heartbeat, so an old `at` means it died.
+ */
+export interface SimStatus {
+  state: "running" | "stopping" | "stopped";
+  at: number;
+}
+
+const SIM_STATES: ReadonlySet<string> = new Set(["running", "stopping", "stopped"]);
+
+/** `running:1792971603`, the stored form. */
+export function formatSimStatus(status: SimStatus): string {
+  return `${status.state}:${status.at}`;
+}
+
+/** The stored form back; undefined for anything else. */
+export function parseSimStatus(value: string | undefined): SimStatus | undefined {
+  const match = value?.match(/^([a-z]+):(\d+)$/);
+  if (!match || !SIM_STATES.has(match[1]!)) return undefined;
+  return { state: match[1] as SimStatus["state"], at: Number(match[2]) };
+}
+
+/** The simulator's status on the central bank's account, if it ever published one. */
+export async function readSimStatus(ctx: TxContext, centralBank: string): Promise<SimStatus | undefined> {
+  return parseSimStatus((await readData(ctx, centralBank, [SIM_STATUS_KEY])).get(SIM_STATUS_KEY));
+}
+
+export function publishSimStatus(ctx: TxContext, cb: Signer, centralBank: string, status: SimStatus): Promise<TxOutcome> {
+  if (cb.address !== centralBank) {
+    throw new RtgsError("unauthorized-signer", "Not the central bank", "Only the central bank publishes the simulation's status.");
+  }
+  return sendClassic(ctx, cb, [Operation.manageData({ name: SIM_STATUS_KEY, value: formatSimStatus(status) })]);
 }

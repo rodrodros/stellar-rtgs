@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { STORE_EVENT_LIMIT, useLedgerClock, useSession, useSnapshot, type NetworkConfig } from "../core.ts";
 import { formatDuration } from "../model/expiry.ts";
+import type { SimView } from "../model/simulation.ts";
 import { checkStartLedger, ledgerSecondsAgo, retentionWindow, type StartChoice } from "../model/retention.ts";
 import { isContractId } from "../model/url.ts";
 import { CLEAR_ON_NETWORK_CHANGE, useNav, useQuery } from "../state/query.tsx";
 import { Time } from "./format.tsx";
+import { SimulationBadge } from "./Simulation.tsx";
 
 export function ConnectBar(props: { networks: NetworkConfig[]; selected: string | undefined; contractId: string | undefined }) {
   const { query, update } = useQuery();
@@ -85,7 +87,7 @@ export function MainnetConfirm(props: { onConfirm(): void; onCancel(): void }) {
 
 const FEED_STATE: Record<string, string> = { idle: "idle", backfilling: "loading history", live: "live", error: "feed error" };
 
-export function ChainStatus() {
+export function ChainStatus(props: { simulation?: SimView }) {
   const session = useSession();
   const feed = useSnapshot((s) => s.feed);
   const { sequence, closeTime } = useLedgerClock();
@@ -107,6 +109,7 @@ export function ChainStatus() {
       <span className={`feed feed-${feed.state}`} title={feed.error ? `${feed.error.title}: ${feed.error.detail}` : undefined}>
         <span className="dot" aria-hidden /> {FEED_STATE[feed.state] ?? feed.state}
       </span>
+      {props.simulation && <SimulationBadge view={props.simulation} />}
     </div>
   );
 }

@@ -3,9 +3,21 @@
 // summary's reads (the contract's holding, each lane's XLM) are the only network calls here,
 // and they run in the background so the engine's tick never waits on them.
 import { RtgsError, toRtgsError, type RtgsSession } from "@rtgs/core";
+import type { RefuelResult } from "../fuel.ts";
 import type { ActionName, Choice, Outcome, Reporter, StartInfo, Summary, WorldView } from "../types.ts";
 import { txFacts } from "./events.ts";
-import { formatFinal, formatResult, formatStart, formatSummary, LOW_XLM, shortAddress, totalsOf, type LogMode, type SummaryBlock } from "./format.ts";
+import {
+  formatFinal,
+  formatRefuel,
+  formatResult,
+  formatStart,
+  formatSummary,
+  LOW_XLM,
+  shortAddress,
+  totalsOf,
+  type LogMode,
+  type SummaryBlock,
+} from "./format.ts";
 
 export { txFacts, type TxFacts } from "./events.ts";
 export * from "./format.ts";
@@ -35,9 +47,14 @@ export interface ReporterOptions {
 
 const CENTRAL_BANK = "Central bank";
 
+/** The engine's reporter, plus what the CLI reports beside the engine. */
+export interface SimReporter extends Reporter {
+  refuel(address: string, result: RefuelResult): void;
+}
+
 /**
- * Rejects if `promise` hasn't settled within `ms`. The RPC client has no request timeout, and a
- * read that never returns would otherwise keep every later summary from printing.
+ * Rejects if `promise` hasn't settled within `ms`. The RPC client's own timeout should end a
+ * hung read first; this keeps one that never returns from blocking every later summary.
  */
 function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -47,7 +64,7 @@ function within<T>(promise: Promise<T>, ms: number): Promise<T> {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-export function createReporter(options: ReporterOptions): Reporter {
+export function createReporter(options: ReporterOptions): SimReporter {
   const { log: mode, reads, summaryEvery } = options;
   const out = options.out ?? ((line: string) => console.log(line));
   const color = options.color ?? (mode === "pretty" && process.stdout.isTTY === true);
@@ -60,6 +77,11 @@ export function createReporter(options: ReporterOptions): Reporter {
   const labels = new Map<string, string>();
   const counts: Summary["counts"] = {};
   const settlements: Summary["settlements"] = { atOnce: 0, eagerClosure: 0, offset: 0 };
+  /** Each lane's first XLM reading, and when, for its burn rate. */
+  const firstXlm = new Map<string, { xlm: bigint; at: number }>();
+  /** Stroops refuelled per lane since its first reading. */
+  const refuelled = new Map<string, bigint>();
+  let refuels = 0;
 
   const label = (address: string) => labels.get(address) ?? shortAddress(address);
   const elapsed = () => (Date.now() - startedAt) / 1000;
@@ -84,10 +106,24 @@ export function createReporter(options: ReporterOptions): Reporter {
     if (stopped) return;
     const banks = world.banks();
     const fees: SummaryBlock["fees"] = [];
+    const burn: NonNullable<SummaryBlock["xlm"]> = [];
+    const now = Date.now();
     xlm.forEach((r, i) => {
       const address = lanes[i]!;
-      if (r.status === "rejected") fees.push({ lane: label(address), address, error: toRtgsError(r.reason).title });
-      else if (r.value < LOW_XLM) fees.push({ lane: label(address), address, xlm: r.value });
+      if (r.status === "rejected") {
+        fees.push({ lane: label(address), address, error: toRtgsError(r.reason).title });
+        return;
+      }
+      if (r.value < LOW_XLM) fees.push({ lane: label(address), address, xlm: r.value });
+      const first = firstXlm.get(address);
+      if (!first) {
+        firstXlm.set(address, { xlm: r.value, at: now });
+        burn.push({ lane: label(address), xlm: r.value });
+        return;
+      }
+      const spent = first.xlm + (refuelled.get(address) ?? 0n) - r.value;
+      const ms = BigInt(Math.max(1, now - first.at));
+      burn.push({ lane: label(address), xlm: r.value, perHour: (spent * 3_600_000n) / ms });
     });
     const totals = totalsOf(counts);
     const secs = elapsed();
@@ -110,6 +146,8 @@ export function createReporter(options: ReporterOptions): Reporter {
       repos: world.repos().map((r) => ({ id: r.id, bank: world.bank(r.bank)?.label ?? label(r.bank), outstanding: r.outstanding, status: r.status })),
       conservation: held.status === "fulfilled" ? held.value : { error: toRtgsError(held.reason).title },
       fees,
+      xlm: burn,
+      refuels,
     };
     out(formatSummary(block, mode, color));
   }
@@ -133,6 +171,15 @@ export function createReporter(options: ReporterOptions): Reporter {
         settlements.offset += settled.offset.length;
       }
       out(formatResult({ at: new Date(), lane: label(choice.actor), choice, outcome, ms }, mode, color));
+    },
+
+    refuel(address: string, result: RefuelResult) {
+      if ("amount" in result) {
+        refuels += 1;
+        // Before the lane's first reading, the reading itself includes the refuel.
+        if (firstXlm.has(address)) refuelled.set(address, (refuelled.get(address) ?? 0n) + result.amount);
+      }
+      out(formatRefuel({ at: new Date(), lane: label(address), address, result }, mode, color));
     },
 
     tick(world: WorldView) {
@@ -172,13 +219,6 @@ export function createReporterReads(session: RtgsSession): ReporterReads {
       const { held, recorded } = await session.readConservation(all);
       return { held, recorded };
     },
-    // The one RPC read the simulator makes itself: core has no XLM balance helper.
-    xlmBalance: async (address) => {
-      try {
-        return (await session.server.getAccountEntry(address)).balance;
-      } catch (e) {
-        throw toRtgsError(e);
-      }
-    },
+    xlmBalance: (address) => session.xlmBalance(address),
   };
 }

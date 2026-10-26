@@ -5,11 +5,13 @@ import { defaultNetwork, loadNetworks, RtgsProvider, useConnection, useSession, 
 import { LedgerDrawer, PaymentDrawer, TxDrawer } from "./components/Drawers.tsx";
 import { FlowMatrix } from "./components/FlowMatrix.tsx";
 import { ChainStatus, ConnectBar, MainnetConfirm, PaymentSearch, RetentionBar } from "./components/Header.tsx";
+import { SimulationBanner } from "./components/Simulation.tsx";
 import { BanksTable, CapabilityNote, CreditPanel, QueueGauge, QueueLanes } from "./components/System.tsx";
 import { Timeline } from "./components/Timeline.tsx";
 import { toFeedStart } from "./model/retention.ts";
 import { CLEAR_ON_NETWORK_CHANGE } from "./state/query.tsx";
 import { QueryProvider, useQuery } from "./state/query.tsx";
+import { useSimView } from "./state/simulation.ts";
 
 function ErrorBanner(props: { error: RtgsError; network: NetworkConfig | undefined; onRetry?: () => void; onDismiss?: () => void }) {
   return (
@@ -41,14 +43,16 @@ function Dashboard(props: { onReconnect: () => void }) {
   const status = useSnapshot((s) => s.status);
   const error = useSnapshot((s) => s.error);
   const registryError = useSnapshot((s) => s.registryError);
+  const simulation = useSimView();
   // Core clears the store's error once a read succeeds again; until then it can be dismissed.
   const [dismissed, setDismissed] = useState<RtgsError>();
   return (
     <>
       <div className="status-row">
-        <ChainStatus />
+        <ChainStatus simulation={simulation} />
         <PaymentSearch />
       </div>
+      <SimulationBanner view={simulation} />
       <RetentionBar />
       <CapabilityNote />
       {error && error !== dismissed && (

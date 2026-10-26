@@ -14,7 +14,7 @@ const error = (argv: string[]): string => {
 
 describe("parseCliArgs", () => {
   it("defaults, with a random rng seed", () => {
-    expect(run([])).toEqual({ banks: 3, profile: "balanced", rate: 2, rngSeed: 1234, log: "pretty", summaryEvery: 30 });
+    expect(run([])).toEqual({ banks: 3, profile: "balanced", rate: 2, rngSeed: 1234, log: "pretty", summaryEvery: 30, refuelBelow: 2000 });
   });
 
   it("reads every flag", () => {
@@ -31,6 +31,7 @@ describe("parseCliArgs", () => {
         "--duration", "60",
         "--log", "json",
         "--summary-every", "0",
+        "--refuel-below", "0",
       ]),
     ).toEqual({
       rpc: "http://localhost:8400/rpc",
@@ -44,6 +45,7 @@ describe("parseCliArgs", () => {
       duration: 60,
       log: "json",
       summaryEvery: 0,
+      refuelBelow: 0,
     });
   });
 
@@ -73,6 +75,7 @@ describe("parseCliArgs", () => {
     expect(error(["--max-actions", "0"])).toMatch(/--max-actions must be a whole number of at least 1/);
     expect(error(["--duration=-5"])).toBe('--duration must be greater than 0, not "-5"');
     expect(error(["--summary-every=-1"])).toBe('--summary-every must be 0 or more, not "-1"');
+    expect(error(["--refuel-below=-1"])).toBe('--refuel-below must be 0 or more, not "-1"');
     expect(error(["--banks", ""])).toBe('--banks must be a number, not ""');
     expect(error(["--seed", ""])).toBe("--seed must not be empty");
     expect(error(["--rpc", " "])).toBe("--rpc must not be empty");

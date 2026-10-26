@@ -17,6 +17,7 @@ A read-only watcher of the RTGS: pick a network and a settlement contract, then 
 - **Credit:** repos and collateral once the contract implements them; otherwise a one-line note.
 - **Payment lifecycle** (`?payment=<id>`): Submitted → (Reprioritised) → Settled / Revoked / Expired, with each step's ledger, close time and transaction. A queued payment order also shows its place in the queue and its expiry.
 - **Transaction** (`?tx=<hash>`) and **ledger** (`?ledger=<n>`): all the events of one transaction, or every loaded transaction of one ledger, with a link to the network's explorer where core configures one (stellar.expert on testnet and mainnet; none on the devnet).
+- **Simulation status:** when the headless simulator (`apps/simulator`) drives the network, a label beside the feed says it is running. A banner says when it is paused (stopping or stopped), running but with no transactions for 90 s, or silent for more than 3 minutes (it died, and its supervisor restarts it). The status is the `rtgs.sim` data entry on the central bank's account, read every 15 seconds; with no simulator, nothing shows.
 - **Retention window:** what RPC still keeps (about 7 days by default) and where the loaded history starts. You can load from the whole window, the last hour, now, or a ledger number; while older events load, it shows how far it has read. Older history would need an indexer, which this project doesn't have. Balances, queues and payment orders are still read live from the contract.
 
 The whole view is in the URL (`?network=&contract=&from=&payment=&tx=&ledger=`), so it can be shared or put on a demo screen. Switching network drops the contract, any open drawer and a start ledger (ledger numbers belong to one network). A link whose network isn't offered, or whose contract id is malformed, is refused rather than shown against another network or contract.
@@ -48,8 +49,9 @@ The e2e test bootstraps a fresh deployment, drives two scenarios through core's 
 | Path | Contents |
 |---|---|
 | `src/core.ts` | The only module that imports `@rtgs/core`: the read-only surface, no signers |
-| `src/model/` | Pure functions: transaction grouping and settlement causes, flows, expiry, retention, URL state |
+| `src/model/` | Pure functions: transaction grouping and settlement causes, flows, expiry, retention, URL state, simulation status |
 | `src/state/query.tsx` | The URL query as app state |
+| `src/state/simulation.ts` | Polls the simulator's status |
 | `src/components/` | Panels and drawers; no RPC and no XDR |
 | `test/` | Fake session, event builders, component tests, the no-signer guard |
 | `e2e/` | Devnet end to end |
