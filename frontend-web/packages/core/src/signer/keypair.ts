@@ -47,6 +47,10 @@ export function deriveDevnetKeypair(seed: string, label: string): Keypair {
 export const CENTRAL_BANK_LABEL = "central-bank";
 export const bankLabel = (n: number) => `bank-${n}`;
 
+const DEVNET_BANK_NAMES = ["Dime Lords", "Owl Street", "Penny Lane"];
+/** The display name of devnet bank `n` (1-based); past the named ones, "Bank n". */
+export const devnetBankName = (n: number) => DEVNET_BANK_NAMES[n - 1] ?? `Bank ${n}`;
+
 export interface DevnetIdentities {
   centralBank: Signer;
   /** bank-1 ... bank-N, in order. */
@@ -60,7 +64,7 @@ export function devnetIdentities(net: Pick<NetworkConfig, "passphrase" | "devnet
   return {
     centralBank: keypairSigner(deriveDevnetKeypair(seed, CENTRAL_BANK_LABEL), net, "Central bank"),
     banks: Array.from({ length: count }, (_, i) =>
-      keypairSigner(deriveDevnetKeypair(seed, bankLabel(i + 1)), net, `Bank ${i + 1}`),
+      keypairSigner(deriveDevnetKeypair(seed, bankLabel(i + 1)), net, devnetBankName(i + 1)),
     ),
   };
 }

@@ -124,7 +124,7 @@ Every flag is in [frontend-web/apps/simulator/README.md](frontend-web/apps/simul
 | App | URL |
 |---|---|
 | Central bank | http://localhost:5174 |
-| Participant, as Bank 1 | http://localhost:5175/?bank=1 |
+| Participant, as Dime Lords (bank 1) | http://localhost:5175/?bank=1 |
 | Observer | http://localhost:5176 |
 
 On the devnet the apps sign with demo keys derived from a public seed, so they need no wallet either.

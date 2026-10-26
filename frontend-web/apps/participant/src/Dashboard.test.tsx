@@ -119,10 +119,10 @@ describe("Dashboard", () => {
     const fake = setup({ balances: { 2: USD(500) } });
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("0 USD"));
     await act(() => fake.as(2).submit({ to: fake.banks[0]!.address, amount: USD(75), priority: "urgent" }));
-    expect(await screen.findByText("Incoming payment order #0 from Bank 2 settled: 75 USD")).toBeTruthy();
+    expect(await screen.findByText("Incoming payment order #0 from Owl Street settled: 75 USD")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("75 USD"));
     const row = screen.getByTestId("payment-0");
-    expect(within(row).getByText("From Bank 2")).toBeTruthy();
+    expect(within(row).getByText("From Owl Street")).toBeTruthy();
     expect(within(row).getByText("at once")).toBeTruthy();
   });
 
@@ -212,9 +212,9 @@ describe("Dashboard", () => {
   it("switches banks with one click and starts afresh", async () => {
     setup({ balances: { 1: USD(1), 2: USD(2) } });
     expect(await screen.findByText("1 USD")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Bank 2" }));
+    fireEvent.click(screen.getByRole("button", { name: "Owl Street" }));
     expect(await screen.findByText("2 USD")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Bank 2" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Owl Street" }).getAttribute("aria-pressed")).toBe("true");
     expect(new URL(window.location.href).searchParams.get("bank")).toBe("2");
   });
 });

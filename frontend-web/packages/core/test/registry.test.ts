@@ -29,7 +29,7 @@ describe("bank registry", () => {
     const ids = devnetIdentities(devnet!, 2);
     const r = new BankRegistry(ctx, devnet!, ids.centralBank.address, CONTRACT);
     r.observe([ids.banks[1]!.address]);
-    expect(r.get(ids.banks[1]!.address)).toEqual({ address: ids.banks[1]!.address, name: "Bank 2", sources: ["events", "devnet"] });
+    expect(r.get(ids.banks[1]!.address)).toEqual({ address: ids.banks[1]!.address, name: "Owl Street", sources: ["events", "devnet"] });
   });
 
   it("keeps ledger keys within the 64-byte limit", () => {

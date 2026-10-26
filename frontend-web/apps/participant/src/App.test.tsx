@@ -95,7 +95,7 @@ describe("App", () => {
 
   it("switches networks without touching the closed session, and drops the acting bank", async () => {
     render(<App env={ENV} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Bank 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Dime Lords" }));
     expect(await screen.findByText("Liquidity")).toBeTruthy();
 
     fireEvent.change(select(), { target: { value: "testnet" } });
@@ -105,9 +105,9 @@ describe("App", () => {
 
     // Back on the devnet, the tab's remembered bank comes back, as a signer for the new session.
     fireEvent.change(select(), { target: { value: "devnet" } });
-    expect(await screen.findByRole("button", { name: "Bank 1", pressed: true })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Dime Lords", pressed: true })).toBeTruthy();
     expect(await screen.findByText("Liquidity")).toBeTruthy();
-    expect(screen.getAllByRole("button", { name: "Bank 1" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Dime Lords" })).toHaveLength(1);
     noFailure();
   });
 
@@ -141,7 +141,7 @@ describe("App", () => {
 
   it("applies deployment overrides and reconnects without failing", async () => {
     render(<App env={ENV} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Bank 1" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Dime Lords" }));
     await screen.findByText("Liquidity");
     fireEvent.click(screen.getByText(/Deployment settings/));
     fireEvent.change(screen.getByLabelText("Settlement contract id"), { target: { value: "CNEWCONTRACT" } });

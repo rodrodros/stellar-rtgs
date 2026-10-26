@@ -26,7 +26,7 @@ export { RPC_TIMEOUT_MS, type LedgerClock } from "./rpc.ts";
 
 // Signers
 export type { Signer } from "./signer/signer.ts";
-export { CENTRAL_BANK_LABEL, bankLabel, deriveDevnetKeypair, devnetIdentities, keypairSigner, type DevnetIdentities } from "./signer/keypair.ts";
+export { CENTRAL_BANK_LABEL, bankLabel, deriveDevnetKeypair, devnetBankName, devnetIdentities, keypairSigner, type DevnetIdentities } from "./signer/keypair.ts";
 export { connectWallet, disconnectWallet } from "./signer/wallet.ts";
 
 // Contract
