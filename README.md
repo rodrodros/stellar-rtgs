@@ -9,7 +9,7 @@ Each folder has its own README: [backend-soroban](backend-soroban/README.md), [f
 
 ## Requirements
 
-Everything installs from rustup, crates.io, npm and Docker Hub. Homebrew is not needed.
+Everything installs from rustup, crates.io, npm and Docker Hub.
 
 ### Backend: compile and test
 
