@@ -1,6 +1,46 @@
 # stellar-rtgs
 
-RTGS layer on Stellar.
+A Real-Time Gross Settlement (RTGS) system on Stellar. Banks hold settlement balances in one Soroban contract and pay each other with final, gross settlement. A payment order that the balance can't cover waits in an urgent or normal queue. The liquidity-saving offset clears gridlocked queues in a single step. The central bank lends intraday credit (repos) against collateral. The contract checks at every step that money is conserved. Its rules were modelled and checked in Quint before any contract code was written.
+
+## Live on the Stellar testnet
+
+The system is already deployed on the public Stellar testnet. A simulator keeps three banks (Dime Lords, Owl Street, Penny Lane) depositing, paying each other, queueing and taking repos around the clock.
+
+**Site: <TODO: https://SITE_HOST>**
+
+| App | Path | What it shows |
+|---|---|---|
+| Observer | `/` | Read-only view of the whole system: timeline of contract events, participants, queues, credit, liquidity flows |
+| Central bank | `/central-bank/` | Operator and settlement agent: overview, banks, credit, keeper, setup |
+| Participant | `/participant/?bank=1` | A bank: liquidity, payment orders, queues, intraday credit |
+
+The apps open on the testnet, and each app's network selector switches to the hosted devnet. The apps sign with demo keys built into the page, so no wallet is needed. Anyone who opens them can act as the central bank or a bank, with test funds only. The hosting is described in [deploy/hetzner](deploy/hetzner/README.md).
+
+### Contract instances (testnet)
+
+| Instance | Address |
+|---|---|
+| Settlement contract | `<TODO: C…>`: [stellar.expert](https://stellar.expert/explorer/testnet/contract/TODO) |
+| Cash token (USD, Stellar Asset Contract) | `<TODO: C…>`: [stellar.expert](https://stellar.expert/explorer/testnet/contract/TODO) |
+| Central bank account (cash token issuer) | `<TODO: G…>`: [stellar.expert](https://stellar.expert/explorer/testnet/account/TODO) |
+
+SDF resets the testnet every few months. After a reset the simulator deploys a new contract under the same central bank, so the contract ids above can change. The apps find the current contract through the central bank's account.
+
+### Screenshots
+
+**Observer.** The timeline of contract events, each bank's balance and queue heads, the central queue against its cap, and the open repos.
+
+![Observer](docs/images/observer.png)
+
+**Participant.** Acting as Dime Lords: liquidity, a new payment order, intraday credit and repos, the bank's queues and its payment orders, each with how it settled (at once or in an offset).
+
+![Participant](docs/images/participant.png)
+
+**Central bank.** The system overview: the central queue, the conservation check (S1), each bank's queues head first, and recent settlements and offsets.
+
+![Central bank](docs/images/central-bank.png)
+
+## Repository
 
 - `backend-soroban/`: the Soroban settlement contract, its tests and the local devnet.
 - `frontend-web/`: the React apps (central bank, participant, observer) on a shared core package, and a headless simulator.
@@ -67,9 +107,9 @@ node --version                            # v26 or later
 (cd frontend-web && pnpm --version)       # 11.28.5
 ```
 
-## Check Out
+## Run it locally
 
-Start the devnet, watch it in the observer, and keep it busy with the simulator. You need the [devnet](#backend-the-devnet) and [frontend](#frontend) requirements; Rust and stellar-cli are not needed. Every command starts from the repository root, and the whole run takes about 2 minutes after the first image pull.
+To run it yourself instead of using the testnet deployment: start the devnet, watch it in the observer, and keep it busy with the simulator. You need the [devnet](#backend-the-devnet) and [frontend](#frontend) requirements; Rust and stellar-cli are not needed. Every command starts from the repository root, and the whole run takes about 2 minutes after the first image pull.
 
 **1. Start the devnet.** In a terminal:
 

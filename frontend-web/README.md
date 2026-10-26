@@ -12,6 +12,23 @@ The interactive front end for the RTGS settlement contract in `../backend-soroba
 
 Every app runs against the **devnet** (a local Stellar quickstart), **testnet**, or **mainnet** (opt-in, never the default). There is no backend: the browser talks to Stellar RPC through `@rtgs/core`, and the apps themselves make no RPC calls.
 
+## Live deployment
+
+The three apps are already deployed and run against the Stellar testnet, with a simulator keeping the banks transacting:
+
+| App | URL |
+|---|---|
+| Observer | <TODO: https://SITE_HOST>/ |
+| Central bank | <TODO: https://SITE_HOST>/central-bank/ |
+| Participant, Bank 1 | <TODO: https://SITE_HOST>/participant/?bank=1 |
+
+They open on the testnet, and the network selector switches to the hosted devnet. The testnet contract instances are listed in the [root README](../README.md#contract-instances-testnet), and the hosting setup is in [../deploy/hetzner](../deploy/hetzner/README.md).
+
+| Observer | Participant | Central bank |
+|---|---|---|
+| ![Observer](../docs/images/observer.png) | ![Participant](../docs/images/participant.png) | ![Central bank](../docs/images/central-bank.png) |
+| Timeline, participants, queues, credit | Liquidity, payment orders, intraday credit | Overview, conservation check, settlements and offsets |
+
 ## Quick start: the devnet and all three apps
 
 You need:
