@@ -374,6 +374,19 @@ thead th {
   color: var(--accent);
 }
 
+a.address {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.address-cb {
+  color: var(--accent);
+}
+
+a.address:hover {
+  text-decoration: underline;
+}
+
 .address .tag {
   margin-left: 4px;
   font-size: 0.7rem;
