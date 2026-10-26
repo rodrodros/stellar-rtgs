@@ -13,11 +13,19 @@ x-build: &build
 
 services:
   quickstart:
-    # The same image and network as backend-soroban/devnet, with the ledger kept on a volume.
+    # The same image and network as backend-soroban/devnet, with the ledger kept on a volume:
+    # an empty volume at /opt/stellar puts quickstart in persistent mode (nocopy, or the image's
+    # .docker-ephemeral marker is copied in), which needs a Postgres password up front (Postgres
+    # stays inside the container).
     image: stellar/quickstart:v678-b1525.1-latest
-    command: --local --persistent --protocol-version 29 --limits testnet --enable core,rpc
+    command: --local --protocol-version 29 --limits testnet --enable core,rpc
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devnet}
     volumes:
-      - stellar-data:/opt/stellar
+      - type: volume
+        source: stellar-data
+        target: /opt/stellar
+        volume: { nocopy: true }
     ports:
       - "127.0.0.1:8300:8000"
     restart: unless-stopped
