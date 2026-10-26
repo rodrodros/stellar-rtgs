@@ -129,18 +129,21 @@ export class SettlementReader {
 
   /**
    * Payment orders `from`..`to` inclusive, a few requests at a time, skipping ids not issued and
-   * payment orders whose entries are archived (their time to live ran out).
+   * payment orders whose entries are archived (their time to live ran out). `onRead` is called
+   * once per id read, found or not.
    */
-  async payments(range: { from: bigint; to: bigint }, concurrency = 8): Promise<Payment[]> {
+  async payments(range: { from: bigint; to: bigint }, opts: { concurrency?: number; onRead?: () => void } = {}): Promise<Payment[]> {
     const ids: bigint[] = [];
     for (let id = range.from; id <= range.to; id++) ids.push(id);
-    const found = await mapLimit(ids, concurrency, async (id) => {
+    const found = await mapLimit(ids, opts.concurrency ?? 8, async (id) => {
+      let payment: Payment | undefined;
       try {
-        return await this.payment(id);
+        payment = await this.payment(id);
       } catch (e) {
-        if (e instanceof RtgsError && e.kind === "archived") return undefined;
-        throw e;
+        if (!(e instanceof RtgsError && e.kind === "archived")) throw e;
       }
+      opts.onRead?.();
+      return payment;
     });
     return found.filter((p): p is Payment => p !== undefined);
   }

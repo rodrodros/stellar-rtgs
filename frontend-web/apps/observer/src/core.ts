@@ -23,6 +23,8 @@ export {
   type FeedStatus,
   type FlowMatrix,
   type LifecycleStep,
+  type LoadProgress,
+  type LoadStep,
   type NetworkConfig,
   type NetworkId,
   type Payment,

@@ -39,7 +39,7 @@ export type * from "./types.ts";
 // Events and read models
 export { EVENT_SCHEMAS } from "./events/decode.ts";
 export { EventFeed, cursorLedger, type FeedOptions, type FeedStart, type FeedStatus } from "./events/feed.ts";
-export { RtgsStore, type StoreOptions, type SystemSnapshot } from "./model/store.ts";
+export { RtgsStore, type LoadProgress, type LoadStep, type StoreOptions, type SystemSnapshot } from "./model/store.ts";
 export { applyEvents, emptyState, mergePayments, mergeRepos, type LifecycleStep, type ModelState, type PaymentRecord } from "./model/reducer.ts";
 export { analyseQueues, covers, expirablePayments, expiresAt, isExpired, type BankQueues, type QueueAnalysis } from "./model/queues.ts";
 export { flowMatrix, netFlows, type FlowMatrix } from "./model/flows.ts";

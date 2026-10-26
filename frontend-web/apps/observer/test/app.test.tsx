@@ -105,6 +105,25 @@ describe("system picture", () => {
     expect(screen.getByRole("region", { name: "Queues" }).textContent).toMatch(/Reading the queues…/);
   });
 
+  it("shows a bar while connecting", () => {
+    connection.result = { connecting: true, reconnect: vi.fn() };
+    open("");
+    expect(screen.getByRole("progressbar", { name: "Connecting to Devnet (local)…" }).hasAttribute("aria-valuenow")).toBe(false);
+  });
+
+  it("shows how far the first read of the views has got, step by step", () => {
+    const loading = { step: "payments" as const, index: 3, count: 5, done: 100, total: 200 };
+    connection.result = { session: fakeSession(snapshotOf(undefined, { status: "loading", loading })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    const bar = screen.getByRole("progressbar", { name: "Step 4 of 5: reading recent payment orders (100 of 200)…" });
+    expect(bar.getAttribute("aria-valuenow")).toBe("70");
+  });
+
+  it("shows no bar once loaded and live", () => {
+    open("");
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
   it("shows credit columns once the contract implements credit", () => {
     const snapshot = snapshotOf(undefined, { capabilities: allAvailable() });
     for (const view of snapshot.banks.values()) (view as { credit?: unknown }).credit = { intraday: u(5), penalty: 0n, collateral: u(50) };
@@ -473,6 +492,14 @@ describe("limits and failures after connecting", () => {
     connection.result = { session: fakeSession(snapshotOf(undefined, { feed })).session, connecting: false, reconnect: vi.fn() };
     open("");
     expect(screen.getByText(/Loading: read up to ledger 95 of 103/)).toBeTruthy();
+  });
+
+  it("shows a bar for the event history while it loads", () => {
+    const feed = { ...snapshotOf().feed, state: "backfilling" as const, cursorLedger: 95 };
+    connection.result = { session: fakeSession(snapshotOf(undefined, { feed })).session, connecting: false, reconnect: vi.fn() };
+    open("");
+    // Ledgers 90 to 103, read up to 95.
+    expect(screen.getByRole("progressbar", { name: "Loading the event history: ledger 95 of 103…" }).getAttribute("aria-valuenow")).toBe("38");
   });
 
   it("doesn't guess the priority class or submission time of a payment order known only from its settlement", () => {
