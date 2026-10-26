@@ -462,7 +462,7 @@ describe("limits and failures after connecting", () => {
     const filler = Array.from({ length: 2000 }, (_, i) => tx(1000 + i, (m) => [deposited(m(), A, 1n)])).flat();
     connection.result = { session: fakeSession(snapshotOf(undefined, { events: filler })).session, connecting: false, reconnect: vi.fn() };
     open("");
-    expect(screen.getByText(/Only the newest 2,000 events are kept/)).toBeTruthy();
+    expect(screen.queryByText(/Only the newest 2,000 events are kept/)).toBeNull();
     expect(screen.getByRole("region", { name: "Liquidity flows" }).textContent).toMatch(/Only the events still kept in memory count/);
     expect(screen.getByRole("region", { name: "Timeline" }).textContent).toMatch(/1,999 transactions/);
   });
