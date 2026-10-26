@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { amountText, countdown, duration, readAmount } from "./format.ts";
 
 describe("format", () => {
-  it("groups thousands and keeps the exact fraction", () => {
+  it("shows whole units, rounded, with thousands grouped", () => {
     expect(amountText(12_345_670_000_000n, "USD")).toBe("1,234,567 USD");
-    expect(amountText(12_345_000_001n)).toBe("1,234.5000001");
-    expect(amountText(-5_000_000n)).toBe("-0.5");
+    expect(amountText(12_325_000_000n)).toBe("1,233");
+    expect(amountText(12_324_999_999n)).toBe("1,232");
+    expect(amountText(-5_000_000n)).toBe("-1");
+    expect(amountText(-4_999_999n)).toBe("0");
   });
 
   it("formats durations and countdowns on the ledger clock", () => {
