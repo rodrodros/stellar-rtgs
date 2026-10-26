@@ -1,22 +1,15 @@
 # stellar-rtgs
 
-A Real-Time Gross Settlement (RTGS) system on Stellar. Banks hold settlement balances in one Soroban contract and pay each other with final, gross settlement. A payment order that the balance can't cover waits in an urgent or normal queue. The liquidity-saving offset clears gridlocked queues in a single step. The central bank lends intraday credit (repos) against collateral. The contract checks at every step that money is conserved. Its rules were modelled and checked in Quint before any contract code was written.
+A Real-Time Gross Settlement (RTGS) system on Stellar. Banks hold settlement balances in one Soroban contract and pay each other with final, gross settlement. A payment order that the balance can't cover waits in an urgent or normal queue. The liquidity-saving offset clears gridlocked queues in a single step. The central bank lends intraday credit (repos) against collateral. The contract checks at every step that money is conserved. The system was modelled following the formal specs with Quint.
 
 ## Live on the Stellar testnet
 
-The system is already deployed on the public Stellar testnet. A simulator keeps three banks (Dime Lords, Owl Street, Penny Lane) depositing, paying each other, queueing and taking repos around the clock.
-
-**Site: <TODO: https://SITE_HOST>**
-
-| App | Path | What it shows |
-|---|---|---|
-| Observer | `/` | Read-only view of the whole system: timeline of contract events, participants, queues, credit, liquidity flows |
-| Central bank | `/central-bank/` | Operator and settlement agent: overview, banks, credit, keeper, setup |
-| Participant | `/participant/?bank=1` | A bank: liquidity, payment orders, queues, intraday credit |
-
-The apps open on the testnet, and each app's network selector switches to the hosted devnet. The apps sign with demo keys built into the page, so no wallet is needed. Anyone who opens them can act as the central bank or a bank, with test funds only. The hosting is described in [deploy/hetzner](deploy/hetzner/README.md).
-
-### Contract instances (testnet)
+The system is already deployed on the public Stellar testnet. Review the RTGS logic instance [here](https://stellar.expert/explorer/testnet/contract/CD7EJAEIR5TZMF2B3WFPPTI4MXYR33Y7XSP6QOT6WDVYXTZ65CYWSNE7). The actors that interact with it:
+- Cenetral Bank [instance](https://stellar.expert/explorer/testnet/account/GCFVWTJJK3OK3MSQY5AG27TPO4GG5P2R65UJFN3GZWT3PL3JZMU5QNC2).
+- Banks instances:
+    - [Dime Lords]( https://stellar.expert/explorer/testnet/account/GD2EBIAJXFJZKJJBLZZTO3KTRWAQR3R6DHYD7USH2CLNNT2HIRWDYCE7)
+    - [Owl Street](https://stellar.expert/explorer/testnet/account/GBOOXVXVQHGTC2KMI27BDAJKYXLIZWRIGEHLNWJYPLBRVWRDENBWC5R2)
+    - [Penny Lane](https://stellar.expert/explorer/testnet/account/GAIEALGQ7YRV24WJP3SAB6I4RPFZGAEM3U7RMTPNNCSRTUS4SVLT7B33)
 
 | Instance | Address |
 |---|---|
@@ -24,7 +17,8 @@ The apps open on the testnet, and each app's network selector switches to the ho
 | Cash token (USD, Stellar Asset Contract) | `<TODO: C…>`: [stellar.expert](https://stellar.expert/explorer/testnet/contract/TODO) |
 | Central bank account (cash token issuer) | `<TODO: G…>`: [stellar.expert](https://stellar.expert/explorer/testnet/account/TODO) |
 
-SDF resets the testnet every few months. After a reset the simulator deploys a new contract under the same central bank, so the contract ids above can change. The apps find the current contract through the central bank's account.
+
+If reading this early, you can see it being simulated [here](https://89-167-41-133.sslip.io/?network=testnet). If the testnet has been reset, this contracts will be invalid.
 
 ### Screenshots
 
