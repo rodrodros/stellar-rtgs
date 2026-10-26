@@ -50,6 +50,6 @@ It skips itself when no devnet answers. It runs in Node with a jsdom window inst
 | `src/session/` | The acting bank (devnet identity or wallet), the bank's views, capability helpers |
 | `src/connect/` | Network switcher with the mainnet confirmation, the "Act as" bar, deployment settings |
 | `src/liquidity/`, `src/payments/`, `src/queues/`, `src/credit/` | The dashboard's panels |
-| `src/live/` | Which events concern the bank, and the incoming-settlement notices |
+| `src/live/` | Which events concern the bank |
 | `src/ui/` | Formatting, the write flow (`useTx`), badges, the confirm dialog |
 | `src/test/fakeSession.ts` | An in-memory core session for component tests |

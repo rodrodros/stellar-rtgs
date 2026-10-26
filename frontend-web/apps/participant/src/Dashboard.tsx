@@ -1,7 +1,6 @@
 import { useSession } from "@rtgs/core/react";
 import { CreditPanel } from "./credit/CreditPanel.tsx";
 import { LiquidityPanel } from "./liquidity/LiquidityPanel.tsx";
-import { Notices } from "./live/Notices.tsx";
 import { PaymentHistory } from "./payments/PaymentHistory.tsx";
 import { QueuedActionsProvider } from "./payments/QueuedActions.tsx";
 import { SubmitPayment } from "./payments/SubmitPayment.tsx";
@@ -23,7 +22,6 @@ export function Dashboard() {
   return (
     <BankDataProvider key={signer.address} address={signer.address}>
       <Heading />
-      <Notices bank={signer.address} />
       <QueuedActionsProvider>
         <main className="grid">
           <LiquidityPanel />

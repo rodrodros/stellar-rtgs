@@ -143,7 +143,6 @@ describe.skipIf(!up)("participant app on the devnet", () => {
     expect(text).toMatch(/queued/);
     await deposit(a, "1500", "1,500");
     await eventually(() => within(within(a).getByTestId(`payment-${id}`)).getByText("Settled"));
-    await eventually(() => within(b).getByText(`Incoming payment order #${id} from Bank 1 settled: 2,000 USD`));
     await eventually(() => expect(balanceOf(b)).toBe("2,100 USD"));
     expect(within(within(b).getByTestId(`payment-${id}`)).getByText(/released by Bank 1's deposit/)).toBeTruthy();
   });
