@@ -49,56 +49,58 @@ export function BanksTable() {
           {ready ? "No banks known yet: none in config, none registered by the central bank, and none seen in events." : "Reading the banks…"}
         </p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Bank</th>
-              <th scope="col" className="num">
-                Settlement balance
-              </th>
-              <th scope="col" className="num">
-                Urgent
-              </th>
-              <th scope="col" className="num">
-                Normal
-              </th>
-              <th scope="col">Queue heads</th>
-              {credit && (
-                <>
-                  <th scope="col" className="num">
-                    Intraday credit
-                  </th>
-                  <th scope="col" className="num">
-                    Penalty repos
-                  </th>
-                  <th scope="col" className="num">
-                    Collateral
-                  </th>
-                </>
-              )}
-            </tr>
-          </thead>
-          <tbody>
-            {banks.map(({ bank, view }) => (
-              <tr key={bank.address}>
-                <th scope="row">
-                  <Address address={bank.address} />
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Bank</th>
+                <th scope="col" className="num">
+                  Settlement balance
                 </th>
-                <td className="num">{view ? <Amount value={view.balance} /> : "…"}</td>
-                <td className="num">{view ? view.queues.urgent.length : "…"}</td>
-                <td className="num">{view ? view.queues.normal.length : "…"}</td>
-                <td>{view ? <HeadStatus view={view} /> : "…"}</td>
+                <th scope="col" className="num">
+                  Urgent
+                </th>
+                <th scope="col" className="num">
+                  Normal
+                </th>
+                <th scope="col">Queue heads</th>
                 {credit && (
                   <>
-                    <td className="num">{view?.credit ? <Amount value={view.credit.intraday} /> : "…"}</td>
-                    <td className="num">{view?.credit ? <Amount value={view.credit.penalty} /> : "…"}</td>
-                    <td className="num">{view?.credit ? <Amount value={view.credit.collateral} /> : "…"}</td>
+                    <th scope="col" className="num">
+                      Intraday credit
+                    </th>
+                    <th scope="col" className="num">
+                      Penalty repos
+                    </th>
+                    <th scope="col" className="num">
+                      Collateral
+                    </th>
                   </>
                 )}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {banks.map(({ bank, view }) => (
+                <tr key={bank.address}>
+                  <th scope="row">
+                    <Address address={bank.address} />
+                  </th>
+                  <td className="num">{view ? <Amount value={view.balance} /> : "…"}</td>
+                  <td className="num">{view ? view.queues.urgent.length : "…"}</td>
+                  <td className="num">{view ? view.queues.normal.length : "…"}</td>
+                  <td>{view ? <HeadStatus view={view} /> : "…"}</td>
+                  {credit && (
+                    <>
+                      <td className="num">{view?.credit ? <Amount value={view.credit.intraday} /> : "…"}</td>
+                      <td className="num">{view?.credit ? <Amount value={view.credit.penalty} /> : "…"}</td>
+                      <td className="num">{view?.credit ? <Amount value={view.credit.collateral} /> : "…"}</td>
+                    </>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );
@@ -272,40 +274,42 @@ export function CreditPanel() {
       {list.length === 0 ? (
         <p className="empty">No repos seen.</p>
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Repo</th>
-              <th scope="col">Bank</th>
-              <th scope="col" className="num">
-                Amount
-              </th>
-              <th scope="col" className="num">
-                Outstanding
-              </th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((r) => (
-              <tr key={r.id.toString()}>
-                <th scope="row">#{r.id.toString()}</th>
-                <td>
-                  <Address address={r.bank} />
-                </td>
-                <td className="num">
-                  <Amount value={r.amount} />
-                </td>
-                <td className="num">
-                  <Amount value={r.outstanding} />
-                </td>
-                <td className={`status status-${r.status}`}>
-                  {r.status === "penalty" ? `penalty, ${(r.rateBps / 100).toFixed(2)}%` : r.status}
-                </td>
+        <div className="table-scroll repo-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Repo</th>
+                <th scope="col">Bank</th>
+                <th scope="col" className="num">
+                  Amount
+                </th>
+                <th scope="col" className="num">
+                  Outstanding
+                </th>
+                <th scope="col">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {list.map((r) => (
+                <tr key={r.id.toString()}>
+                  <th scope="row">#{r.id.toString()}</th>
+                  <td>
+                    <Address address={r.bank} />
+                  </td>
+                  <td className="num">
+                    <Amount value={r.amount} />
+                  </td>
+                  <td className="num">
+                    <Amount value={r.outstanding} />
+                  </td>
+                  <td className={`status status-${r.status}`}>
+                    {r.status === "penalty" ? `penalty, ${(r.rateBps / 100).toFixed(2)}%` : r.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {caps.credit !== "available" && collateral.size > 0 && (
         <p className="muted">

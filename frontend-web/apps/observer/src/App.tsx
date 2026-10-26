@@ -66,9 +66,9 @@ function Dashboard(props: { onReconnect: () => void }) {
       )}
       {status === "loading" && <p className="loading">Reading balances, queues and recent payment orders…</p>}
       <main className="grid">
+        <BanksTable />
         <div className="col col-system">
           <QueueGauge />
-          <BanksTable />
           <CreditPanel />
         </div>
         <div className="col col-queues">

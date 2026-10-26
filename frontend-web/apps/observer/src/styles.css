@@ -850,3 +850,26 @@ button.danger {
   border-color: var(--bad);
   color: #fff;
 }
+
+.banks {
+  grid-column: 1 / -1;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table-scroll .num {
+  white-space: nowrap;
+}
+
+.repo-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.repo-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+}
