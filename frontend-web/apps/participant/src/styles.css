@@ -57,7 +57,7 @@ code { font-size: 0.85em; word-break: break-all; }
 .panel h2 { font-size: 1rem; margin: 0 0 12px; }
 .panel h3 { font-size: 0.95rem; margin: 12px 0 8px; }
 
-form { display: grid; gap: 8px; }
+form { display: grid; gap: 8px; max-height: 360px; overflow-y: auto; }
 form.row, .row { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 fieldset { border: none; padding: 0; margin: 0; }
 legend { font-size: 0.85rem; color: var(--muted); }
@@ -101,18 +101,16 @@ button[aria-pressed="true"] { background: var(--accent); border-color: var(--acc
 .head-note.blocked { color: var(--warn); }
 .actions { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
 
-.history { width: 100%; border-collapse: collapse; font-size: 0.9rem; display: block; overflow-x: auto; }
+.history { width: 100%; border-collapse: collapse; font-size: 0.9rem; display: block; overflow: auto; max-height: 480px; }
 .history th, .history td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.history th { position: sticky; top: 0; background: var(--surface); }
 .history .num { text-align: right; font-variant-numeric: tabular-nums; }
 .history .in { color: var(--ok); }
 .filters { margin-bottom: 8px; }
 
-.repos { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.repos { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; max-height: 360px; overflow-y: auto; }
 .repo { border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
 
-.notices { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 6px; }
-.notices li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--ok); color: var(--ok); }
-.notices button { border: none; background: none; color: inherit; }
 
 .settings { margin-top: 16px; }
 .settings form { max-width: 520px; margin-top: 8px; }

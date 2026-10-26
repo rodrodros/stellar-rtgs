@@ -119,22 +119,10 @@ describe("Dashboard", () => {
     const fake = setup({ balances: { 2: USD(500) } });
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("0 USD"));
     await act(() => fake.as(2).submit({ to: fake.banks[0]!.address, amount: USD(75), priority: "urgent" }));
-    expect(await screen.findByText("Incoming payment order #0 from Owl Street settled: 75 USD")).toBeTruthy();
     await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("75 USD"));
     const row = screen.getByTestId("payment-0");
     expect(within(row).getByText("From Owl Street")).toBeTruthy();
     expect(within(row).getByText("at once")).toBeTruthy();
-  });
-
-  it("raises no notice for settlements that happened before the page loaded", async () => {
-    const fake = createFakeSession({ balances: { 2: USD(500) } });
-    await fake.as(2).submit({ to: fake.banks[0]!.address, amount: USD(75), priority: "normal" });
-    const replay = fake.hold();
-    renderWith(fake);
-    expect(await screen.findByTestId("payment-0")).toBeTruthy();
-    act(replay);
-    await waitFor(() => expect(screen.getByTestId("settlement-balance").textContent).toBe("75 USD"));
-    expect(screen.queryByText(/Incoming payment order/)).toBeNull();
   });
 
   it("settles a queued payment order when a deposit covers it", async () => {
