@@ -128,7 +128,17 @@ Remove only your own container. `make devnet-down` also deletes `../backend-soro
 
 ## Testnet and mainnet
 
-The bootstrap is devnet only, so on testnet the cash token and the settlement contract must already be deployed (with stellar-cli, following `../backend-soroban`). Then:
+**A seeded testnet** works like the devnet. With `RTGS_TESTNET_SEED` (or `VITE_RTGS_TESTNET_SEED` in the apps) set, the demo identities derive from that seed and sign with the testnet passphrase, through friendbot as on the devnet:
+
+```sh
+RTGS_TESTNET_SEED=$(openssl rand -hex 16)   # keep it: it is the deployment's keys
+RTGS_TESTNET_SEED=… pnpm devnet:bootstrap --network testnet
+RTGS_TESTNET_SEED=… RTGS_NETWORK=testnet pnpm simulate --rate 0.3
+```
+
+Build the apps with `VITE_RTGS_TESTNET_SEED`, `VITE_RTGS_TESTNET_CENTRAL_BANK` (the bootstrap prints it) and `VITE_RTGS_DEFAULT_NETWORK=testnet`, and they act as the demo identities on the testnet too. `../deploy/hetzner` hosts it this way (its README, "Testnet"). Mainnet never takes a seed.
+
+**Without a seed**, the cash token and the settlement contract must already be deployed (with stellar-cli, following `../backend-soroban`). Then:
 
 1. Set `VITE_RTGS_TESTNET_CONTRACT_ID=C…` in `.env`, or paste the id into each app's deployment settings.
 2. Select **testnet** in the app. Signing goes through Stellar Wallets Kit (Freighter and the other wallets it supports): **Connect wallet**.

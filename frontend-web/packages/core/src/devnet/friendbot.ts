@@ -56,8 +56,8 @@ export async function refuelAccount(ctx: TxContext, friendbotUrl: string, destin
     await merge();
   } catch {
     // A merge in the ledger that created the account is refused (`op_seqnum_too_far`); the next
-    // ledger is about a second away on the devnet.
-    await new Promise((r) => setTimeout(r, 2_000));
+    // ledger is about a second away on the devnet, five on the testnet.
+    await new Promise((r) => setTimeout(r, ctx.net.id === "devnet" ? 2_000 : 7_000));
     await merge();
   }
   return amount;

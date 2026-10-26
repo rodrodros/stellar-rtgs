@@ -35,3 +35,11 @@
 		file_server
 	}
 }
+
+# The testnet deployment (compose.testnet.yml), whose own Caddy serves plain HTTP on the edge
+# network. Without TESTNET_SITE_HOST the block sits on a .localhost name, which needs no
+# certificate from the outside.
+{$TESTNET_SITE_HOST:testnet.localhost} {
+	encode zstd gzip
+	reverse_proxy rtgs-testnet-web:80
+}

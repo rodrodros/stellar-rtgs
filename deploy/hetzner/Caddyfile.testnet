@@ -1,0 +1,34 @@
+# The testnet deployment's site, served over plain HTTP: the devnet's Caddy (Caddyfile) holds
+# 80 and 443, terminates TLS and proxies here. No /rpc: the apps use the public testnet RPC.
+:80 {
+	encode zstd gzip
+
+	# What this site is and how to read it, for LLMs: the SPAs are an empty shell to a fetch.
+	# A template, so the host and the central bank come from the environment.
+	handle /llms.txt {
+		root * /usr/share/rtgs
+		templates
+		file_server
+	}
+
+	# The central bank's and the participants' apps, which the observer links to.
+	redir /central-bank /central-bank/
+	redir /participant /participant/
+	handle /central-bank/* {
+		root * /srv
+		try_files {path} /central-bank/index.html
+		file_server
+	}
+	handle /participant/* {
+		root * /srv
+		try_files {path} /participant/index.html
+		file_server
+	}
+
+	# The observer.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}

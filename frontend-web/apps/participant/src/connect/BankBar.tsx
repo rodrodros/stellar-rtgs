@@ -1,3 +1,4 @@
+import { hasSeed } from "@rtgs/core";
 // Who the app acts as, and the state of the connection: the RTGS clock and the event feed.
 import { useFeedStatus, useLedgerClock, useSession } from "@rtgs/core/react";
 import { useActingBank } from "../session/ActingBank.tsx";
@@ -6,7 +7,7 @@ import { ledgerTime, shortAddress } from "../ui/format.ts";
 export function BankBar() {
   const session = useSession();
   const bank = useActingBank();
-  const devnet = session.network.id === "devnet";
+  const devnet = hasSeed(session.network);
   return (
     <div className="bankbar">
       <div className="who">

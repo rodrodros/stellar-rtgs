@@ -1,0 +1,58 @@
+# The hosted simulation on the public Stellar testnet: the simulator and the apps, without a
+# local network. Runs beside compose.yml, whose Caddy holds 80 and 443 and proxies
+# TESTNET_SITE_HOST here over the rtgs-edge network, so compose.yml must be up first.
+# See README.md. Settings come from .env.testnet:
+#   docker compose -f compose.testnet.yml --env-file .env.testnet up -d --build
+name: rtgs-testnet
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 50m, max-file: "5" }
+
+x-build: &build
+  context: ../../frontend-web
+  dockerfile: ../deploy/hetzner/Dockerfile
+  additional_contexts:
+    deploy: .
+  provenance: false
+
+services:
+  simulator:
+    build:
+      <<: *build
+      target: simulator
+    environment:
+      RTGS_NETWORK: testnet
+      RTGS_TESTNET_RPC_URL: ${RTGS_TESTNET_RPC_URL:-https://soroban-testnet.stellar.org}
+      RTGS_TESTNET_SEED: ${RTGS_TESTNET_SEED:?set RTGS_TESTNET_SEED in .env.testnet}
+      SIM_BANKS: ${SIM_BANKS:-3}
+    # Slower than on the devnet: testnet ledgers close every ~5 s, and the RPC is shared.
+    command: ${SIM_FLAGS:---rate 0.3 --log json --duration 43200}
+    restart: unless-stopped
+    stop_grace_period: 3m
+    logging: *logging
+
+  web:
+    build:
+      <<: *build
+      target: web
+      args:
+        RTGS_NETWORK: testnet
+        CADDYFILE: Caddyfile.testnet
+        LLMS_TXT: llms.testnet.txt
+        VITE_RTGS_TESTNET_RPC_URL: ${RTGS_TESTNET_RPC_URL:-}
+        VITE_RTGS_TESTNET_CENTRAL_BANK: ${RTGS_TESTNET_CENTRAL_BANK:-}
+        VITE_RTGS_TESTNET_SEED: ${RTGS_TESTNET_SEED}
+    environment:
+      SITE_HOST: ${TESTNET_SITE_HOST:?set TESTNET_SITE_HOST in .env.testnet}
+      RTGS_TESTNET_CENTRAL_BANK: ${RTGS_TESTNET_CENTRAL_BANK:-}
+    networks:
+      edge:
+        aliases: [rtgs-testnet-web]
+    restart: unless-stopped
+    logging: *logging
+
+networks:
+  edge:
+    name: rtgs-edge
+    external: true

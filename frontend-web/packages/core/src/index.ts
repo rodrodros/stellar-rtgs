@@ -9,6 +9,7 @@ export {
   devnetFriendbotUrl,
   ledgerUrl,
   loadNetworks,
+  hasSeed,
   mainnetEnabled,
   overridesStore,
   parseBanks,

@@ -1,0 +1,61 @@
+# Stellar RTGS demo
+
+> A real-time gross settlement (RTGS) system as a Soroban smart contract, running on the public Stellar testnet. A headless simulator drives a central bank and a few commercial banks around the clock: payments, queueing, gridlock resolution, intraday repos. This site serves a read-only observer of it.
+
+The observer at https://{{env "SITE_HOST"}}/ is a single-page app that renders in the browser, so fetching it returns an empty shell. To see what is happening, read the chain through the RPC below instead. The central bank's app (https://{{env "SITE_HOST"}}/central-bank/) and the participants' app (https://{{env "SITE_HOST"}}/participant/?bank=<G-address>) are hosted too; on this deployment they sign in the browser as the demo identities, so anyone can act through them.
+
+## Network
+
+- RPC: https://soroban-testnet.stellar.org (SDF's public Stellar RPC, JSON-RPC 2.0 over POST). Horizon and an explorer work too: https://horizon-testnet.stellar.org, https://stellar.expert/explorer/testnet
+- Network passphrase: `Test SDF Network ; September 2015`
+- Central bank: `{{env "RTGS_TESTNET_CENTRAL_BANK"}}`. Its address is stable; everything else is found from it.
+- Event history: RPC keeps about 7 days.
+
+## Finding the deployment
+
+The central bank's account carries a registry in its data entries (UTF-8 values). Read them with the RPC method `getLedgerEntries`, keys of type `data` on the central bank's account:
+
+- `rtgs.settlement`: the settlement contract's id (C...). It changes if the testnet is reset (SDF resets it every few months), so look it up rather than remembering it.
+- `rtgs.bank.<i>` and `rtgs.bname.<i>` (i = 1, 2, ...): each bank's address and display name.
+- `rtgs.sim`: the simulator's status, `<state>:<unix seconds>` with state `running`, `stopping` or `stopped`. While running it rewrites the entry every minute, so a `running` older than about 3 minutes means the simulator died without saying so.
+
+With `@stellar/stellar-sdk` 17:
+
+```js
+import { Keypair, rpc, xdr } from "@stellar/stellar-sdk";
+const server = new rpc.Server("https://soroban-testnet.stellar.org");
+const key = (name) => xdr.LedgerKey.data(new xdr.LedgerKeyData({
+  accountId: Keypair.fromPublicKey("{{env "RTGS_TESTNET_CENTRAL_BANK"}}").xdrAccountId(), dataName: name,
+}));
+const { entries } = await server.getLedgerEntries(key("rtgs.settlement"), key("rtgs.sim"));
+for (const { val } of entries) {
+  if (val.type !== "data") continue;
+  console.log(val.data.dataName.toString(), Buffer.from(val.data.dataValue.value).toString("utf8"));
+}
+```
+
+## Reading activity
+
+- Events: `getEvents` with filter `{ type: "contract", contractIds: [<settlement id>] }`. Topic 0 is the event name as a symbol, then its topic fields; the data is a map of the rest.
+  - `submitted` (id; from, to, amount, priority), `settled` (id; from, to, amount), `offset` (ids: payments settled together to resolve gridlock), `revoked`, `reprioritised`, `expired` (id)
+  - `deposited`, `withdrawn` (bank; amount), `collateral_set` (bank; value)
+  - `repo_opened` (id; bank, amount), `repo_repaid` (id; amount, outstanding), `repo_penalised` (id; rate_bps)
+- Contract state (simulate a call, no signature needed): `balance(bank)`, `payment(id)`, `queue(bank, priority)`, `queued_count()`, `credit(bank)`, `repo(id)`, `config()`, `central_bank()`.
+- Amounts are i128 in the cash token's smallest unit: USD with 7 decimals (10000000 = 1 USD).
+- Priorities: `urgent` settles before `normal`. A payment the sender can't cover waits in its queue until liquidity arrives, it is offset against others, or it expires (1 day).
+
+## Observer links
+
+The observer takes query parameters, so a link can open on one item:
+
+- `?payment=<id>`: a payment's details
+- `?tx=<hash>`: a transaction
+- `?ledger=<sequence>`: a ledger
+- `?from=<ledger>` or `?from=now`: start the feed at a ledger, or with live events only, instead of the start of retention
+
+## Source
+
+- Repository: https://github.com/rodrodros/stellar-rtgs
+- Contract: https://github.com/rodrodros/stellar-rtgs/tree/main/backend-soroban
+- Apps and simulator: https://github.com/rodrodros/stellar-rtgs/tree/main/frontend-web
+- This deployment: https://github.com/rodrodros/stellar-rtgs/tree/main/deploy/hetzner

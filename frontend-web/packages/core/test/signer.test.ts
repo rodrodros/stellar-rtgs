@@ -29,9 +29,18 @@ describe("devnet keypair signer", () => {
     expect(deriveDevnetKeypair("rtgs-devnet-demo", "central-bank").publicKey()).toBe(a.centralBank.address);
   });
 
-  it("refuses to exist for testnet or mainnet", () => {
+  it("refuses to exist for mainnet, or for a testnet without a seed", () => {
     expect(() => devnetIdentities(testnet!)).toThrow(RtgsError);
     expect(() => keypairSigner(Keypair.random(), { passphrase: PASSPHRASES.mainnet })).toThrow(/devnet/);
+  });
+
+  it("signs on a seeded testnet with the testnet passphrase", async () => {
+    const seeded = loadNetworks({ RTGS_TESTNET_SEED: "testnet-demo" }).find((n) => n.id === "testnet")!;
+    const ids = devnetIdentities(seeded, 1);
+    expect(ids.centralBank.networkPassphrase).toBe(Networks.TESTNET);
+    expect(ids.centralBank.address).toBe(deriveDevnetKeypair("testnet-demo", "central-bank").publicKey());
+    const signed = await ids.centralBank.signTransaction(tx(Networks.TESTNET, ids.centralBank.address), { networkPassphrase: Networks.TESTNET });
+    expect(TransactionBuilder.fromXDR(signed, Networks.TESTNET).signatures).toHaveLength(1);
   });
 
   it("keeps its network check when a method is passed around on its own", async () => {

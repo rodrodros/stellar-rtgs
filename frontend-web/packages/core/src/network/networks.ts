@@ -28,7 +28,7 @@ export interface NetworkConfig {
   centralBank?: string;
   /** Banks listed in config; merged with the ledger registry and the event feed. */
   banks: BankEntry[];
-  /** The seed devnet identities derive from (devnet only). */
+  /** The seed the demo identities derive from: always on the devnet, opt-in on the testnet. */
   devnetSeed?: string;
   allowHttp: boolean;
   /** Block explorer URL templates, with `{hash}` and `{ledger}`; none for the devnet. */
@@ -115,6 +115,11 @@ function optional<K extends string, V>(key: K, value: V | undefined): { [P in K]
   return (value === undefined ? {} : { [key]: value }) as { [P in K]?: V };
 }
 
+/** Whether the network has demo identities derived from a seed: the devnet, or a seeded testnet. */
+export function hasSeed(net: Pick<NetworkConfig, "id" | "devnetSeed">): boolean {
+  return net.id === "devnet" || (net.id === "testnet" && net.devnetSeed !== undefined);
+}
+
 export function mainnetEnabled(env: Env): boolean {
   return readEnv(env, "ENABLE_MAINNET") === "true";
 }
@@ -150,6 +155,7 @@ export function loadNetworks(env: Env = {}): NetworkConfig[] {
     ...optional("contractId", readEnv(env, "TESTNET_CONTRACT_ID")),
     ...optional("centralBank", readEnv(env, "TESTNET_CENTRAL_BANK")),
     banks: parseBanks(readEnv(env, "TESTNET_BANKS")),
+    ...optional("devnetSeed", readEnv(env, "TESTNET_SEED")),
     allowHttp: isLocal(testnetRpc),
     ...explorerFrom(env, "TESTNET", STELLAR_EXPERT("testnet")),
   });

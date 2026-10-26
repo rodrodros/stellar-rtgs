@@ -1,5 +1,6 @@
 // pnpm simulate [--rpc ...] [--banks 3] [--profile balanced] [--rate 2] ...
-// Connects to the bootstrapped devnet and keeps its banks transacting until Ctrl-C. The
+// RTGS_NETWORK=testnet selects the seeded testnet instead of the devnet.
+// Connects to the bootstrapped network and keeps its banks transacting until Ctrl-C. The
 // pieces (world, policy, engine, reporter) are built here and nowhere else; flag parsing
 // lives in policy/args.ts.
 import { RtgsError, connect, devnetBankName, devnetIdentities, loadNetworks, toRtgsError, withOverrides } from "@rtgs/core";
@@ -31,9 +32,12 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-const env = { ...process.env, ...(args.seed ? { RTGS_DEVNET_SEED: args.seed } : {}) };
-const devnet = loadNetworks(env).find((n) => n.id === "devnet")!;
-const net = args.rpc ? withOverrides(devnet, { rpcUrl: args.rpc }) : devnet;
+const networkId = process.env.RTGS_NETWORK || "devnet";
+if (networkId !== "devnet" && networkId !== "testnet") fail(`RTGS_NETWORK must be devnet or testnet, not ${networkId}`);
+const seedVar = networkId === "devnet" ? "RTGS_DEVNET_SEED" : "RTGS_TESTNET_SEED";
+const env = { ...process.env, ...(args.seed ? { [seedVar]: args.seed } : {}) };
+const selected = loadNetworks(env).find((n) => n.id === networkId)!;
+const net = args.rpc ? withOverrides(selected, { rpcUrl: args.rpc }) : selected;
 
 let session: RtgsSession;
 try {

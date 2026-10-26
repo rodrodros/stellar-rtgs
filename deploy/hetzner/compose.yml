@@ -59,6 +59,8 @@ services:
     environment:
       SITE_HOST: ${SITE_HOST:?set SITE_HOST in .env}
       RTGS_DEVNET_CENTRAL_BANK: ${RTGS_DEVNET_CENTRAL_BANK:-}
+      # The testnet deployment's host (compose.testnet.yml), proxied to it over the edge network.
+      TESTNET_SITE_HOST: ${TESTNET_SITE_HOST:-}
     ports:
       - "80:80"
       - "443:443"
@@ -66,9 +68,15 @@ services:
     volumes:
       - caddy-data:/data
       - caddy-config:/config
+    networks: [default, edge]
     depends_on: [quickstart]
     restart: unless-stopped
     logging: *logging
+
+networks:
+  # Shared with compose.testnet.yml, whose site this Caddy fronts: it alone holds 80 and 443.
+  edge:
+    name: rtgs-edge
 
 volumes:
   stellar-data:

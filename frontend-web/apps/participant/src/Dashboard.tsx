@@ -1,3 +1,4 @@
+import { hasSeed } from "@rtgs/core";
 import { useSession } from "@rtgs/core/react";
 import { CreditPanel } from "./credit/CreditPanel.tsx";
 import { LiquidityPanel } from "./liquidity/LiquidityPanel.tsx";
@@ -14,7 +15,7 @@ export function Dashboard() {
   if (!signer) {
     return (
       <p className="empty">
-        {session.network.id === "devnet" ? "Choose a bank to act as." : "Connect the wallet of a participant's account."}
+        {hasSeed(session.network) ? "Choose a bank to act as." : "Connect the wallet of a participant's account."}
       </p>
     );
   }

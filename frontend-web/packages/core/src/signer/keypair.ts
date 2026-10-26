@@ -1,39 +1,41 @@
-// Devnet keypairs: held in the browser, derived from a demo seed so that every app derives
-// the same central bank and banks without sharing storage. They never sign for another network.
+// Demo keypairs: held in the browser, derived from a demo seed so that every app derives
+// the same central bank and banks without sharing storage. They sign on the devnet, and on the
+// testnet when a seed is configured for it; never on mainnet.
 import { contract, hash, Keypair } from "@stellar/stellar-sdk";
 import { Buffer } from "buffer";
 import { RtgsError } from "../errors.ts";
 import { DEFAULT_DEVNET_SEED, PASSPHRASES, type NetworkConfig } from "../network/networks.ts";
 import { assertSamePassphrase, type Signer } from "./signer.ts";
 
-const DEVNET = PASSPHRASES.devnet;
+const DEMO_PASSPHRASES = [PASSPHRASES.devnet, PASSPHRASES.testnet];
 
-function assertDevnet(passphrase: string): void {
-  if (passphrase !== DEVNET) {
+function assertDemoNetwork(passphrase: string): void {
+  if (!DEMO_PASSPHRASES.includes(passphrase)) {
     throw new RtgsError(
       "network-mismatch",
-      "Devnet keys only",
-      "Keypairs held in the browser sign only on the devnet; use a wallet on testnet and mainnet.",
+      "Devnet and testnet keys only",
+      "Keypairs held in the browser sign only on the devnet and testnet; use a wallet on mainnet.",
     );
   }
 }
 
 export function keypairSigner(keypair: Keypair, net: Pick<NetworkConfig, "passphrase">, label?: string): Signer {
-  assertDevnet(net.passphrase);
-  const sdk = contract.basicNodeSigner(keypair, DEVNET);
+  assertDemoNetwork(net.passphrase);
+  const passphrase = net.passphrase;
+  const sdk = contract.basicNodeSigner(keypair, passphrase);
   // Methods close over `signer`, not `this`, so they work when passed around on their own.
   const signer: Signer = {
     kind: "devnet-keypair",
     address: keypair.publicKey(),
-    networkPassphrase: DEVNET,
+    networkPassphrase: passphrase,
     ...(label === undefined ? {} : { label }),
     async signTransaction(xdr, opts) {
       assertSamePassphrase(signer, opts.networkPassphrase);
-      return (await sdk.signTransaction(xdr, { networkPassphrase: DEVNET })).signedTxXdr;
+      return (await sdk.signTransaction(xdr, { networkPassphrase: passphrase })).signedTxXdr;
     },
     async signAuthEntry(entry, opts) {
       assertSamePassphrase(signer, opts.networkPassphrase);
-      return (await sdk.signAuthEntry(entry, { networkPassphrase: DEVNET })).signedAuthEntry;
+      return (await sdk.signAuthEntry(entry, { networkPassphrase: passphrase })).signedAuthEntry;
     },
   };
   return signer;
@@ -57,10 +59,16 @@ export interface DevnetIdentities {
   banks: Signer[];
 }
 
-/** The devnet's central bank (also the cash token's issuer) and `count` banks. */
+/**
+ * The demo central bank (also the cash token's issuer) and `count` banks. The devnet falls back
+ * to the public demo seed; the testnet needs its own seed configured (`*_TESTNET_SEED`).
+ */
 export function devnetIdentities(net: Pick<NetworkConfig, "passphrase" | "devnetSeed">, count = 3): DevnetIdentities {
-  assertDevnet(net.passphrase);
-  const seed = net.devnetSeed ?? DEFAULT_DEVNET_SEED;
+  assertDemoNetwork(net.passphrase);
+  const seed = net.devnetSeed ?? (net.passphrase === PASSPHRASES.devnet ? DEFAULT_DEVNET_SEED : undefined);
+  if (seed === undefined) {
+    throw new RtgsError("config", "No demo seed", "Set a testnet seed to derive the demo identities on the testnet.");
+  }
   return {
     centralBank: keypairSigner(deriveDevnetKeypair(seed, CENTRAL_BANK_LABEL), net, "Central bank"),
     banks: Array.from({ length: count }, (_, i) =>

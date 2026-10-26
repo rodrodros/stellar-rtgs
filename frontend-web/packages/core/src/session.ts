@@ -10,7 +10,7 @@ import { RtgsError, toRtgsError } from "./errors.ts";
 import { EventFeed, type FeedOptions } from "./events/feed.ts";
 import { analyseQueues, type BankQueues } from "./model/queues.ts";
 import { RtgsStore, type StoreOptions } from "./model/store.ts";
-import { readEnv, type Env, type NetworkConfig } from "./network/networks.ts";
+import { hasSeed, readEnv, type Env, type NetworkConfig } from "./network/networks.ts";
 import { BankRegistry } from "./registry/banks.ts";
 import { refuelAccount } from "./devnet/friendbot.ts";
 import { discoverDeployment, publishSimStatus, readSimStatus, type SimStatus } from "./registry/ledger.ts";
@@ -346,15 +346,15 @@ export async function connect(net: NetworkConfig, options: ConnectOptions = {}):
 
   let contractId = options.contractId ?? net.contractId;
   if (!contractId) {
-    const cb = net.centralBank ?? (net.id === "devnet" ? devnetIdentities(net, 0).centralBank.address : undefined);
+    const cb = net.centralBank ?? (hasSeed(net) ? devnetIdentities(net, 0).centralBank.address : undefined);
     if (cb) contractId = (await discoverDeployment(ctx, cb)).contractId;
   }
   if (!contractId) {
     throw new RtgsError(
       "config",
       "No settlement contract",
-      net.id === "devnet"
-        ? "Nothing is deployed on this devnet yet: run the bootstrap, or set the contract id."
+      hasSeed(net)
+        ? "Nothing is deployed on this network yet: run the bootstrap, or set the contract id."
         : `Set the ${net.label} contract id.`,
     );
   }
