@@ -1,12 +1,12 @@
 {$SITE_HOST} {
 	encode zstd gzip
 
-	# The devnet's RPC, for the observer in the browser. Friendbot stays private.
+	# The devnet's RPC, for the apps in the browser. Friendbot stays private.
 	handle /rpc* {
 		reverse_proxy quickstart:8000
 	}
 
-	# What this site is and how to read it, for LLMs: the SPA is an empty shell to a fetch.
+	# What this site is and how to read it, for LLMs: the SPAs are an empty shell to a fetch.
 	# A template, so the host and the central bank come from the environment.
 	handle /llms.txt {
 		root * /usr/share/rtgs
@@ -14,7 +14,21 @@
 		file_server
 	}
 
-	# The observer, a static SPA.
+	# The central bank's and the participants' apps, which the observer links to.
+	redir /central-bank /central-bank/
+	redir /participant /participant/
+	handle /central-bank/* {
+		root * /srv
+		try_files {path} /central-bank/index.html
+		file_server
+	}
+	handle /participant/* {
+		root * /srv
+		try_files {path} /participant/index.html
+		file_server
+	}
+
+	# The observer.
 	handle {
 		root * /srv
 		try_files {path} /index.html
