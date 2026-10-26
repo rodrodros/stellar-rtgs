@@ -33,6 +33,11 @@ export interface EngineOptions {
   drainMs?: number;
   /** How many ticks an `(action, actor)` pair sits out after `REFUSALS_BEFORE_COOLDOWN` refusals in a row. */
   cooldownTicks?: number;
+  /**
+   * How long one attempt of an action may take before it is given up as failed, freeing its
+   * lane. A backstop: the RPC client's own timeout should end a hung request first.
+   */
+  actionTimeoutMs?: number;
   /** Back-off before each retry of a transient failure, before jitter; its length is the number of retries. */
   retryDelaysMs?: readonly number[];
   /**
@@ -48,7 +53,7 @@ export const REFUSALS_BEFORE_COOLDOWN = 3;
 // Five retries: lanes that simulate in the same ledger all predict the same next payment id, so
 // only one of them applies per ledger and the rest come back as footprint races ("State
 // changed"); a retry can meet the same race again.
-const DEFAULTS = { tickMs: 250, drainMs: 30_000, cooldownTicks: 40, retryDelaysMs: [500, 1_000, 2_000, 3_000, 4_000] };
+const DEFAULTS = { tickMs: 250, drainMs: 30_000, cooldownTicks: 40, actionTimeoutMs: 120_000, retryDelaysMs: [500, 1_000, 2_000, 3_000, 4_000] };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -99,6 +104,27 @@ export class Engine {
   stop(): Promise<void> {
     this.stopping ??= this.shutdown();
     return this.stopping;
+  }
+
+  /**
+   * Runs `work` on `address`'s lane, after whatever it has queued and after the start-up
+   * `recover` (which sends from the lanes' accounts outside them), for writes from a lane's
+   * account that aren't actions (the simulation's status). A stop waits for it like an action.
+   */
+  runOnLane<T>(address: string, work: () => Promise<T>): Promise<T> {
+    const lane = this.lanes.get(address);
+    if (!lane) return Promise.reject(new Error(`${address} has no lane`));
+    const result = lane.run(async () => {
+      await this.starting;
+      return work();
+    });
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.inFlight.add(settled);
+    void settled.finally(() => this.inFlight.delete(settled));
+    return result;
   }
 
   /** The bucket holds a second's worth of actions, and at least one. */
@@ -216,7 +242,7 @@ export class Engine {
     const delays = this.options.retryDelaysMs ?? DEFAULTS.retryDelaysMs;
     for (let retry = 0; ; retry++) {
       try {
-        return await choice.action.run(this.options.actors, choice.actor, choice.params);
+        return await this.bounded(choice.action.run(this.options.actors, choice.actor, choice.params));
       } catch (e) {
         const delay = delays[retry];
         // Once stopping, give up rather than back off: the drain is waiting on this lane.
@@ -225,6 +251,16 @@ export class Engine {
         if (this.stopping) throw e;
       }
     }
+  }
+
+  /** Rejects with a "Timed out" failure if `work` hasn't settled within `actionTimeoutMs`. */
+  private bounded<T>(work: Promise<T>): Promise<T> {
+    const ms = this.options.actionTimeoutMs ?? DEFAULTS.actionTimeoutMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new RtgsError("transaction", "Timed out", `No outcome within ${ms / 1000} s; the lane moves on.`)), ms);
+    });
+    return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
   }
 
   private report(choice: Choice, outcome: Outcome, ms: number): void {

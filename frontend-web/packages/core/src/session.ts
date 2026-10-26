@@ -12,7 +12,8 @@ import { analyseQueues, type BankQueues } from "./model/queues.ts";
 import { RtgsStore, type StoreOptions } from "./model/store.ts";
 import { readEnv, type Env, type NetworkConfig } from "./network/networks.ts";
 import { BankRegistry } from "./registry/banks.ts";
-import { discoverDeployment } from "./registry/ledger.ts";
+import { refuelAccount } from "./devnet/friendbot.ts";
+import { discoverDeployment, publishSimStatus, readSimStatus, type SimStatus } from "./registry/ledger.ts";
 import { assertNetwork, latestLedger, rpcServer, type LedgerClock, type RpcServer } from "./rpc.ts";
 import { devnetIdentities } from "./signer/keypair.ts";
 import { assertSamePassphrase, type Signer } from "./signer/signer.ts";
@@ -276,6 +277,39 @@ export class RtgsSession {
 
   latestLedger(): Promise<LedgerClock> {
     return latestLedger(this.server);
+  }
+
+  /** An account's XLM, in stroops: what it has left for fees. */
+  async xlmBalance(address: string): Promise<bigint> {
+    try {
+      return (await this.server.getAccountEntry(address)).balance;
+    } catch (e) {
+      throw toRtgsError(e);
+    }
+  }
+
+  /**
+   * Devnet: adds a friendbot grant (about 10,000 XLM) to an existing account, which friendbot
+   * itself won't refund. Resolves with the stroops added.
+   */
+  refuel(address: string): Promise<bigint> {
+    this.assertLive();
+    if (!this.network.friendbotUrl) {
+      throw new RtgsError("config", "No friendbot", `${this.network.label} has no friendbot to refuel from.`);
+    }
+    return refuelAccount(this.ctx, this.network.friendbotUrl, address);
+  }
+
+  /** What the headless simulator last published on the central bank's account, if anything. */
+  simStatus(): Promise<SimStatus | undefined> {
+    return readSimStatus(this.ctx, this.centralBank);
+  }
+
+  /** Publishes the simulator's status; `signer` must be the central bank. */
+  publishSimStatus(signer: Signer, status: SimStatus): Promise<TxOutcome> {
+    this.assertLive();
+    assertSamePassphrase(signer, this.network.passphrase);
+    return publishSimStatus(this.ctx, signer, this.centralBank, status);
   }
 
   /**

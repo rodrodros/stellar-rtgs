@@ -248,6 +248,36 @@ describe("periodic summary", () => {
     expect(text).not.toContain("LOW XLM: Bank 1");
   });
 
+  it("logs refuels, and counts them back in for each lane's XLM burn per hour", async () => {
+    let bank1 = PLENTY_XLM;
+    const xlmBalance = vi.fn(async (a: string) => (a === BANK_1 ? bank1 : PLENTY_XLM));
+    const { reporter, lines, world } = setup({ reads: { xlmBalance } });
+    reporter.start(INFO);
+    vi.advanceTimersByTime(30_000);
+    reporter.tick(world);
+    await flush();
+    expect(lines.at(-1)).toContain("xlm: Central bank 10000 · Bank 1 10000 · Bank 2 10000 · Bank 3 10000 · refuels 0");
+
+    reporter.refuel(BANK_1, { amount: PLENTY_XLM });
+    expect(lines.at(-1)).toContain(" Bank 1       refuel        → ok +10000 XLM from friendbot");
+    reporter.refuel(CB, { error: new RtgsError("rpc", "Friendbot refused", "HTTP 500") });
+    expect(lines.at(-1)).toContain(" Central bank refuel        → FAILED: Friendbot refused HTTP 500");
+
+    bank1 = 2n * PLENTY_XLM - 100n * 10_000_000n;
+    vi.advanceTimersByTime(3_600_000);
+    reporter.tick(world);
+    await flush();
+    expect(lines.at(-1)).toContain("Bank 1 19900 (−100/h) · Bank 2 10000 (−0/h)");
+    expect(lines.at(-1)).toContain("refuels 1");
+  });
+
+  it("logs refuels as JSON", () => {
+    const { reporter, lines } = setup({ log: "json" });
+    reporter.start(INFO);
+    reporter.refuel(BANK_2, { amount: 5n });
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({ type: "refuel", lane: "Bank 2", address: BANK_2, amount: "5" });
+  });
+
   it("drops a summary whose reads return after stop", async () => {
     let resolve!: (v: { held: bigint; recorded: bigint }) => void;
     const { reporter, lines, world } = setup({ reads: { conservation: () => new Promise((r) => (resolve = r)) } });
@@ -262,6 +292,11 @@ describe("periodic summary", () => {
 });
 
 describe("createReporterReads", () => {
+  it("reads a lane's XLM through the session", async () => {
+    const reads = createReporterReads({ xlmBalance: async (a: string) => (a === BANK_1 ? 7n : 0n) } as never);
+    expect(await reads.xlmBalance(BANK_1)).toBe(7n);
+  });
+
   it("adds every bank the registry knows to the conservation read", async () => {
     const readConservation = vi.fn(async (_accounts: readonly string[]) => ({ held: 5n, recorded: 5n }));
     const session = { readConservation, registry: { list: () => [{ address: BANK_3, sources: ["ledger"] }, { address: "GOTHER", sources: ["events"] }] } };

@@ -4,11 +4,18 @@ import type { NetworkConfig } from "./network/networks.ts";
 
 export type RpcServer = rpc.Server;
 
+/**
+ * Every RPC request gives up after this long. Without it a request the network never answers
+ * hangs forever, and whatever awaits it (the event feed, a store refresh, a transaction)
+ * stops with no error.
+ */
+export const RPC_TIMEOUT_MS = 30_000;
+
 export function rpcServer(net: NetworkConfig): RpcServer {
   if (!net.rpcUrl) {
     throw new RtgsError("config", "No RPC URL", `Set the ${net.label} RPC URL (VITE_RTGS_${net.id.toUpperCase()}_RPC_URL).`);
   }
-  return new rpc.Server(net.rpcUrl, { allowHttp: net.allowHttp });
+  return new rpc.Server(net.rpcUrl, { allowHttp: net.allowHttp, timeout: RPC_TIMEOUT_MS });
 }
 
 /**

@@ -176,6 +176,44 @@ describe("payment lifecycle", () => {
   });
 });
 
+describe("simulation status", () => {
+  it("says nothing when no simulator has published", async () => {
+    const fake = fakeSession();
+    connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
+    open("");
+    await waitFor(() => expect(fake.simStatus).toHaveBeenCalled());
+    expect(screen.queryByText(/simulation/i)).toBeNull();
+  });
+
+  it("labels a running simulation beside the feed", async () => {
+    const snapshot = snapshotOf();
+    const fake = fakeSession(snapshot);
+    fake.simStatus.mockResolvedValue({ state: "running", at: snapshot.ledger!.closeTime - 20 });
+    connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
+    open("");
+    expect(await screen.findByText("simulation running")).toBeTruthy();
+    expect(screen.queryByText(/The simulation/)).toBeNull();
+  });
+
+  it("tells the viewer when the simulation is paused, or has died", async () => {
+    const snapshot = snapshotOf();
+    const now = snapshot.ledger!.closeTime;
+    const fake = fakeSession(snapshot);
+    fake.simStatus.mockResolvedValue({ state: "stopped", at: now - 90 });
+    connection.result = { session: fake.session, connecting: false, reconnect: vi.fn() };
+    open("");
+    const paused = await screen.findByText(/The simulation is paused/);
+    expect(paused.closest(".banner")!.textContent).toMatch(/1 min 30 s ago\). It restarts shortly/);
+    cleanup();
+
+    fake.simStatus.mockResolvedValue({ state: "running", at: now - 600 });
+    open("");
+    const lost = await screen.findByText(/The simulation stopped unexpectedly/);
+    expect(lost.closest(".banner")!.textContent).toMatch(/10 min ago\. It restarts automatically/);
+    expect(screen.getByText("simulation down")).toBeTruthy();
+  });
+});
+
 describe("networks", () => {
   it("connects to the default network, devnet, and never to mainnet without the flag", () => {
     open("");

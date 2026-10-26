@@ -31,6 +31,7 @@ export {
   type RtgsEvent,
   type RtgsEventType,
   type RtgsSession,
+  type SimStatus,
   type StoreOptions,
   type SystemSnapshot,
   type TokenEvent,

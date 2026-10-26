@@ -227,7 +227,7 @@ describe("formatSummary", () => {
       }),
       "pretty",
     );
-    expect(text).toContain("!!! LOW XLM: Bank 2 has 87 XLM, below 100; friendbot won't refund it, so its fees will run out");
+    expect(text).toContain("!!! LOW XLM: Bank 2 has 87 XLM, below 100; refuelling is off or failing, so its fees will run out");
     expect(text).toContain("fees: couldn't read Central bank's XLM (Network unreachable)");
     expect(formatSummary(block(), "pretty")).not.toContain("XLM");
   });

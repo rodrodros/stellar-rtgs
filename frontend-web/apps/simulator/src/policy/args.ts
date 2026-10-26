@@ -18,6 +18,8 @@ export interface CliArgs {
   log: "pretty" | "json";
   /** Seconds between periodic summaries; 0 turns them off. */
   summaryEvery: number;
+  /** Refuel a lane from friendbot below this much XLM; 0 turns refuelling off. */
+  refuelBelow: number;
 }
 
 export type ParsedArgs = { kind: "run"; args: CliArgs } | { kind: "help" } | { kind: "error"; message: string };
@@ -37,6 +39,7 @@ Keeps the bootstrapped devnet's banks transacting until Ctrl-C.
   --duration <secs>      stop after this many seconds
   --log <format>         pretty | json (default pretty)
   --summary-every <secs> seconds between summaries, 0 for none (default 30)
+  --refuel-below <xlm>   refuel a lane from friendbot below this much XLM, 0 for never (default 2000)
   --help                 show this help`;
 
 /** Parses argv (without node and the script); `randomSeed` supplies `--rng-seed`'s default. */
@@ -64,6 +67,7 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
         duration: { type: "string" },
         log: { type: "string", default: "pretty" },
         "summary-every": { type: "string", default: "30" },
+        "refuel-below": { type: "string", default: "2000" },
         help: { type: "boolean", default: false },
       },
     }));
@@ -91,6 +95,7 @@ export function parseCliArgs(argv: readonly string[], randomSeed: () => number =
       rngSeed: values["rng-seed"] === undefined ? randomSeed() : integer("--rng-seed", values["rng-seed"], 0, 2 ** 32 - 1),
       log: values.log,
       summaryEvery: nonNegative("--summary-every", values["summary-every"]),
+      refuelBelow: nonNegative("--refuel-below", values["refuel-below"]),
     };
     if (values.rpc !== undefined) parsed.rpc = values.rpc;
     if (values.seed !== undefined) parsed.seed = values.seed;

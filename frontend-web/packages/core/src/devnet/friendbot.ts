@@ -1,5 +1,8 @@
-import { RtgsError } from "../errors.ts";
+import { Keypair, Operation } from "@stellar/stellar-sdk";
+import { RtgsError, toRtgsError } from "../errors.ts";
 import type { RpcServer } from "../rpc.ts";
+import { keypairSigner } from "../signer/keypair.ts";
+import { sendClassic, type TxContext } from "../tx.ts";
 
 /**
  * Funds `address` through friendbot unless the account exists already; returns whether it
@@ -30,4 +33,32 @@ export async function fundAccount(server: RpcServer, friendbotUrl: string, addre
     }
   }
   return true;
+}
+
+/**
+ * Tops up an existing account's XLM, which friendbot won't do directly: it funds a throwaway
+ * account, which then merges into `destination`. The throwaway account is the transaction's
+ * source, so this never touches `destination`'s sequence number and can run while that account
+ * is sending its own transactions. Resolves with the XLM merged, in stroops. If the merge
+ * fails, the throwaway account is simply left behind.
+ */
+export async function refuelAccount(ctx: TxContext, friendbotUrl: string, destination: string): Promise<bigint> {
+  const donor = Keypair.random();
+  await fundAccount(ctx.server, friendbotUrl, donor.publicKey());
+  let amount: bigint;
+  try {
+    amount = (await ctx.server.getAccountEntry(donor.publicKey())).balance;
+  } catch (e) {
+    throw toRtgsError(e);
+  }
+  const merge = () => sendClassic(ctx, keypairSigner(donor, ctx.net), [Operation.accountMerge({ destination })]);
+  try {
+    await merge();
+  } catch {
+    // A merge in the ledger that created the account is refused (`op_seqnum_too_far`); the next
+    // ledger is about a second away on the devnet.
+    await new Promise((r) => setTimeout(r, 2_000));
+    await merge();
+  }
+  return amount;
 }

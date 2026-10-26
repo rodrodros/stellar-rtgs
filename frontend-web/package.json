@@ -12,6 +12,7 @@
     "dev:participant": "pnpm --filter @rtgs/participant dev",
     "dev:observer": "pnpm --filter @rtgs/observer dev",
     "simulate": "pnpm --filter @rtgs/simulator start --",
+    "simulate:supervised": "bash apps/simulator/scripts/supervise.sh",
     "build": "pnpm -r --if-present build",
     "preview": "pnpm --parallel --filter \"./apps/*\" preview",
     "typecheck": "pnpm -r --if-present typecheck",

@@ -21,6 +21,8 @@ export const ACTION_NAMES: readonly ActionName[] = [
   "clawback",
   "deauthorize",
   "reauthorize",
+  "expire",
+  "convertOverdue",
 ];
 
 export interface Tally {
@@ -62,6 +64,21 @@ export interface SummaryBlock {
   conservation: { held: bigint; recorded: bigint } | { error: string };
   /** Lanes whose XLM is below the threshold, or couldn't be read. */
   fees: { lane: string; address: string; xlm?: bigint; error?: string }[];
+  /**
+   * Every lane's XLM, and what it has spent per hour since the first summary (refuels
+   * counted back in), so a long run's burn rate is visible.
+   */
+  xlm?: { lane: string; xlm: bigint; perHour?: bigint }[];
+  /** Refuels so far, all lanes. */
+  refuels?: number;
+}
+
+/** A lane refuelled, or a refuel that failed. */
+export interface RefuelRecord {
+  at: Date;
+  lane: string;
+  address: string;
+  result: { amount: bigint } | { error: { title: string; detail: string } };
 }
 
 /** 100 XLM, in stroops: below it a lane is warned that its fees will run out. */
@@ -244,8 +261,35 @@ function feeLine(fee: SummaryBlock["fees"][number], color: boolean): string {
   if (fee.xlm === undefined) return paint("yellow", `fees: couldn't read ${fee.lane}'s XLM (${fee.error ?? "unknown error"})`);
   return paint(
     "red",
-    `!!! LOW XLM: ${fee.lane} has ${formatAmount(fee.xlm)} XLM, below ${formatAmount(LOW_XLM)}; friendbot won't refund it, so its fees will run out`,
+    `!!! LOW XLM: ${fee.lane} has ${formatAmount(fee.xlm)} XLM, below ${formatAmount(LOW_XLM)}; refuelling is off or failing, so its fees will run out`,
   );
+}
+
+/** Whole XLM, for the burn line: "9990", not "9990.1234567". */
+const wholeXlm = (stroops: bigint) => formatAmount((stroops / 10_000_000n) * 10_000_000n);
+
+function xlmLine(block: SummaryBlock): string | undefined {
+  if (!block.xlm?.length) return undefined;
+  const lanes = block.xlm.map((l) => `${l.lane} ${wholeXlm(l.xlm)}${l.perHour === undefined ? "" : ` (−${wholeXlm(l.perHour)}/h)`}`);
+  return `xlm: ${lanes.join(" · ")} · refuels ${block.refuels ?? 0}`;
+}
+
+/** A refuel's line. */
+export function formatRefuel(record: RefuelRecord, mode: LogMode, color = false): string {
+  const { result } = record;
+  if (mode === "json") {
+    return toJson({
+      type: "refuel",
+      at: record.at.toISOString(),
+      lane: record.lane,
+      address: record.address,
+      ...("amount" in result ? { amount: result.amount } : { error: { title: result.error.title, detail: result.error.detail } }),
+    });
+  }
+  const paint = painter(color);
+  const head = `${paint("dim", clockTime(record.at))} ${record.lane.padEnd(12)} ${"refuel".padEnd(13)}`;
+  if ("amount" in result) return `${head} → ${paint("green", "ok")} +${formatAmount(result.amount)} XLM from friendbot`;
+  return `${head} → ${paint("red", `FAILED: ${result.error.title}`)} ${paint("dim", result.error.detail)}`;
 }
 
 /** A periodic summary block. */
@@ -289,6 +333,7 @@ export function formatSummary(block: SummaryBlock, mode: LogMode, color = false)
     ...banks,
     repos,
     conservationLine(block.conservation, color),
+    ...[xlmLine(block)].filter((line) => line !== undefined),
     ...block.fees.map((f) => feeLine(f, color)),
   ].join("\n");
 }

@@ -2,14 +2,16 @@
 // Connects to the bootstrapped devnet and keeps its banks transacting until Ctrl-C. The
 // pieces (world, policy, engine, reporter) are built here and nowhere else; flag parsing
 // lives in policy/args.ts.
-import { RtgsError, connect, devnetIdentities, loadNetworks, withOverrides } from "@rtgs/core";
+import { RtgsError, connect, devnetIdentities, loadNetworks, toRtgsError, withOverrides } from "@rtgs/core";
 import type { RtgsActor, RtgsSession } from "@rtgs/core";
 import { MODULES } from "./actions/index.ts";
 import { Engine } from "./engine/index.ts";
+import { createRefueler } from "./fuel.ts";
 import { USAGE, parseCliArgs } from "./policy/args.ts";
 import { createPolicy } from "./policy/index.ts";
 import { createReporter, createReporterReads } from "./report/index.ts";
 import { createRng } from "./rng.ts";
+import { createStatusPublisher } from "./status.ts";
 import type { Actors } from "./types.ts";
 import { createWorld } from "./world/index.ts";
 
@@ -93,15 +95,39 @@ try {
 }
 const policy = createPolicy({ profile: args.profile, modules: MODULES, rng: createRng(args.rngSeed), log: (m) => console.error(m) });
 const reporter = createReporter({ log: args.log, summaryEvery: args.summaryEvery, reads: createReporterReads(session) });
+const lanes = [...banks.map((b) => b.address), cb.address];
 const engine = new Engine({
   world,
   policy,
   reporter,
   actors,
   modules: MODULES,
-  lanes: [...banks.map((b) => b.address), cb.address],
+  lanes,
   rate: args.rate,
   ...(args.maxActions !== undefined ? { maxActions: args.maxActions } : {}),
+});
+
+// Friendbot grants keep every lane in XLM for fees, checked once a minute.
+const REFUEL_EVERY_MS = 60_000;
+if (args.refuelBelow > 0 && !net.friendbotUrl) console.error("No friendbot URL: lanes won't be refuelled.");
+const refueler =
+  args.refuelBelow > 0 && net.friendbotUrl
+    ? createRefueler({
+        lanes,
+        belowStroops: BigInt(Math.round(args.refuelBelow * 10_000_000)),
+        xlmBalance: (address) => session.xlmBalance(address),
+        refuel: (address) => session.refuel(address),
+        onRefuel: (address, result) => reporter.refuel(address, result),
+      })
+    : undefined;
+const refuelTimer = refueler && setInterval(() => void refueler.check(), REFUEL_EVERY_MS);
+
+// The status the apps show, signed by the central bank. Through its lane: a write beside the
+// lane's own transactions would collide on the account's sequence number.
+const status = createStatusPublisher({
+  publish: (s) => engine.runOnLane(cb.address, () => session.publishSimStatus(cb, s)),
+  now: () => world.now(),
+  onError: (e) => console.error(`[status] could not publish: ${toRtgsError(e).title}`),
 });
 
 // The first signal (or --duration) stops gracefully: drain, then recover. A second signal
@@ -111,10 +137,16 @@ let code = 0;
 const stop = () => {
   if (!stopping) {
     console.error("Stopping: draining in-flight transactions (Ctrl-C again to force)");
-    stopping = engine.stop().catch((e: unknown) => {
-      console.error(`stop failed: ${(e as Error).message}`);
-      code = 1;
-    });
+    clearInterval(refuelTimer);
+    // Queued on the central bank's lane before the drain starts, so the drain waits for it.
+    void status.end("stopping");
+    stopping = engine
+      .stop()
+      .then(() => status.end("stopped"))
+      .catch((e: unknown) => {
+        console.error(`stop failed: ${(e as Error).message}`);
+        code = 1;
+      });
   }
   return stopping;
 };
@@ -139,9 +171,14 @@ reporter.start({
   capabilities: session.capabilities,
 });
 
+void refueler?.check();
+
 try {
   try {
-    await engine.run();
+    const running = engine.run();
+    // After `run` has begun its start-up recover, which the lane waits for.
+    void status.start();
+    await running;
   } catch (e) {
     console.error(`simulate failed: ${(e as Error).message}`);
     code = 1;
@@ -151,6 +188,7 @@ try {
   await stop();
 } finally {
   clearTimeout(timer);
+  clearInterval(refuelTimer);
   try {
     reporter.stop();
   } finally {

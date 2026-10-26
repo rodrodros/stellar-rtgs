@@ -16,7 +16,7 @@ import type {
 
 /** Who signs an action: a bank, or the central bank (operator, settlement agent, token admin). */
 export type Role = "bank" | "central-bank";
-export type ActionGroup = "payments" | "credit" | "token";
+export type ActionGroup = "payments" | "credit" | "token" | "keeper";
 export type ActionName =
   | "deposit"
   | "withdraw"
@@ -29,7 +29,9 @@ export type ActionName =
   | "issue"
   | "clawback"
   | "deauthorize"
-  | "reauthorize";
+  | "reauthorize"
+  | "expire"
+  | "convertOverdue";
 
 /** Seeded randomness (`createRng` in rng.ts), so a run can be repeated. */
 export interface Rng {

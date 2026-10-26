@@ -1,8 +1,10 @@
 // The traffic profiles and the default tuning. A profile is a weight per action (the policy
 // draws among the actions that apply, by these weights) and a submit mix (the submit action
 // picks its shape by it). Actions whose `plan` only applies when something is due — a top-up
-// below the floor, a reauthorization after the pause — get large weights: they act as
-// priorities, and fall through to the rest when nothing is due.
+// below the floor, a reauthorization after the pause, a keeper's expire or convertOverdue once
+// something is past its term — get large weights: they act as priorities, and fall through to
+// the rest when nothing is due. Every profile keeps the keeper on, so a run of days doesn't
+// pile up expired orders and overdue repos.
 import { DEFAULT_CASH } from "@rtgs/core";
 import type { Config } from "@rtgs/core";
 import type { ActionName, Tuning } from "../types.ts";
@@ -16,6 +18,9 @@ export interface Profile {
   weights: Partial<Record<ActionName, number>>;
   submitMix: Tuning["submitMix"];
 }
+
+/** Due-only keeper actions, as priorities. */
+const KEEPER = { expire: 30, convertOverdue: 30 } as const;
 
 export const PROFILES: Readonly<Record<ProfileName, Profile>> = {
   // Mostly covered submits and deposits, regular queueing, occasional gridlock; some credit;
@@ -34,6 +39,7 @@ export const PROFILES: Readonly<Record<ProfileName, Profile>> = {
       openRepo: 2,
       clawback: 0.3,
       deauthorize: 0.1,
+      ...KEEPER,
     },
     submitMix: { covered: 6, uncovered: 3, gridlock: 1 },
   },
@@ -50,12 +56,13 @@ export const PROFILES: Readonly<Record<ProfileName, Profile>> = {
       issue: 10,
       setCollateral: 2,
       openRepo: 4,
+      ...KEEPER,
     },
     submitMix: { covered: 1, uncovered: 4, gridlock: 5 },
   },
   // Covered payments in and out of the contract, and the top-ups that keep it going.
   calm: {
-    weights: { submit: 10, deposit: 4, withdraw: 3, issue: 10 },
+    weights: { submit: 10, deposit: 4, withdraw: 3, issue: 10, ...KEEPER },
     submitMix: { covered: 1, uncovered: 0, gridlock: 0 },
   },
 };

@@ -387,4 +387,63 @@ describe("Engine", () => {
     expect(def.calls).toEqual([BANK_1]);
     await Promise.all([e.stop(), vi.advanceTimersByTimeAsync(0)]);
   });
+  it("gives up an action that never settles after actionTimeoutMs, freeing its lane", async () => {
+    let n = 0;
+    const def = action(() => (++n === 1 ? new Promise(() => {}) : Promise.resolve(txOutcome(undefined))));
+    const r = reporter();
+    const e = engine({ policy: policy(def), reporter: r, lanes: [BANK_1], actionTimeoutMs: 1_000, rate: 1 });
+    void e.run();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(def.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(r.results).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    const first = r.results[0]!.outcome;
+    expect(first.kind === "failed" && first.error.title).toBe("Timed out");
+    await tick(4);
+    expect(def.calls.length).toBeGreaterThan(1);
+    await e.stop();
+  });
+
+  it("runs work on a lane after the start-up recover, one at a time with its actions, and drains it", async () => {
+    const recovered = deferred<void>();
+    const order: string[] = [];
+    const modules: ActionModule[] = [{ group: "token", actions: [], recover: () => (order.length === 0 ? recovered.promise : Promise.resolve()) }];
+    const busy = deferred<TxOutcome<unknown>>();
+    const def = action(() => {
+      order.push("action");
+      return busy.promise;
+    });
+    const e = engine({ policy: policy(def, (idle) => (def.calls.length === 0 && idle.includes(CB) ? [{ action: def, actor: CB, params: null }] : [])), modules });
+    void e.run();
+    const write = deferred<string>();
+    const written = e.runOnLane(CB, () => {
+      order.push("write");
+      return write.promise;
+    });
+    await tick();
+    // Recover hasn't finished: neither the loop nor the write has started.
+    expect(order).toEqual([]);
+    recovered.resolve();
+    await tick();
+    // The write was queued first; the action waits for it.
+    expect(order).toEqual(["write"]);
+    write.resolve("done");
+    expect(await written).toBe("done");
+    await tick();
+    expect(order).toEqual(["write", "action"]);
+
+    // A stop drains work queued on a lane, like an action.
+    const late = deferred<void>();
+    void e.runOnLane(CB, () => late.promise);
+    const stopped = vi.fn();
+    void e.stop().then(stopped);
+    busy.resolve(txOutcome(undefined));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).not.toHaveBeenCalled();
+    late.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toHaveBeenCalled();
+    await expect(e.runOnLane("GSTRANGER", async () => 1)).rejects.toThrow(/no lane/);
+  });
 });
