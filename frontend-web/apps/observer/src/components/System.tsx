@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { useLedgerClock, useSnapshot, type Bank, type BankView, type Capabilities, type Payment, type Priority } from "../core.ts";
 import { expiryOf, formatDuration } from "../model/expiry.ts";
-import { Address, Amount, PaymentLink, priorityLabel } from "./format.tsx";
+import { Address, Amount, OpenApp, PaymentLink, priorityLabel } from "./format.tsx";
 
 /** The registry's banks by name, each with its current view (undefined until it is read). */
 export function useBanks(): { bank: Bank; view: BankView | undefined }[] {
@@ -43,6 +43,7 @@ export function BanksTable() {
       <header className="panel-header">
         <h2 id="banks-title">Participants</h2>
         <span className="muted">{banks.length} banks</span>
+        <OpenApp role="cb">Open central bank app</OpenApp>
       </header>
       {banks.length === 0 ? (
         <p className="empty">
@@ -83,7 +84,7 @@ export function BanksTable() {
               {banks.map(({ bank, view }) => (
                 <tr key={bank.address}>
                   <th scope="row">
-                    <Address address={bank.address} />
+                    <Address address={bank.address} /> <OpenApp role="bank" address={bank.address} />
                   </th>
                   <td className="num">{view ? <Amount value={view.balance} /> : "…"}</td>
                   <td className="num">{view ? view.queues.urgent.length : "…"}</td>
