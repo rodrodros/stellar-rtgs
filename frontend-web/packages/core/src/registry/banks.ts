@@ -3,7 +3,7 @@
 // any address the event feed mentions. The central bank and the contract are not banks.
 import { notifyAll } from "../listeners.ts";
 import { DEFAULT_DEVNET_SEED, type NetworkConfig } from "../network/networks.ts";
-import { deriveDevnetKeypair, bankLabel } from "../signer/keypair.ts";
+import { deriveDevnetKeypair, bankLabel, devnetBankName } from "../signer/keypair.ts";
 import type { Signer } from "../signer/signer.ts";
 import type { TxContext } from "../tx.ts";
 import type { TxOutcome } from "../types.ts";
@@ -62,13 +62,13 @@ export class BankRegistry {
     return () => this.listeners.delete(listener);
   }
 
-  /** Names devnet identities ("Bank 2") by address, so even unregistered ones read well. */
+  /** Names devnet identities ("Owl Street") by address, so even unregistered ones read well. */
   private devnetName(address: string): string | undefined {
     if (this.net.id !== "devnet") return undefined;
     if (!this.devnetNames) {
       const seed = this.net.devnetSeed ?? DEFAULT_DEVNET_SEED;
       this.devnetNames = new Map(
-        Array.from({ length: DEVNET_LABELS }, (_, i) => [deriveDevnetKeypair(seed, bankLabel(i + 1)).publicKey(), `Bank ${i + 1}`]),
+        Array.from({ length: DEVNET_LABELS }, (_, i) => [deriveDevnetKeypair(seed, bankLabel(i + 1)).publicKey(), devnetBankName(i + 1)]),
       );
     }
     return this.devnetNames.get(address);

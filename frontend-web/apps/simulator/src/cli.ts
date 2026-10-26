@@ -2,7 +2,7 @@
 // Connects to the bootstrapped devnet and keeps its banks transacting until Ctrl-C. The
 // pieces (world, policy, engine, reporter) are built here and nowhere else; flag parsing
 // lives in policy/args.ts.
-import { RtgsError, connect, devnetIdentities, loadNetworks, toRtgsError, withOverrides } from "@rtgs/core";
+import { RtgsError, connect, devnetBankName, devnetIdentities, loadNetworks, toRtgsError, withOverrides } from "@rtgs/core";
 import type { RtgsActor, RtgsSession } from "@rtgs/core";
 import { MODULES } from "./actions/index.ts";
 import { Engine } from "./engine/index.ts";
@@ -53,7 +53,7 @@ if (session.centralBank !== cb.address) {
       "Pass the --seed the bootstrap used, or the --contract it deployed.",
   );
 }
-const banks = ids.banks.map((s, i) => ({ address: s.address, label: s.label ?? `Bank ${i + 1}` }));
+const banks = ids.banks.map((s, i) => ({ address: s.address, label: s.label ?? devnetBankName(i + 1) }));
 
 // A deauthorized trustline is fine (recover reauthorizes it); a missing one needs the bootstrap.
 try {

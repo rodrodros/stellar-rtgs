@@ -23,7 +23,7 @@ describe("devnet keypair signer", () => {
     expect(a.centralBank.address).toBe(b.centralBank.address);
     expect(a.banks.map((s) => s.address)).toEqual(b.banks.map((s) => s.address));
     expect(new Set([a.centralBank.address, ...a.banks.map((s) => s.address)]).size).toBe(4);
-    expect(a.banks[1]!.label).toBe("Bank 2");
+    expect(a.banks[1]!.label).toBe("Owl Street");
     const other = devnetIdentities({ ...devnet!, devnetSeed: "another" }, 1);
     expect(other.centralBank.address).not.toBe(a.centralBank.address);
     expect(deriveDevnetKeypair("rtgs-devnet-demo", "central-bank").publicKey()).toBe(a.centralBank.address);

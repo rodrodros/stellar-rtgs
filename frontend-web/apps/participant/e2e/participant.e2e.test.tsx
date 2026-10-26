@@ -102,7 +102,7 @@ describe.skipIf(!up)("participant app on the devnet", () => {
   }
 
   const bank2 = () => {
-    const option = within(region(a, /new payment order/i)).getByRole("option", { name: "Bank 2" }) as HTMLOptionElement;
+    const option = within(region(a, /new payment order/i)).getByRole("option", { name: "Owl Street" }) as HTMLOptionElement;
     return option.value;
   };
 
@@ -151,7 +151,7 @@ describe.skipIf(!up)("participant app on the devnet", () => {
   it("reconnects after saving deployment settings, keeping the app alive", async () => {
     fireEvent.click(within(a).getByText(/Deployment settings/));
     fireEvent.click(within(a).getByRole("button", { name: "Save and reconnect" }));
-    await eventually(() => expect(within(a).getByRole("button", { name: "Bank 1", pressed: true })).toBeTruthy());
+    await eventually(() => expect(within(a).getByRole("button", { name: "Dime Lords", pressed: true })).toBeTruthy());
     await eventually(() => expect(balanceOf(a)).toBe("400 USD"));
     expect(within(a).queryByText(/Session closed/)).toBeNull();
   });
