@@ -10,6 +10,9 @@ x-build: &build
   dockerfile: ../deploy/hetzner/Dockerfile
   additional_contexts:
     deploy: .
+  # No attestation: it is new on every build, so an unchanged image would get a new id and
+  # `up --build` would restart its service. These images never leave the server.
+  provenance: false
 
 services:
   quickstart:
