@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useLedgerClock, useSession, useSnapshot, type NetworkConfig } from "../core.ts";
 import { formatDuration } from "../model/expiry.ts";
 import type { SimView } from "../model/simulation.ts";
-import { checkStartLedger, ledgerSecondsAgo, retentionWindow, type StartChoice } from "../model/retention.ts";
+import { checkStartLedger, retentionWindow, type StartChoice } from "../model/retention.ts";
 import { isContractId } from "../model/url.ts";
 import { CLEAR_ON_NETWORK_CHANGE, useNav, useQuery } from "../state/query.tsx";
 import { Time } from "./format.tsx";
@@ -34,7 +34,7 @@ export function ConnectBar(props: { networks: NetworkConfig[]; selected: string 
         <select
           value={props.selected ?? ""}
           onChange={(e) =>
-            update({ network: e.target.value, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "retention" as const } : {}) })
+            update({ network: e.target.value, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "recent" as const } : {}) })
           }
         >
           {props.selected === undefined && <option value="">Choose…</option>}
@@ -114,9 +114,9 @@ export function ChainStatus(props: { simulation?: SimView }) {
   );
 }
 
-type Preset = "retention" | "hour" | "now" | "ledger";
+type Preset = "recent" | "retention" | "now" | "ledger";
 
-const presetOf = (from: StartChoice): Preset => (from === "retention" ? "retention" : from === "now" ? "now" : "ledger");
+const presetOf = (from: StartChoice): Preset => (typeof from === "number" ? "ledger" : from);
 
 export function RetentionBar() {
   const { query, update } = useQuery();
@@ -128,18 +128,9 @@ export function RetentionBar() {
 
   const load = (e: FormEvent) => {
     e.preventDefault();
-    if (preset === "retention" || preset === "now") {
+    if (preset !== "ledger") {
       setProblem(undefined);
       update({ from: preset });
-      return;
-    }
-    if (preset === "hour") {
-      if (!retention) return setProblem("The retention window isn't known yet.");
-      setProblem(undefined);
-      const from = ledgerSecondsAgo(retention, 3_600);
-      setLedger(String(from));
-      setPreset("ledger");
-      update({ from });
       return;
     }
     const n = Number(ledger);
@@ -163,6 +154,9 @@ export function RetentionBar() {
       </p>
       <p>
         {feed.startLedger !== undefined ? <>Events loaded from ledger {feed.startLedger.toLocaleString()}. </> : null}
+        {query.from === "recent" && retention && feed.startLedger !== undefined && feed.startLedger > retention.oldestLedger && (
+          <>That's the last hour, or since the contract's deployment if later; load the whole retention window for older events. </>
+        )}
         {feed.state === "backfilling" && feed.cursorLedger !== undefined && feed.latestLedger !== undefined && (
           <>
             Loading: read up to ledger {feed.cursorLedger.toLocaleString()} of {feed.latestLedger.toLocaleString()}.{" "}
@@ -179,8 +173,8 @@ export function RetentionBar() {
         <label>
           Load events from
           <select value={preset} onChange={(e) => setPreset(e.target.value as Preset)}>
+            <option value="recent">the last hour</option>
             <option value="retention">the whole retention window</option>
-            <option value="hour">the last hour</option>
             <option value="now">now (live only)</option>
             <option value="ledger">ledger…</option>
           </select>

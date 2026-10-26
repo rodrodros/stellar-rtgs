@@ -5,9 +5,10 @@ const CONTRACT = `C${"A".repeat(55)}`;
 const HASH = "ab".repeat(32);
 
 describe("url query", () => {
-  it("defaults to the whole retention window and nothing open", () => {
-    expect(parseQuery("")).toEqual({ from: "retention" });
-    expect(formatQuery({ from: "retention" })).toBe("");
+  it("defaults to recent history and nothing open", () => {
+    expect(parseQuery("")).toEqual({ from: "recent" });
+    expect(formatQuery({ from: "recent" })).toBe("");
+    expect(formatQuery({ from: "retention" })).toBe("?from=retention");
   });
 
   it("round-trips every field", () => {
@@ -18,17 +19,17 @@ describe("url query", () => {
   });
 
   it("opens one drawer from a link naming several: payment, then tx, then ledger", () => {
-    expect(parseQuery(`?payment=1&tx=${HASH}&ledger=2`)).toEqual({ from: "retention", payment: 1n });
-    expect(parseQuery(`?tx=${HASH}&ledger=2`)).toEqual({ from: "retention", tx: HASH });
+    expect(parseQuery(`?payment=1&tx=${HASH}&ledger=2`)).toEqual({ from: "recent", payment: 1n });
+    expect(parseQuery(`?tx=${HASH}&ledger=2`)).toEqual({ from: "recent", tx: HASH });
   });
 
   it("drops values that can't be what they claim", () => {
-    expect(parseQuery("?payment=-1&tx=xyz&from=soon&ledger=x")).toEqual({ from: "retention" });
+    expect(parseQuery("?payment=-1&tx=xyz&from=soon&ledger=x")).toEqual({ from: "recent" });
   });
 
   it("keeps an invalid contract id, so the app can refuse it instead of watching another contract", () => {
     const query = parseQuery("?contract=CABC");
-    expect(query).toEqual({ from: "retention", invalidContract: "CABC" });
+    expect(query).toEqual({ from: "recent", invalidContract: "CABC" });
     expect(formatQuery(query)).toBe("?contract=CABC");
   });
 

@@ -13,7 +13,7 @@ import { RtgsStore, type StoreOptions } from "./model/store.ts";
 import { hasSeed, readEnv, type Env, type NetworkConfig } from "./network/networks.ts";
 import { BankRegistry } from "./registry/banks.ts";
 import { refuelAccount } from "./devnet/friendbot.ts";
-import { discoverDeployment, publishSimStatus, readSimStatus, type SimStatus } from "./registry/ledger.ts";
+import { discoverDeployment, publishSimStatus, readSettlementLedger, readSimStatus, type SimStatus } from "./registry/ledger.ts";
 import { assertNetwork, latestLedger, rpcServer, type LedgerClock, type RpcServer } from "./rpc.ts";
 import { devnetIdentities } from "./signer/keypair.ts";
 import { assertSamePassphrase, type Signer } from "./signer/signer.ts";
@@ -215,7 +215,8 @@ export class RtgsSession {
   /** A new event feed; `includeToken` adds the cash token's SAC events. Stopped on dispose. */
   events(options: FeedOptions = {}): EventFeed {
     this.assertLive();
-    return new EventFeed({ server: this.server, contractId: this.contractId, sacId: this.cashToken.sacId }, options, {
+    const deployedLedger = () => readSettlementLedger(this.ctx, this.centralBank, this.contractId);
+    return new EventFeed({ server: this.server, contractId: this.contractId, sacId: this.cashToken.sacId, deployedLedger }, options, {
       onStart: (feed) => this.feeds.add(feed),
       onStop: (feed) => this.feeds.delete(feed),
     });

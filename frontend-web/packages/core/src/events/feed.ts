@@ -12,7 +12,11 @@ import type { RpcServer } from "../rpc.ts";
 import type { FeedEvent } from "../types.ts";
 import { decodeFeedEvent } from "./decode.ts";
 
-export type FeedStart = { ledger: number } | { cursor: string } | "retention-start" | "now";
+/**
+ * `recent`: the last `recentLedgers`, but not before the contract's deployment. Bounds the
+ * backfill however long the network has run; the rest of the window stays one choice away.
+ */
+export type FeedStart = { ledger: number } | { cursor: string } | "retention-start" | "recent" | "now";
 
 export interface FeedOptions {
   /** Where to start; the oldest retained ledger by default. */
@@ -23,6 +27,8 @@ export interface FeedOptions {
   pollMs?: number;
   /** Events per request (RPC allows up to 10,000). */
   pageLimit?: number;
+  /** How far back `recent` starts: 720 by default, about an hour of 5 s ledgers. */
+  recentLedgers?: number;
 }
 
 export interface FeedStatus {
@@ -50,7 +56,11 @@ export interface FeedSource {
   server: RpcServer;
   contractId: string;
   sacId?: string;
+  /** The ledger the contract was deployed at, if known: `recent` never starts before it. */
+  deployedLedger?: () => Promise<number | undefined>;
 }
+
+const RECENT_LEDGERS = 720;
 
 const MAX_BACKOFF_MS = 30_000;
 
@@ -153,6 +163,11 @@ export class EventFeed {
     let startLedger = health.oldestLedger;
     let clamped = this.current.clamped;
     if (from === "now") startLedger = health.latestLedger;
+    else if (from === "recent") {
+      const deployed = await this.source.deployedLedger?.().catch(() => undefined);
+      const recent = health.latestLedger - (this.options.recentLedgers ?? RECENT_LEDGERS);
+      startLedger = Math.min(Math.max(recent, deployed ?? 0, health.oldestLedger), health.latestLedger);
+    }
     else if (typeof from === "object") {
       clamped = clamped || from.ledger < health.oldestLedger;
       startLedger = Math.min(Math.max(from.ledger, health.oldestLedger), health.latestLedger);

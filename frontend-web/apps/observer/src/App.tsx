@@ -144,7 +144,7 @@ function Observer(props: { env: Env }) {
         <MainnetConfirm
           onConfirm={() => setMainnetConfirmed(true)}
           onCancel={() =>
-            update({ network: defaultNetwork(networks, env).id, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "retention" as const } : {}) })
+            update({ network: defaultNetwork(networks, env).id, ...CLEAR_ON_NETWORK_CHANGE, ...(typeof query.from === "number" ? { from: "recent" as const } : {}) })
           }
         />
       )}
