@@ -1,0 +1,63 @@
+# The hosted simulation: a devnet, the simulator running against it, and the observer over HTTPS.
+# See README.md. Settings come from .env next to this file.
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 50m, max-file: "5" }
+
+x-build: &build
+  context: ../../frontend-web
+  dockerfile: ../deploy/hetzner/Dockerfile
+  additional_contexts:
+    deploy: .
+
+services:
+  quickstart:
+    # The same image and network as backend-soroban/devnet, with the ledger kept on a volume.
+    image: stellar/quickstart:v678-b1525.1-latest
+    command: --local --persistent --protocol-version 29 --limits testnet --enable core,rpc
+    volumes:
+      - stellar-data:/opt/stellar
+    ports:
+      - "127.0.0.1:8300:8000"
+    restart: unless-stopped
+    logging: *logging
+
+  simulator:
+    build:
+      <<: *build
+      target: simulator
+    environment:
+      RTGS_DEVNET_RPC_URL: http://quickstart:8000/rpc
+      RTGS_DEVNET_SEED: ${RTGS_DEVNET_SEED:?set RTGS_DEVNET_SEED in .env}
+      SIM_BANKS: ${SIM_BANKS:-3}
+    command: ${SIM_FLAGS:---rate 2 --log json --duration 43200}
+    depends_on: [quickstart]
+    restart: unless-stopped
+    stop_grace_period: 3m
+    logging: *logging
+
+  web:
+    build:
+      <<: *build
+      target: web
+      args:
+        VITE_RTGS_DEVNET_RPC_URL: ${PUBLIC_RPC_URL:-https://${SITE_HOST}/rpc}
+        VITE_RTGS_DEVNET_CENTRAL_BANK: ${RTGS_DEVNET_CENTRAL_BANK:-}
+    environment:
+      SITE_HOST: ${SITE_HOST:?set SITE_HOST in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [quickstart]
+    restart: unless-stopped
+    logging: *logging
+
+volumes:
+  stellar-data:
+  caddy-data:
+  caddy-config:

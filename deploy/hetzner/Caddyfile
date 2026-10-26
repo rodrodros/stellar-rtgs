@@ -1,0 +1,15 @@
+{$SITE_HOST} {
+	encode zstd gzip
+
+	# The devnet's RPC, for the observer in the browser. Friendbot stays private.
+	handle /rpc* {
+		reverse_proxy quickstart:8000
+	}
+
+	# The observer, a static SPA.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
