@@ -24,15 +24,13 @@ mkdir -p ~rtgs/.ssh && cp ~/.ssh/authorized_keys ~rtgs/.ssh/ && chown -R rtgs: ~
 
 ## Deploy
 
-From a checkout (no GitHub access needed on the server):
+The server runs a clone of https://github.com/rodrodros/stellar-rtgs on `main`. What's pushed there is what gets deployed.
+
+First time, as `rtgs` on the server:
 
 ```sh
-git archive HEAD | ssh rtgs@HOST 'mkdir -p ~/stellar-rtgs && tar -x -C ~/stellar-rtgs'
-```
-
-First time, on the server in `~/stellar-rtgs/deploy/hetzner`:
-
-```sh
+git clone https://github.com/rodrodros/stellar-rtgs.git ~/stellar-rtgs
+cd ~/stellar-rtgs/deploy/hetzner
 cp .env.example .env
 sed -i "s/^RTGS_DEVNET_SEED=.*/RTGS_DEVNET_SEED=$(openssl rand -hex 16)/" .env   # and set SITE_HOST
 docker compose up -d --build quickstart simulator
@@ -45,7 +43,17 @@ Copy the deployment's `centralBank` into `.env` as `RTGS_DEVNET_CENTRAL_BANK`, t
 docker compose up -d --build web
 ```
 
-The observer is at `https://SITE_HOST/`. Later updates: ship the code again, then `docker compose up -d --build`.
+The observer is at `https://SITE_HOST/`.
+
+## Update
+
+Push to `main`, then on the server:
+
+```sh
+~/stellar-rtgs/deploy/hetzner/update.sh
+```
+
+It pulls, rebuilds the images, and restarts what changed: the simulator stops gracefully and starts again, the observer is rebuilt with the same `.env`. The ledger stays.
 
 ## Operating it
 
