@@ -96,6 +96,17 @@ export function TxLink(props: { hash: string; ledger: number }) {
   );
 }
 
+/** "Open app ↗": the central bank's app, or the participant app acting as `address`; nothing when unconfigured. */
+export function OpenApp(props: { role: "cb" | "bank"; address?: string; children?: ReactNode }) {
+  const href = appLink(APPS, props.role, props.address ?? "");
+  if (!href) return null;
+  return (
+    <a className="external open-app" href={href} target="_blank" rel="noopener noreferrer">
+      {props.children ?? "Open app"} ↗
+    </a>
+  );
+}
+
 /** A link out to the network's block explorer, when core knows one (none on the devnet). */
 export function ExplorerLink(props: { href: string | undefined; children: ReactNode }) {
   if (!props.href) return null;

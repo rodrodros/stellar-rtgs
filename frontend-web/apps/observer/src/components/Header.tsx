@@ -1,7 +1,7 @@
 // The connection controls (network, contract, mainnet confirmation) and the live status lines:
 // the ledger clock, the feed, and the RPC retention window that bounds the loaded events.
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { STORE_EVENT_LIMIT, useLedgerClock, useSession, useSnapshot, type NetworkConfig } from "../core.ts";
+import { useLedgerClock, useSession, useSnapshot, type NetworkConfig } from "../core.ts";
 import { formatDuration } from "../model/expiry.ts";
 import type { SimView } from "../model/simulation.ts";
 import { checkStartLedger, ledgerSecondsAgo, retentionWindow, type StartChoice } from "../model/retention.ts";
@@ -121,7 +121,6 @@ const presetOf = (from: StartChoice): Preset => (from === "retention" ? "retenti
 export function RetentionBar() {
   const { query, update } = useQuery();
   const feed = useSnapshot((s) => s.feed);
-  const kept = useSnapshot((s) => s.events.length);
   const retention = retentionWindow(feed);
   const [preset, setPreset] = useState<Preset>(presetOf(query.from));
   const [ledger, setLedger] = useState(typeof query.from === "number" ? String(query.from) : "");
@@ -174,9 +173,6 @@ export function RetentionBar() {
           <span className="warn">
             Ledger {query.from.toLocaleString()} hasn't closed yet, so loading starts at the latest ledger. Is it from another network?{" "}
           </span>
-        )}
-        {kept >= STORE_EVENT_LIMIT && (
-          <span className="warn">Only the newest {STORE_EVENT_LIMIT.toLocaleString()} events are kept; older ones have left the timeline. </span>
         )}
       </p>
       <form className="start" onSubmit={load}>
