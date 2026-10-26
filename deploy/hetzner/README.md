@@ -4,7 +4,7 @@ One VPS runs the whole demo with docker compose:
 
 - `quickstart`: the local Stellar devnet (`backend-soroban/devnet`'s image and network), with its ledger on a volume. RPC is on `127.0.0.1:8300` for debugging only.
 - `simulator`: waits for RPC, runs `pnpm devnet:bootstrap` (idempotent), then `supervise.sh` keeps `pnpm simulate` running. It refuels its lanes through the devnet's friendbot, which is never exposed.
-- `web`: Caddy, with automatic HTTPS. It serves the observer at `/` and proxies `/rpc` to the devnet, so browsers can read the chain.
+- `web`: Caddy, with automatic HTTPS. It serves the observer at `/` and proxies `/rpc` to the devnet, so browsers can read the chain. `/llms.txt` tells LLMs, which only see the SPA's empty shell, what the site is and how to read the chain; Caddy fills in the host and central bank from `.env`.
 
 The devnet seed derives every signing key, and RPC is public, so the seed is private (`.env`). The observer is built with only the central bank's address; it finds the contract and the banks from the registry on chain.
 
