@@ -4,6 +4,8 @@ A Real-Time Gross Settlement (RTGS) system on Stellar. Banks hold settlement bal
 
 ## Live on the Stellar testnet
 
+**See the system acting [live](https://89-167-41-133.sslip.io/?network=testnet)!**
+
 The system is already deployed on the public Stellar testnet. Review the RTGS logic instance [here](https://stellar.expert/explorer/testnet/contract/CD7EJAEIR5TZMF2B3WFPPTI4MXYR33Y7XSP6QOT6WDVYXTZ65CYWSNE7). The actors that interact with it:
 - Cenetral Bank [instance](https://stellar.expert/explorer/testnet/account/GCFVWTJJK3OK3MSQY5AG27TPO4GG5P2R65UJFN3GZWT3PL3JZMU5QNC2).
 - Banks instances:
@@ -11,14 +13,8 @@ The system is already deployed on the public Stellar testnet. Review the RTGS lo
     - [Owl Street](https://stellar.expert/explorer/testnet/account/GBOOXVXVQHGTC2KMI27BDAJKYXLIZWRIGEHLNWJYPLBRVWRDENBWC5R2)
     - [Penny Lane](https://stellar.expert/explorer/testnet/account/GAIEALGQ7YRV24WJP3SAB6I4RPFZGAEM3U7RMTPNNCSRTUS4SVLT7B33)
 
-| Instance | Address |
-|---|---|
-| Settlement contract | `<TODO: C…>`: [stellar.expert](https://stellar.expert/explorer/testnet/contract/TODO) |
-| Cash token (USD, Stellar Asset Contract) | `<TODO: C…>`: [stellar.expert](https://stellar.expert/explorer/testnet/contract/TODO) |
-| Central bank account (cash token issuer) | `<TODO: G…>`: [stellar.expert](https://stellar.expert/explorer/testnet/account/TODO) |
 
 
-If reading this early, you can see it being simulated [here](https://89-167-41-133.sslip.io/?network=testnet). If the testnet has been reset, this contracts will be invalid.
 
 ### Screenshots
 
