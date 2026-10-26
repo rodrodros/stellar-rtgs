@@ -2,7 +2,7 @@
 
 > A real-time gross settlement (RTGS) system as a Soroban smart contract, running on a private Stellar devnet. A headless simulator drives a central bank and a few commercial banks around the clock: payments, queueing, gridlock resolution, intraday repos. This site serves a read-only observer of it, and the devnet's RPC.
 
-The observer at https://{{env "SITE_HOST"}}/ is a single-page app that renders in the browser, so fetching it returns an empty shell. To see what is happening, read the chain through the RPC below instead. Everything public here is read-only; transactions need keys this site doesn't have.
+The observer at https://{{env "SITE_HOST"}}/ is a single-page app that renders in the browser, so fetching it returns an empty shell. To see what is happening, read the chain through the RPC below instead. The central bank's app (https://{{env "SITE_HOST"}}/central-bank/) and the participants' app (https://{{env "SITE_HOST"}}/participant/?bank=<G-address>) are hosted too; on this devnet they sign in the browser as the demo identities, so anyone can act through them.
 
 ## Network
 

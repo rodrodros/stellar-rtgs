@@ -4,9 +4,9 @@ One VPS runs the whole demo with docker compose:
 
 - `quickstart`: the local Stellar devnet (`backend-soroban/devnet`'s image and network), with its ledger on a volume. RPC is on `127.0.0.1:8300` for debugging only.
 - `simulator`: waits for RPC, runs `pnpm devnet:bootstrap` (idempotent), then `supervise.sh` keeps `pnpm simulate` running. It refuels its lanes through the devnet's friendbot, which is never exposed.
-- `web`: Caddy, with automatic HTTPS. It serves the observer at `/` and proxies `/rpc` to the devnet, so browsers can read the chain. `/llms.txt` tells LLMs, which only see the SPA's empty shell, what the site is and how to read the chain; Caddy fills in the host and central bank from `.env`.
+- `web`: Caddy, with automatic HTTPS. It serves the observer at `/`, the central bank's app at `/central-bank/` and the participants' app at `/participant/` (the observer links both), and proxies `/rpc` to the devnet, so browsers can read the chain. `/llms.txt` tells LLMs, which only see the SPAs' empty shells, what the site is and how to read the chain; Caddy fills in the host and central bank from `.env`.
 
-The devnet seed derives every signing key, and RPC is public, so the seed is private (`.env`). The observer is built with only the central bank's address; it finds the contract and the banks from the registry on chain.
+The devnet seed derives every signing key. As locally, the central-bank and participant apps are built with it and sign in the browser, so anyone who opens them can act as the central bank or a bank, and change the running simulation. Don't use the central-bank app's auto-keeper here (see below).
 
 ## Server
 
@@ -37,13 +37,13 @@ docker compose up -d --build quickstart simulator
 docker compose logs -f simulator      # the bootstrap prints the deployment JSON, then the simulation starts
 ```
 
-Copy the deployment's `centralBank` into `.env` as `RTGS_DEVNET_CENTRAL_BANK`, then start the observer:
+Copy the deployment's `centralBank` into `.env` as `RTGS_DEVNET_CENTRAL_BANK`, then start the apps:
 
 ```sh
 docker compose up -d --build web
 ```
 
-The observer is at `https://SITE_HOST/`.
+The observer is at `https://SITE_HOST/`, the other apps at `/central-bank/` and `/participant/`.
 
 ## Update
 
